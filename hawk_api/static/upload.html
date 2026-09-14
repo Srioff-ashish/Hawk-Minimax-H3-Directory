@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hawk H3 · Upload references</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f5f2; --card: #fff; --ink: #1d1d1b; --muted: #6b6a66; --line: #dedcd6; --accent: #2f6f5e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #161615; --card: #20201e; --ink: #ecebe6; --muted: #9c9a93; --line: #34332f; --accent: #6fbfa6; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px; background: var(--bg); color: var(--ink); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { color: var(--muted); margin: 0 0 16px; }
+  label.drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 28px 16px; text-align: center; background: var(--card); cursor: pointer; }
+  label.drop.over { border-color: var(--accent); }
+  input[type=file] { display: none; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  ul { list-style: none; padding: 0; margin: 16px 0; }
+  li { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  code { font: 13px ui-monospace, monospace; background: var(--bg); padding: 2px 6px; border-radius: 6px; }
+  .kind { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .status { color: var(--muted); min-height: 1.5em; }
+  .error { color: #b3261e; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Upload references</h1>
+  <p>Images, audio or video for Hawk H3. After uploading, copy the asset ids back into your chat and say what each one is for (face, outfit, pose, voice…).</p>
+  <label class="drop" id="drop">
+    <input type="file" id="files" multiple accept="image/*,audio/*,video/*">
+    <strong>Choose files</strong> or drop them here
+  </label>
+  <div class="status" id="status"></div>
+  <ul id="list"></ul>
+  <button id="copy" hidden>Copy all asset ids</button>
+</main>
+<script>
+const drop = document.getElementById("drop");
+const input = document.getElementById("files");
+const list = document.getElementById("list");
+const statusEl = document.getElementById("status");
+const copyAll = document.getElementById("copy");
+const uploaded = [];
+
+function show(asset) {
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="kind"></span><span class="name"></span><code></code><button>Copy</button>`;
+  li.querySelector(".kind").textContent = asset.kind;
+  li.querySelector(".name").textContent = asset.filename;
+  li.querySelector("code").textContent = asset.id;
+  li.querySelector("button").onclick = () => navigator.clipboard.writeText(asset.id);
+  list.appendChild(li);
+}
+
+async function upload(files) {
+  if (!files.length) return;
+  const form = new FormData();
+  for (const file of files) form.append("files", file);
+  statusEl.className = "status";
+  statusEl.textContent = `Uploading ${files.length} file(s)…`;
+  try {
+    const response = await fetch(location.pathname + location.search, { method: "POST", body: form });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || response.statusText);
+    for (const asset of data.assets) { uploaded.push(asset); show(asset); }
+    statusEl.textContent = "Done.";
+    copyAll.hidden = uploaded.length === 0;
+  } catch (error) {
+    statusEl.className = "status error";
+    statusEl.textContent = `Upload failed: ${error.message}. If this link is old, ask the chat for a new one.`;
+  }
+}
+
+input.onchange = () => upload(input.files);
+drop.ondragover = (event) => { event.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = (event) => { event.preventDefault(); drop.classList.remove("over"); upload(event.dataTransfer.files); };
+copyAll.onclick = () => navigator.clipboard.writeText(uploaded.map((a) => `${a.id} (${a.kind}: ${a.filename})`).join("\n"));
+</script>
+</body>
+</html>

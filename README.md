@@ -32,6 +32,7 @@ Replace the placeholder file names in the Load Image / Load Audio / Load Video n
 | [Long videos](docs/long-videos.md) | Continuity modes, resume and re-rendering, previews, consistency, performance |
 | [Recipes](docs/recipes.md) | Ready setups: outfits, voices, motion copy, LLM stories, vertical shorts, ads, migrating the old workflow |
 | [Troubleshooting](docs/troubleshooting.md) | Every error message and what to do |
+| [API (REST + MCP)](docs/api.md) | Run the pipeline on a GPU pod as a web service and drive it from Claude or Grok chats or scripts |
 
 ## Nodes
 
@@ -155,7 +156,8 @@ The defaults match the stock template:
 ## Development
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s tests       # nodes: scripts, tags, LoRA stack, example workflows
+python -m unittest discover -s tests_api   # API gateway (end-to-end test needs requirements-api.txt + aiohttp)
 ```
 
 The script, tag and LoRA-stack logic is pure Python and is tested without ComfyUI or torch.

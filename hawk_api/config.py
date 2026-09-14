@@ -1,0 +1,76 @@
+"""Gateway settings, read from environment variables."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.environ.get(name, default).strip()
+
+
+@dataclass(frozen=True)
+class ModelSettings:
+    """What Hawk H3 Model Loader loads for every render."""
+
+    unet_name: str = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+    clip_name: str = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    video_vae: str = "minimax_h3_video_vae_fp16.safetensors"
+    audio_vae: str = "minimax_h3_audio_vae_fp32.safetensors"
+    shift_video: float = 12.0
+    shift_audio: float = 3.0
+    attention: str = "sol scheduled + sage"
+    weight_dtype: str = "default"
+    clip_device: str = "default"
+
+
+@dataclass(frozen=True)
+class Settings:
+    token: str
+    comfy_url: str = "http://127.0.0.1:8188"
+    #: Public address of this gateway, used to build download and upload links.
+    public_base_url: str = "http://127.0.0.1:8000"
+    data_dir: str = "hawk_api_data"
+    max_upload_mb: int = 2048
+    link_ttl_seconds: int = 7 * 24 * 3600
+    lora_cache_seconds: float = 60.0
+    reconcile_seconds: float = 30.0
+    planner_model: str = "xai/grok-4.3"
+    models: ModelSettings = field(default_factory=ModelSettings)
+
+    @property
+    def db_path(self) -> str:
+        return os.path.join(self.data_dir, "jobs.sqlite3")
+
+    @property
+    def loras_path(self) -> str:
+        return os.path.join(self.data_dir, "loras.json")
+
+    @classmethod
+    def from_env(cls) -> "Settings":
+        token = _env("HAWK_API_TOKEN")
+        if len(token) < 16:
+            raise SystemExit(
+                "Set HAWK_API_TOKEN to a random secret of at least 16 characters, "
+                "e.g. `export HAWK_API_TOKEN=$(openssl rand -hex 24)`."
+            )
+        defaults = ModelSettings()
+        models = ModelSettings(
+            unet_name=_env("HAWK_UNET", defaults.unet_name),
+            clip_name=_env("HAWK_CLIP", defaults.clip_name),
+            video_vae=_env("HAWK_VIDEO_VAE", defaults.video_vae),
+            audio_vae=_env("HAWK_AUDIO_VAE", defaults.audio_vae),
+            attention=_env("HAWK_ATTENTION", defaults.attention),
+            weight_dtype=_env("HAWK_WEIGHT_DTYPE", defaults.weight_dtype),
+        )
+        return cls(
+            token=token,
+            comfy_url=_env("COMFY_URL", cls.comfy_url).rstrip("/"),
+            public_base_url=_env("PUBLIC_BASE_URL", cls.public_base_url).rstrip("/"),
+            data_dir=_env("DATA_DIR", cls.data_dir),
+            max_upload_mb=int(_env("MAX_UPLOAD_MB", str(cls.max_upload_mb))),
+            link_ttl_seconds=int(_env("LINK_TTL_SECONDS", str(cls.link_ttl_seconds))),
+            planner_model=_env("HAWK_PLANNER_MODEL", cls.planner_model),
+            models=models,
+        )

@@ -13,6 +13,7 @@ Hawk MiniMax H3 Director is a ComfyUI node pack for **MiniMax H3 reference-to-vi
 | Make long videos: continuity, resume, re-rendering one segment | [Long videos](long-videos.md) |
 | Copy a working setup for a common job | [Recipes](recipes.md) |
 | Fix an error message | [Troubleshooting](troubleshooting.md) |
+| Run it as an API and use it from Claude or Grok chats | [API (REST + MCP)](api.md) |
 
 ## The pack in one picture
 

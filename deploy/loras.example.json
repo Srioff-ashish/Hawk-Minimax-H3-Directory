@@ -1,0 +1,17 @@
+{
+  "_comment": [
+    "Copied to $DATA_DIR/loras.json on first start. Edit that copy; changes apply to the next request.",
+    "defaults: added to every render. required=true refuses renders when the file is missing on the pod.",
+    "turbo=true (or 'turbo' in the file name) makes renders default to 8 steps instead of 30.",
+    "presets: named extra sets a request picks with lora_preset.",
+    "name can be the exact path in models/loras, the file name, or a unique part of it."
+  ],
+  "defaults": [
+    {"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", "strength": 1.0, "required": true, "turbo": true}
+  ],
+  "presets": {
+    "realism": [
+      {"name": "h3-realism-people", "strength": 0.8}
+    ]
+  }
+}

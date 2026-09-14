@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 .DS_Store
 .pytest_cache/
+hawk_api_data/
