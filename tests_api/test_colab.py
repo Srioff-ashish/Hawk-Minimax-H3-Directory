@@ -146,6 +146,16 @@ class Runtime(unittest.TestCase):
         self.assertEqual(hawk_colab.find_tunnel_url(log), "https://brave-otter-lane-hills.trycloudflare.com")
         self.assertIsNone(hawk_colab.find_tunnel_url("INF Starting tunnel"))
 
+    def test_port_free(self):
+        import socket
+
+        with socket.socket() as server:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            port = server.getsockname()[1]
+            self.assertFalse(hawk_colab.port_free(port))
+        self.assertTrue(hawk_colab.port_free(port))
+
     def test_blackwell_torch_check(self):
         blackwell = {"cap": [12, 0], "arch": ["sm_80", "sm_90", "sm_120"]}
         self.assertFalse(hawk_colab.needs_blackwell_torch(blackwell))

@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -503,12 +504,48 @@ def _start_tunnel(session: Session) -> None:
     raise RuntimeError(f"Cloudflare quick tunnel did not start. Log:\n{log_tail(log_path)}")
 
 
+def port_free(port: int, host: str = "127.0.0.1") -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(1)
+        return sock.connect_ex((host, port)) != 0
+
+
+def _free_api_port(timeout: float = 20.0) -> None:
+    """Stop a Hawk H3 API left over from an earlier run of the start cell.
+
+    A leftover server keeps port 8000 with its old token and old code; a new one then
+    fails to bind and exits, while health checks still succeed against the old one."""
+    if port_free(API_PORT):
+        return
+    print(f"Stopping an older Hawk H3 API still running on port {API_PORT}.")
+    subprocess.run(["pkill", "-f", "hawk_api.app:create_app"], capture_output=True)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_free(API_PORT):
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        f"Port {API_PORT} is still in use by another program. Find it with `!fuser -v {API_PORT}/tcp` "
+        f"(or `!ps aux | grep uvicorn`) and stop it, then run this cell again."
+    )
+
+
 def _start_api(session: Session) -> None:
+    _free_api_port()
     env = dict(session.env, PUBLIC_BASE_URL=session.public_url)
     cmd = [sys.executable, "-m", "uvicorn", "--factory", "hawk_api.app:create_app",
            "--host", "127.0.0.1", "--port", str(API_PORT), "--proxy-headers"]
     session.procs["api"] = _popen(cmd, session.pack_dir, env, session.log("api"))
     _wait_http(f"http://127.0.0.1:{API_PORT}/healthz", session.procs["api"], session.log("api"), 180, "Hawk H3 API")
+    time.sleep(2)
+    accepted = _http_status(
+        f"http://127.0.0.1:{API_PORT}/v1/jobs?limit=1", headers={"Authorization": f"Bearer {session.token}"}
+    )
+    if session.procs["api"].poll() is not None or accepted != 200:
+        raise RuntimeError(
+            f"The API answering on port {API_PORT} is not the one just started (session token -> {accepted}). "
+            f"Last log lines:\n{log_tail(session.log('api'))}"
+        )
     deadline = time.time() + 120
     while time.time() < deadline:  # the new trycloudflare hostname needs a moment to resolve
         if _http_status(f"{session.public_url}/healthz", timeout=10) == 200:
@@ -584,6 +621,8 @@ def start(
 
     session = Session(comfy_dir, pack_dir, token, env, log_dir)
     _start_comfyui(session)
+    # Tunnels from an earlier run of this cell would keep serving old URLs.
+    subprocess.run(["pkill", "-f", "cloudflared tunnel"], capture_output=True)
     _start_tunnel(session)
     _start_api(session)
     print(session.summary())
