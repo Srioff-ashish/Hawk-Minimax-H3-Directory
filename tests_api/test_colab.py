@@ -73,6 +73,70 @@ class Manifest(unittest.TestCase):
                 hawk_colab.parse_lora_source(spec)
 
 
+class Detection(unittest.TestCase):
+    FILES = {
+        "diffusion_models": [
+            "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            "h3/minimax_h3_ref2va_bf16.safetensors",
+            "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        ],
+        "text_encoders": ["qwen3vl_32b_minimax_h3_int8_convrot.safetensors", "umt5_xxl.safetensors"],
+        "vae": ["minimax_h3_audio_vae_fp32.safetensors", "minimax_h3_video_vae_fp16.safetensors", "wan_vae.safetensors"],
+        "loras": [
+            "minimax_h3_fl2v_turbo_4step_v1.0_768p_comfyui_bf16.safetensors",
+            "drbaph/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_resized_avg_rank_21_bf16.safetensors",
+            "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+            "MysticXXX_MMH3-V4-ref2va.safetensors",
+        ],
+    }
+
+    def test_picks_ref2va_and_preferred_files(self):
+        chosen = hawk_colab.pick_models(self.FILES)
+        self.assertEqual(chosen, {
+            "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+            "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+            "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+            "turbo_lora": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        })
+
+    def test_fl2va_only_is_not_picked(self):
+        chosen = hawk_colab.pick_models({"diffusion_models": self.FILES["diffusion_models"][:1], "loras": self.FILES["loras"][:1]})
+        self.assertIsNone(chosen["unet_name"])
+        self.assertIsNone(chosen["turbo_lora"])
+
+    def test_resolve_from_disk_with_overrides_and_errors(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as comfy:
+            for folder, names in self.FILES.items():
+                for name in names:
+                    path = os.path.join(comfy, "models", folder, name)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    open(path, "wb").close()
+            self.assertEqual(hawk_colab.list_model_files(comfy, "loras")[0], "MysticXXX_MMH3-V4-ref2va.safetensors")
+            chosen = hawk_colab.resolve_models(comfy, clip_name="custom_te.safetensors")
+            self.assertEqual((chosen["unet_name"], chosen["clip_name"]),
+                             ("minimax_h3_ref2va_pruned_int8_convrot.safetensors", "custom_te.safetensors"))
+            labelled = hawk_colab.resolve_models(comfy, text_encoder="nvfp4 (16 GB, recommended on G4)")
+            self.assertEqual(labelled["clip_name"], "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors")
+        with tempfile.TemporaryDirectory() as empty:
+            with self.assertRaisesRegex(RuntimeError, "unet_name, clip_name, video_vae, audio_vae"):
+                hawk_colab.resolve_models(empty)
+
+    def test_lora_config_uses_the_turbo_file_on_disk(self):
+        with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:
+            example = json.load(handle)
+        config = hawk_colab.lora_config(example, "drbaph/turbo_rank21.safetensors")
+        self.assertEqual(config["defaults"], [{"name": "drbaph/turbo_rank21.safetensors", "strength": 1.0, "required": True, "turbo": True}])
+        self.assertEqual(config["presets"], example["presets"])
+        self.assertEqual(hawk_colab.lora_config(example, None)["defaults"], [])
+        sys.path.insert(0, ROOT)
+        from hawk_api.loras import parse_config
+
+        parse_config(config)  # the API accepts it
+
+
 class Runtime(unittest.TestCase):
     def test_tunnel_url(self):
         log = (

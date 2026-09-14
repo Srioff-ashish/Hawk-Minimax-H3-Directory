@@ -11,12 +11,71 @@ Claude / Grok ──► https://<random>.trycloudflare.com ──► Hawk H3 API
 
 Each session starts from nothing. The notebook installs everything, downloads the models, starts ComfyUI and the API, and opens a tunnel with a new URL. When the runtime stops, everything is gone, including models, job history and rendered videos.
 
+- [Already have ComfyUI and the models? One cell](#already-have-comfyui-and-the-models-one-cell)
 - [What you need](#what-you-need)
 - [Run a session](#run-a-session)
 - [Connect Claude or Grok each session](#connect-claude-or-grok-each-session)
 - [Limits of this setup](#limits-of-this-setup)
 - [Settings](#settings)
 - [Troubleshooting](#troubleshooting)
+
+---
+
+## Already have ComfyUI and the models? One cell
+
+If your own notebook already installs ComfyUI and downloads the MiniMax H3 models and LoRAs, add this cell after your download cells and **don't start ComfyUI yourself**. The cell starts it, so ComfyUI gets the Hawk nodes and your Atlas key. Then add the watch cell below it.
+
+```python
+#@title Hawk H3 · node pack + API + tunnel (models already downloaded)
+import importlib, os, subprocess, sys
+
+COMFY_DIR = "/content/ComfyUI"  #@param {type:"string"}
+ATTENTION = "sol scheduled"  #@param ["sol scheduled", "comfy default"]
+#@markdown Leave blank to auto-detect in COMFY_DIR/models (ref2va model, qwen3vl text encoder, minimax_h3 VAEs, ref2v turbo LoRA).
+UNET_NAME = ""  #@param {type:"string"}
+CLIP_NAME = ""  #@param {type:"string"}
+TURBO_LORA = ""  #@param {type:"string"}
+
+PACK_DIR = f"{COMFY_DIR}/custom_nodes/Hawk-Minimax-H3-Directory"
+if not os.path.isdir(PACK_DIR):
+    subprocess.run(["git", "clone", "--depth", "1",
+                    "https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory", PACK_DIR], check=True)
+else:
+    subprocess.run(["git", "-C", PACK_DIR, "pull", "--ff-only"], check=True)
+
+sys.path.insert(0, f"{PACK_DIR}/deploy/colab")
+import hawk_colab
+importlib.reload(hawk_colab)
+
+hawk_colab.install(COMFY_DIR, PACK_DIR, sol=ATTENTION.startswith("sol"), comfy_requirements=False)
+session = hawk_colab.start(
+    COMFY_DIR,
+    PACK_DIR,
+    attention=ATTENTION,
+    unet_name=UNET_NAME or None,
+    clip_name=CLIP_NAME or None,
+    turbo_lora=TURBO_LORA or None,
+    token=hawk_colab.colab_secret("HAWK_API_TOKEN"),
+    atlas_api_key=hawk_colab.colab_secret("ATLAS_API_KEY"),
+)
+```
+
+```python
+#@title Hawk H3 · watch jobs (keep running)
+hawk_colab.watch(session, interval=60)
+```
+
+What the first cell does:
+- **Installs only what's missing:** this node pack into `custom_nodes`, the API's Python packages, Sol attention and `cloudflared`. It doesn't reinstall ComfyUI's requirements (`comfy_requirements=False`) and doesn't download any models.
+- **Finds your files** under `ComfyUI/models`. It needs the **ref2va** diffusion model (fl2va doesn't work with this pack), the `qwen3vl…minimax` text encoder and both `minimax_h3` VAEs. If several match, it prefers pruned int8, then the NVFP4 text encoder, then the `ref2v…turbo…4step_v0.1` LoRA. It prints what it picked; type a name in the form to override it. Subfolder paths such as `h3/minimax_h3_ref2va_bf16.safetensors` work.
+- **Sets up LoRAs:** the turbo LoRA it finds becomes the required default LoRA (8 steps). Your other LoRAs in `models/loras` are available by name in requests; ask the chat for `list_options`.
+- **Starts** ComfyUI on 127.0.0.1:8188, the tunnel and the API, then prints the connector links.
+
+If your notebook already started ComfyUI:
+- **Started after this pack was installed** (for example, on a second run of the cell): it's reused. For planning it must have `ATLAS_API_KEY` in its environment.
+- **Started before this pack was installed:** the cell stops with a message. Stop that ComfyUI (interrupt its cell or run `!pkill -f 'ComfyUI/main.py'`), then run the cell again.
+
+Add the same Secrets as below (`ATLAS_API_KEY`, and ideally `HAWK_API_TOKEN`).
 
 ---
 

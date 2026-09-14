@@ -1,15 +1,16 @@
 """Google Colab launcher: ComfyUI + the Hawk H3 API behind a Cloudflare quick tunnel.
 
-Used by deploy/colab/Hawk_H3_API_Colab.ipynb. Every session starts from scratch:
+Used by deploy/colab/Hawk_H3_API_Colab.ipynb, or on its own from a notebook that
+already has ComfyUI and the models (see docs/colab.md). A session:
 
-1. install ComfyUI, this pack, Sol attention and the API requirements
-2. download the MiniMax H3 models and LoRAs from Hugging Face
-3. start ComfyUI on 127.0.0.1:8188 (never exposed)
+1. install this pack's API requirements, Sol attention and cloudflared
+   (and ComfyUI + its requirements when missing)
+2. download the MiniMax H3 models and LoRAs from Hugging Face (optional)
+3. start ComfyUI on 127.0.0.1:8188, or reuse one already running with the Hawk nodes
 4. open a Cloudflare quick tunnel to the API port and read its URL
 5. start the API with that URL, then print the connector links
 
-Nothing survives the runtime. Only the standard library is imported at module level;
-the pure helpers (model manifest, LoRA sources, tunnel URL, torch check) are
+Only the standard library is imported at module level; the pure helpers are
 unit-tested in tests_api/test_colab.py.
 """
 
@@ -48,6 +49,11 @@ VAES = [
 ]
 TURBO_LORA = ("loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", 1.96)
 
+#: Auto-detection: which file wins when several match.
+UNET_PREFERENCE = ["pruned_int8", "pruned_fp8", "pruned_bf16", "int8", "fp8", "bf16"]
+CLIP_PREFERENCE = ["nvfp4", "int8", "bf16"]
+TURBO_PREFERENCE = ["4step_v0.1_comfyui_bf16", "4step", "8step"]
+
 COMFY_PORT = 8188
 API_PORT = 8000
 #: Cloudflare's free proxy rejects request bodies over 100 MB.
@@ -57,6 +63,7 @@ EXTRA_NODES = {
     "sol": "https://github.com/Saganaki22/ComfyUI-sol-attn",
     "vfi": "https://github.com/GACLove/ComfyUI-VFI",
 }
+_MODEL_EXT = (".safetensors", ".pt", ".pth", ".ckpt", ".bin", ".gguf")
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -74,7 +81,6 @@ class Download:
 
 
 _HF_URL = re.compile(r"^https://huggingface\.co/(?P<repo>[^/]+/[^/]+)/(?:resolve|blob)/(?P<rev>[^/]+)/(?P<path>[^?#]+)")
-_MODEL_EXT = (".safetensors", ".pt", ".pth", ".ckpt", ".bin")
 
 
 def parse_lora_source(spec: str) -> Download:
@@ -131,6 +137,37 @@ def needs_blackwell_torch(info: dict) -> bool:
     if not capability or capability[0] < 12:
         return False
     return not any(arch in ("sm_120", "sm_121") for arch in info.get("arch") or [])
+
+
+def pick_model(files: list[str], required: tuple[str, ...], prefer: list[str]) -> str | None:
+    """First file whose path contains every `required` word, favouring `prefer` words in its file name."""
+    candidates = [name for name in files if all(word in name.lower() for word in required)]
+    for word in prefer:
+        for name in candidates:
+            if word in os.path.basename(name).lower():
+                return name
+    return candidates[0] if candidates else None
+
+
+def pick_models(files: dict[str, list[str]]) -> dict[str, str | None]:
+    """Choose the H3 files from ``{"diffusion_models": [...], "text_encoders": [...], "vae": [...], "loras": [...]}``."""
+    return {
+        "unet_name": pick_model(files.get("diffusion_models", []), ("ref2va",), UNET_PREFERENCE),
+        "clip_name": pick_model(files.get("text_encoders", []), ("qwen3vl", "minimax"), CLIP_PREFERENCE),
+        "video_vae": pick_model(files.get("vae", []), ("minimax_h3_video",), []),
+        "audio_vae": pick_model(files.get("vae", []), ("minimax_h3_audio",), []),
+        "turbo_lora": pick_model(files.get("loras", []), ("ref2v", "turbo"), TURBO_PREFERENCE),
+    }
+
+
+def lora_config(example: dict, turbo_lora: str | None) -> dict:
+    """The API's loras.json for this session: the example's presets, with the turbo LoRA
+    that is actually on disk as the required default (none when there is no turbo LoRA)."""
+    config = {key: value for key, value in example.items() if key != "defaults"}
+    config["defaults"] = (
+        [{"name": turbo_lora, "strength": 1.0, "required": True, "turbo": True}] if turbo_lora else []
+    )
+    return config
 
 
 # ------------------------------------------------------------- process helpers
@@ -215,6 +252,14 @@ def _http_status(url: str, headers: dict | None = None, timeout: float = 10.0) -
         return None
 
 
+def _http_json(url: str, timeout: float = 10.0):
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            return json.load(response)
+    except Exception:
+        return None
+
+
 def _wait_http(url: str, proc: subprocess.Popen, log_path: str, timeout: float, label: str) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -226,10 +271,64 @@ def _wait_http(url: str, proc: subprocess.Popen, log_path: str, timeout: float, 
     raise RuntimeError(f"{label} did not answer at {url} within {timeout:.0f}s. Last log lines:\n{log_tail(log_path)}")
 
 
+def list_model_files(comfy_dir: str, *folders: str) -> list[str]:
+    """Model files under ComfyUI/models/<folder>, as ComfyUI names them (relative, '/'-separated)."""
+    names = set()
+    for folder in folders:
+        root = os.path.join(comfy_dir, "models", folder)
+        for dirpath, _dirs, files in os.walk(root, followlinks=True):
+            for filename in files:
+                if filename.lower().endswith(_MODEL_EXT):
+                    names.add(os.path.relpath(os.path.join(dirpath, filename), root).replace(os.sep, "/"))
+    return sorted(names)
+
+
+def resolve_models(
+    comfy_dir: str,
+    *,
+    diffusion_model: str | None = None,
+    text_encoder: str | None = None,
+    unet_name: str | None = None,
+    clip_name: str | None = None,
+    video_vae: str | None = None,
+    audio_vae: str | None = None,
+    turbo_lora: str | None = None,
+) -> dict[str, str | None]:
+    """Explicit names win, then notebook labels, then whatever is on disk."""
+    files = {
+        "diffusion_models": list_model_files(comfy_dir, "diffusion_models", "unet"),
+        "text_encoders": list_model_files(comfy_dir, "text_encoders", "clip"),
+        "vae": list_model_files(comfy_dir, "vae"),
+        "loras": list_model_files(comfy_dir, "loras"),
+    }
+    chosen = pick_models(files)
+    if diffusion_model:
+        chosen["unet_name"] = os.path.basename(DIFFUSION_MODELS[diffusion_model][0])
+    if text_encoder:
+        chosen["clip_name"] = os.path.basename(TEXT_ENCODERS[text_encoder][0])
+    for key, value in (("unet_name", unet_name), ("clip_name", clip_name), ("video_vae", video_vae),
+                       ("audio_vae", audio_vae), ("turbo_lora", turbo_lora)):
+        if value:
+            chosen[key] = value
+
+    folder_for = {"unet_name": "diffusion_models", "clip_name": "text_encoders", "video_vae": "vae", "audio_vae": "vae"}
+    missing = [key for key in folder_for if not chosen[key]]
+    if missing:
+        found = "\n".join(f"  models/{folder}: {', '.join(names) or '(empty)'}" for folder, names in files.items())
+        raise RuntimeError(
+            f"Could not find {', '.join(missing)} under {comfy_dir}/models. Set the name(s) explicitly.\n"
+            f"The ref2va diffusion model (not fl2va), a qwen3vl minimax text encoder and both minimax_h3 VAEs are needed.\n"
+            f"Found:\n{found}"
+        )
+    return chosen
+
+
 # ------------------------------------------------------------------ install
 
 
-def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False) -> None:
+def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False, comfy_requirements: bool = True) -> None:
+    """Everything the API needs. ``comfy_requirements=False`` skips ComfyUI's own
+    requirements for a ComfyUI that is already installed and working."""
     info = torch_info()
     print(f"GPU: {info.get('name')} (capability {info.get('cap')}), torch {info.get('version')} CUDA {info.get('cuda')}")
     if not info.get("cap"):
@@ -238,8 +337,10 @@ def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False) 
         print("This torch build has no Blackwell kernels; installing a CUDA 12.8 build.")
         _pip("--upgrade", "torch", "torchvision", "torchaudio", "--index-url", "https://download.pytorch.org/whl/cu128")
 
+    fresh = not os.path.isdir(comfy_dir)
     _clone("https://github.com/comfyanonymous/ComfyUI", comfy_dir)
-    _pip_requirements(os.path.join(comfy_dir, "requirements.txt"))
+    if fresh or comfy_requirements:
+        _pip_requirements(os.path.join(comfy_dir, "requirements.txt"))
     _pip_requirements(os.path.join(pack_dir, "requirements-api.txt"))
 
     custom_nodes = os.path.join(comfy_dir, "custom_nodes")
@@ -315,6 +416,7 @@ class Session:
     env: dict
     log_dir: str
     public_url: str = ""
+    #: name -> Popen; "comfyui" is None when an already-running ComfyUI is reused.
     procs: dict = field(default_factory=dict)
 
     def log(self, name: str) -> str:
@@ -360,11 +462,27 @@ def _popen(cmd: list[str], cwd: str, env: dict, log_path: str) -> subprocess.Pop
 
 
 def _start_comfyui(session: Session) -> None:
+    base = f"http://127.0.0.1:{COMFY_PORT}"
+    if _http_status(f"{base}/queue", timeout=3) == 200:
+        if _http_json(f"{base}/object_info/HawkH3Director"):
+            session.procs["comfyui"] = None
+            print(
+                f"Reusing the ComfyUI already running on port {COMFY_PORT}. For LLM planning it must have been "
+                "started with ATLAS_API_KEY in its environment."
+            )
+            return
+        raise RuntimeError(
+            f"A ComfyUI is already running on port {COMFY_PORT} without the Hawk H3 nodes (it was started before "
+            "they were installed). Stop it -- interrupt your ComfyUI cell, or run `!pkill -f 'ComfyUI/main.py'` -- "
+            "then run this cell again so ComfyUI restarts with the nodes and your Atlas key."
+        )
     cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048"]
     session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
     print("Starting ComfyUI (first start loads nodes; a few minutes)...", flush=True)
-    _wait_http(f"http://127.0.0.1:{COMFY_PORT}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
-    print("ComfyUI is up.")
+    _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
+    if not _http_json(f"{base}/object_info/HawkH3Director"):
+        raise RuntimeError(f"ComfyUI started but the Hawk H3 nodes did not load. Log:\n{log_tail(session.log('comfyui'), 80)}")
+    print("ComfyUI is up with the Hawk H3 nodes.")
 
 
 def _start_tunnel(session: Session) -> None:
@@ -400,31 +518,65 @@ def _start_api(session: Session) -> None:
     print("Warning: the API runs locally but the tunnel URL is not reachable yet; try the health link in a minute.")
 
 
+def _write_lora_config(pack_dir: str, data_dir: str, turbo_lora: str | None) -> None:
+    path = os.path.join(data_dir, "loras.json")
+    if os.path.exists(path):
+        print(f"Keeping existing {path}")
+        return
+    with open(os.path.join(pack_dir, "deploy", "loras.example.json"), "r", encoding="utf-8") as handle:
+        example = json.load(handle)
+    os.makedirs(data_dir, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(lora_config(example, turbo_lora), handle, indent=2)
+    if not turbo_lora:
+        print("Note: no ref2v turbo LoRA found in models/loras; renders default to 30 steps.")
+
+
 def start(
     comfy_dir: str,
     pack_dir: str,
     *,
-    diffusion_model: str,
-    text_encoder: str,
+    diffusion_model: str | None = None,
+    text_encoder: str | None = None,
+    unet_name: str | None = None,
+    clip_name: str | None = None,
+    video_vae: str | None = None,
+    audio_vae: str | None = None,
+    turbo_lora: str | None = None,
     attention: str = "sol scheduled",
     token: str | None = None,
     atlas_api_key: str | None = None,
     log_dir: str = "/content/hawk_logs",
 ) -> Session:
+    """Start ComfyUI (or reuse it), the tunnel and the API. Model names left out are
+    detected from ComfyUI/models."""
     os.makedirs(log_dir, exist_ok=True)
+    models = resolve_models(
+        comfy_dir, diffusion_model=diffusion_model, text_encoder=text_encoder, unet_name=unet_name,
+        clip_name=clip_name, video_vae=video_vae, audio_vae=audio_vae, turbo_lora=turbo_lora,
+    )
+    print("Models:")
+    for key, value in models.items():
+        print(f"  {key:11} {value or '(none)'}")
     if not atlas_api_key:
         print("Note: no ATLAS_API_KEY secret, so planning (plan_film / story) will fail. Scripts still render.")
     if not token:
         token = secrets.token_hex(24)
         print("No HAWK_API_TOKEN secret; generated a token for this session (shown below).")
+
+    data_dir = "/content/hawk_api_data" if os.path.isdir("/content") else os.path.abspath("hawk_api_data")
+    _write_lora_config(pack_dir, data_dir, models["turbo_lora"])
+
     env = dict(os.environ)
     env.update({
         "HAWK_API_TOKEN": token,
         "COMFY_URL": f"http://127.0.0.1:{COMFY_PORT}",
-        "DATA_DIR": "/content/hawk_api_data" if os.path.isdir("/content") else os.path.abspath("hawk_api_data"),
+        "DATA_DIR": data_dir,
         "MAX_UPLOAD_MB": str(TUNNEL_UPLOAD_MB),
-        "HAWK_UNET": os.path.basename(DIFFUSION_MODELS[diffusion_model][0]),
-        "HAWK_CLIP": os.path.basename(TEXT_ENCODERS[text_encoder][0]),
+        "HAWK_UNET": models["unet_name"],
+        "HAWK_CLIP": models["clip_name"],
+        "HAWK_VIDEO_VAE": models["video_vae"],
+        "HAWK_AUDIO_VAE": models["audio_vae"],
         "HAWK_ATTENTION": attention,
     })
     if atlas_api_key:
@@ -462,9 +614,12 @@ def watch(session: Session, interval: int = 60) -> None:
     Stop the cell to stop watching; the services keep running."""
     try:
         while True:
-            if session.procs["comfyui"].poll() is not None:
-                print(f"ComfyUI stopped. Last log lines:\n{log_tail(session.log('comfyui'))}")
-                print("Run the Start cell again.")
+            comfy = session.procs.get("comfyui")
+            comfy_dead = comfy.poll() is not None if comfy is not None else \
+                _http_status(f"http://127.0.0.1:{COMFY_PORT}/queue", timeout=5) != 200
+            if comfy_dead:
+                print("ComfyUI stopped." + (f" Last log lines:\n{log_tail(session.log('comfyui'))}" if comfy else ""))
+                print("Run the start cell again.")
                 return
             if session.procs["tunnel"].poll() is not None:
                 print("Tunnel stopped; opening a new one (the URL changes).")
@@ -488,6 +643,6 @@ def show_logs(session: Session, lines: int = 60) -> None:
 
 def stop(session: Session) -> None:
     for name, proc in session.procs.items():
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             proc.terminate()
             print(f"stopped {name}")
