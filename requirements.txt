@@ -1,0 +1,6 @@
+# Everything this pack imports (torch, aiohttp, numpy, Pillow, av) already ships with ComfyUI.
+#
+# Optional, for speed or extra features:
+#   sageattention                               -> attention "sage"
+#   ComfyUI-sol-attn (custom node + triton)     -> attention "sol scheduled"
+#   ComfyUI-VFI (custom node)                   -> interpolation "48/60 fps (RIFE)"

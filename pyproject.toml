@@ -1,0 +1,20 @@
+[project]
+name = "hawk-minimax-h3-directory"
+version = "0.1.0"
+description = "Hawk MiniMax H3 Director for ComfyUI: the MiniMax H3 reference-to-video workflow in four nodes, with multi-segment long-video direction, continuity guides, resume and an Atlas Cloud story planner."
+license = { file = "LICENSE" }
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory"
+BugTracker = "https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/issues"
+
+[tool.comfy]
+PublisherId = "Srioff-ashish"
+DisplayName = "Hawk MiniMax H3 Director"
+requires-comfyui = ">=0.34.0"
