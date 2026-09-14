@@ -8,6 +8,17 @@ Hawk H3 References ────refs──┬────────────
                              └─► Hawk H3 Story Planner ──script──► Hawk H3 Director ──video──► Save Video
 ```
 
+## Documentation
+
+| | |
+|---|---|
+| [Getting started](docs/getting-started.md) | Install, models, your first clip and your first film |
+| [Node reference](docs/nodes.md) | Every input and output, file layout, size and duration tables |
+| [Writing scripts](docs/scripts.md) | Script format, reference tags, writing prompts H3 follows |
+| [Long videos](docs/long-videos.md) | Continuity modes, resume and re-rendering, previews, consistency, performance |
+| [Recipes](docs/recipes.md) | Ready setups: outfits, voices, motion copy, LLM stories, vertical shorts, ads, migrating the old workflow |
+| [Troubleshooting](docs/troubleshooting.md) | Every error message and what to do |
+
 ## Nodes
 
 | Node | Replaces in the stock template | What it does |
