@@ -258,7 +258,7 @@
       ],
       "size": [
         380,
-        330
+        380
       ],
       "flags": {},
       "order": 4,
@@ -284,6 +284,14 @@
           "name": "pictures.picture_1",
           "type": "IMAGE",
           "label": "picture_1",
+          "shape": 7,
+          "link": null
+        },
+        {
+          "localized_name": "poses.pose_0",
+          "name": "poses.pose_0",
+          "type": "IMAGE",
+          "label": "pose_0",
           "shape": 7,
           "link": null
         },
@@ -334,10 +342,12 @@
       },
       "widgets_values": [
         "Picture 1: the main character",
+        "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         24.0
       ],
       "widgets_values_named": {
         "labels": "Picture 1: the main character",
+        "pose_instruction": "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         "video_fps": 24.0
       }
     },

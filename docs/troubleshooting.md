@@ -75,6 +75,8 @@ All of these appear **before anything renders**.
 | `Segment N mentions <Picture 2> but its pictures list leaves it out.` | Add `2` to that segment's `pictures:` or remove the mention. |
 | `Segment N asks for picture [5] but only 3 picture(s) are connected.` | The `pictures:` list names a reference that isn't connected. |
 | `…picture numbers run 1-9; got [0]` | Numbers start at 1. Use `none` for no pictures. |
+| `Segment N sends 8 picture(s) and 2 pose(s); H3 takes at most 9 images per segment.` | Pictures default to *all*. Add `pictures: 1, 2` so only the needed ones go with the poses. |
+| `Segment N mentions <Pose 4> but only 3 pose(s) are connected.` | Connect the pose image to `poses` on References, or fix the number. |
 | `Segment N: duration 'soon' is not a number of seconds.` | Use `8`, `8s` or `7.5`. |
 | `Segment N: continuity 'x' is not one of off, last_frame, tail_5, tail_22, tail_39.` | Use one of those. |
 | `The script looks like JSON but does not parse: …` | The text starts with `{` or `[` but is broken JSON. Fix it, or remove the leading bracket to use plain text. |
@@ -171,6 +173,12 @@ Without the turbo LoRA, raise `steps` to ~30. With it, keep 8. Raise `megapixels
 
 **Unwanted subtitles or random text.**
 Add `No subtitles, no on-screen text.` to `style:`.
+
+**The pose isn't followed.**
+Mention the pose at a moment in the action ("ends in the pose from `<Pose 1>`"), not only in a list. Match framing: a full-body pose needs a full or medium-wide shot. Give the pose enough time; one pose per few seconds works best.
+
+**The pose image's face, clothes or background leak into the video.**
+Use a skeleton render (OpenPose / DWPose) instead of a photo, check that `pose_instruction` on the References node isn't empty, and describe the wanted outfit explicitly with a `<Picture N>` reference.
 
 **Music changes at every join.**
 Each segment generates its own score. Use `carry_audio: on` with a tail mode, describe the same music in `style:`, or write `Music N/A` and add music in an editor.

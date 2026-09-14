@@ -6,6 +6,7 @@ A script tells the Director what to render: a list of segments, each with a prom
 - [JSON format](#json-format)
 - [Reference tags](#reference-tags)
 - [Choosing references per segment](#choosing-references-per-segment)
+- [Pose references](#pose-references)
 - [Writing prompts H3 follows](#writing-prompts-h3-follows)
 - [Checklist before a long render](#checklist-before-a-long-render)
 
@@ -44,6 +45,7 @@ A script with no `---` and no headers is a single segment. Plain prompt text is 
 | `pictures:` | `1, 3` · `all` · `none` | `all` | Which reference pictures this segment sends. |
 | `videos:` | same | `all` | Which reference videos. |
 | `audios:` | same | `all` | Which standalone audio clips. |
+| `poses:` | same | poses mentioned in the prompt | Which pose references to send. Normally leave it out: mentioning `<Pose 2>` sends pose 2. |
 | `continuity:` | `off` · `last_frame` · `tail_5` · `tail_22` · `tail_39` | Director `continuity` | How this segment starts from the previous one. Ignored on the first segment. Aliases: `cut`, `hard cut`, `none` → `off`; `tail` → `tail_22`. |
 | `seed:` | whole number | base seed (+ segment number) | Pin this segment's seed. |
 
@@ -97,6 +99,7 @@ Tags point a prompt at a reference. Numbering follows the order references were 
 | `<Picture 1>` … `<Picture 9>` | pictures |
 | `<Video 1>` … `<Video 3>` | videos |
 | `<Audio 1>` … `<Audio 3>` | standalone audio clips (the `audios` input) |
+| `<Pose 1>` … `<Pose 9>` | pose references (the `poses` input) |
 
 **Always use this global numbering**, even in segments that only use some references. The Director converts tags into what H3 needs for each segment (next section).
 
@@ -111,8 +114,9 @@ These are all converted to the proper tag:
 | `Image 2`, `picture 2` | `<Picture 2>` |
 | `Video 1`, `@video1` | `<Video 1>` |
 | `Audio 1`, `@audio1` | `<Audio 1>` |
+| `Pose 1`, `@pose1`, `<pose_1>` | `<Pose 1>` |
 
-The plain-word form catches ordinary phrases too: "a video 2 minutes long" becomes `<Video 2>`. Avoid putting a number straight after the words *picture, image, video* or *audio* in normal prose.
+The plain-word form catches ordinary phrases too: "a video 2 minutes long" becomes `<Video 2>`. Avoid putting a number straight after the words *picture, image, pose, video* or *audio* in normal prose.
 
 ### Mistakes are caught before rendering
 
@@ -157,6 +161,40 @@ You never do this yourself; the Director's `prompts` output shows the rewritten 
 ### Audio numbering with video soundtracks
 
 Inside H3, a video's soundtrack (connected to `video_soundtracks`) also takes an audio number, ahead of the standalone clips. The Director accounts for this. With `<Video 1>` carrying a soundtrack, your `<Audio 1>` is sent to H3 as `<Audio 2>`. Keep writing the global numbers.
+
+---
+
+## Pose references
+
+Pose images (connected to the References node's `poses` input) tell H3 what body pose to hit, without borrowing the face or clothes in them. Mention a pose at the moment it should happen:
+
+```
+style: Contemporary dance film, white studio, soft top light. Native audio.
+---
+title: Rise
+duration: 6
+<Picture 1> defines the dancer's face and black leotard.
+She slowly lifts both arms and ends in the pose from <Pose 1>. Slow push-in.
+---
+title: Lunge
+duration: 6
+<Picture 1> defines the dancer's face and leotard.
+She flows down into the pose from <Pose 2> and holds it for a beat.
+```
+
+What happens per segment:
+
+- **Only mentioned poses are sent.** Segment "Rise" sends pose 1, segment "Lunge" sends pose 2. `poses: 1, 2` overrides this; `poses: none` sends none. An explicit list without a mention still sends the pose, but H3 won't know when to use it.
+- **Poses become pictures.** H3 only knows pictures, so poses are sent after the segment's pictures and renumbered. With `<Picture 1>` in the segment, `<Pose 1>` reaches H3 as `<Picture 2>`.
+- **A pose-only instruction is appended** (the References node's `pose_instruction`), so H3 doesn't copy the pose image's identity, clothing or style.
+- **Images are limited to 9 per segment**, pictures and poses combined.
+
+The Director's `prompts` output shows the final text, which is the quickest way to check what H3 was told.
+
+Tips:
+- Write the pose as the **end state of a movement** ("ends in", "lands in", "freezes in") rather than a static description.
+- Put a pose at the **end of a segment** when the next segment should start from it.
+- Use one pose per beat. Several poses in a short segment make H3 rush or skip some.
 
 ---
 

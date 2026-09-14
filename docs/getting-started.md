@@ -84,6 +84,7 @@ The quickest start is a ready-made graph. Drag a file from [`example_workflows/`
 | `02_multi_segment_film.json` | Render a four-segment film with continuous joins and a hard cut (same as step 7) |
 | `03_llm_story_planner.json` | Have the Atlas LLM write the script, review it, then render (same as step 8) |
 | `04_video_motion_and_voice.json` | Copy movement from a reference video and use its voice |
+| `05_pose_guided_sequence.json` | Make a character hit specific body poses from pose images |
 
 After loading:
 1. Pick your own files in every **Load Image / Load Audio / Load Video** node. The names in them (`face.png`, `voice.mp3`, `reference.mp4`) are placeholders and show as missing until you replace them.

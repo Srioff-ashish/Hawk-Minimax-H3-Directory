@@ -105,12 +105,16 @@ def _encode(pipe: dict, bundle: RefBundle, job: Job, width: int, height: int, re
         tuple(bundle.digest("Picture", n) for n in job.pictures),
         tuple(bundle.digest("Video", n) for n in job.videos),
         tuple(bundle.digest("Audio", n) for n in job.audios),
+        tuple(bundle.digest("Pose", n) for n in job.poses),
     )
     if cache_key in _ENCODE_CACHE:
         _ENCODE_CACHE.move_to_end(cache_key)
         return _ENCODE_CACHE[cache_key]
 
-    ref_images = {f"ref_image_{slot}": bundle.pictures[n - 1] for slot, n in enumerate(job.pictures)}
+    # Poses ride along as extra reference pictures after the regular ones; the job's
+    # prompt already refers to them by those picture numbers.
+    images = [bundle.pictures[n - 1] for n in job.pictures] + [bundle.poses[n - 1] for n in job.poses]
+    ref_images = {f"ref_image_{slot}": image for slot, image in enumerate(images)}
     ref_videos, ref_video_audios = {}, {}
     for slot, n in enumerate(job.videos):
         video = bundle.videos[n - 1]
@@ -298,6 +302,7 @@ class HawkH3Director(io.ComfyNode):
             continuity=continuity,
             base_seed=seed,
             seed_mode="same" if seed_mode == SEED_MODES[1] else "increment",
+            pose_instruction=bundle.pose_instruction,
         )
         width, height = media.resolve_resolution(
             aspect_ratio, megapixels, bundle.pictures[0] if bundle.pictures else None
@@ -331,6 +336,7 @@ class HawkH3Director(io.ComfyNode):
                 "pictures": [bundle.digest("Picture", n) for n in job.pictures],
                 "videos": [bundle.digest("Video", n) for n in job.videos],
                 "audios": [bundle.digest("Audio", n) for n in job.audios],
+                "poses": [bundle.digest("Pose", n) for n in job.poses],
             }
             previous = job_key(job, {**context, "refs": refs_digest}, previous)
             keys.append(previous)

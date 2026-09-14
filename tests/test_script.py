@@ -150,6 +150,45 @@ class Tags(unittest.TestCase):
             jobs_for("pictures: 5\nsmiles")
 
 
+class Poses(unittest.TestCase):
+    REFS = {"Picture": 2, "Pose": 3, "Video": 0, "Audio": 0}
+
+    def jobs(self, text, **overrides):
+        return jobs_for(text, available=self.REFS, video_has_audio=(), **overrides)
+
+    def test_mentioned_poses_become_pictures_after_the_pictures(self):
+        (job,) = self.jobs("pictures: 1\n<Picture 1> ends in <Pose 3>, then pose 2")
+        self.assertEqual((job.pictures, job.poses), ([1], [2, 3]))
+        body, instruction = job.prompt.split("\n\n")
+        self.assertEqual(body, "<Picture 1> ends in <Picture 3>, then <Picture 2>")
+        self.assertIn("Pose reference <Picture 2> and <Picture 3>", instruction)
+
+    def test_unmentioned_poses_are_not_sent(self):
+        (job,) = self.jobs("A scene with no pose")
+        self.assertEqual(job.poses, [])
+        self.assertNotIn("Pose reference", job.prompt)
+
+    def test_explicit_list_and_custom_or_empty_instruction(self):
+        (job,) = self.jobs("poses: 1\nShe dances", pose_instruction="POSE ONLY {tags}")
+        self.assertEqual(job.poses, [1])
+        self.assertTrue(job.prompt.endswith("POSE ONLY <Picture 3>"))
+        (job,) = self.jobs("poses: 1\nShe dances", pose_instruction="")
+        self.assertEqual(job.prompt, "She dances")
+
+    def test_errors(self):
+        with self.assertRaisesRegex(ScriptError, "only 3 pose"):
+            self.jobs("Ends in <Pose 4>")
+        with self.assertRaisesRegex(ScriptError, "leaves it out"):
+            self.jobs("poses: 1\nEnds in <Pose 2>")
+        with self.assertRaisesRegex(ScriptError, "at most 9 images"):
+            jobs_for("poses: 1,2\nGo", available={"Picture": 8, "Pose": 2, "Video": 0, "Audio": 0}, video_has_audio=())
+
+    def test_json_poses_round_trip(self):
+        script = parse_script('{"segments": [{"prompt": "<Pose 1>", "poses": [1]}]}')
+        self.assertEqual(script.segments[0].poses, [1])
+        self.assertEqual(parse_script(script.to_json()), script)
+
+
 class Jobs(unittest.TestCase):
     def test_durations_seeds_and_continuity(self):
         jobs = jobs_for("duration: 5\nA\n---\nB\n---\nseed: 9\ncontinuity: last frame\nC")

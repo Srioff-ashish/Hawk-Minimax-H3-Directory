@@ -118,10 +118,12 @@ Collects the reference files and fixes their numbering. The numbers are how scri
 |---|---|
 | `refs_in` *(optional)* | Another References node's `refs`. Its references come first; this node's are numbered after them. Use it to split a big set across nodes. |
 | `pictures` | Up to 9 images. Each connection adds a slot. **A batch of images adds one picture per image**, so a 3-image batch becomes `<Picture 1>`–`<Picture 3>`. |
+| `poses` | Up to 9 **pose reference** images: OpenPose / DWPose skeleton renders, or photos of anyone in the pose. Numbered `<Pose 1>`, `<Pose 2>`… separately from pictures. Only the body pose is used; see [Pose references](#pose-references). A batch adds one pose per image. |
 | `videos` | Up to 3 videos as IMAGE frames (from Load Video UI, VHS Load Video, etc.). 2–15 s each; at least 5 frames. |
 | `video_soundtracks` | The audio of the **same-numbered** video: `video_soundtrack_0` belongs to `video_0`. Use this when the sound belongs to the clip, e.g. its ambience or the performance's timing. |
 | `audios` | Up to 3 standalone audio clips: a voice sample, a music bed, a sound effect. |
 | `labels` *(optional)* | One line per reference saying what it is for. Shown to the Story Planner and in `tag_map`; **not** sent to H3. |
+| `pose_instruction` *(advanced)* | The sentence added to every segment that sends poses, so H3 copies only the pose. `{tags}` becomes those poses' picture tags. Clear it to add nothing and write your own wording in prompts. |
 | `video_fps` *(advanced)* | Frame rate of the connected videos. They're resampled to H3's 24 fps. Leave at 24 if your loader already outputs 24 fps (Load Video UI does by default). |
 
 `labels` format:
@@ -132,6 +134,24 @@ Picture 2: green bomber jacket
 Video 1: walking pace and camera move
 Audio 1: her voice
 ```
+
+### Pose references
+
+H3 has no pose ControlNet for reference-to-video, so a pose image travels as an extra reference picture with an explicit "pose only" role. The pack handles that for you:
+
+1. Connect pose images to **`poses`**. Their tags are `<Pose 1>`, `<Pose 2>`…
+2. In the script, say **when** the pose happens: `…and she ends in the pose from <Pose 2>.`
+3. A segment sends **only the poses its prompt mentions**. To choose explicitly, add `poses: 1, 2` to the segment.
+4. The Director sends those poses as pictures after the segment's regular pictures, rewrites `<Pose N>` to the matching `<Picture k>`, and appends `pose_instruction`:
+   > Pose reference `<Picture 3>`: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.
+
+What makes a good pose image:
+- **Skeleton renders** (from an OpenPose / DWPose preprocessor) carry no face or clothing, so they can't leak identity. They're the safest choice.
+- **Photos** work too. Pick plain clothing and background, since the instruction discourages copying them but can't guarantee it.
+- Match the output's framing. A full-body pose for a close-up shot won't be followed.
+- Pictures and poses together are limited to **9 images per segment**.
+
+Land poses at the **end** of a segment where you can. With continuity on, the next segment then starts exactly in that pose.
 
 ### Soundtrack or standalone audio?
 
@@ -153,7 +173,7 @@ If you want a video's **voice** as a distinct voice reference you can name in pr
 
 ### Limits
 
-At most **9 pictures, 3 videos and 3 audio clips** in total, counting chained `refs_in`. The node errors if you exceed them.
+At most **9 pictures, 9 poses, 3 videos and 3 audio clips** in total, counting chained `refs_in`. The node errors if you exceed them. Each segment can send at most **9 images** (pictures + poses); the Director checks this before rendering.
 
 ---
 

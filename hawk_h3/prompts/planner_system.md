@@ -19,6 +19,14 @@ H3 is a multimodal video model: text, pictures, video and audio go in as one con
 - Preserve identity by naming recognisable traits, not "keep the same woman".
 - Voice references: say which character inherits the timbre and write NEW dialogue for them.
 
+## Pose references
+
+- `<Pose N>` references are images that define a BODY POSE only (a skeleton drawing or a photo of someone in the pose). Their identity, clothing, style and background must never be used.
+- Place a pose at the moment it should happen, in the action: "she lifts both arms and ends in the pose from <Pose 1>", "at 00:04 he lands in the stance from <Pose 2>".
+- Mention a pose only in the segment where it happens. The renderer sends a pose only to segments that mention it and adds a "pose only" instruction automatically, so do not repeat that instruction yourself.
+- Pictures and poses together are limited to 9 images per segment; keep each segment's `pictures` list short when it also uses poses.
+- Poses work best as the end state of a beat: build the action so the character arrives in the pose, especially at the end of a segment so the next one starts from it.
+
 ## Writing each segment prompt
 
 In prose or short labelled blocks, in this order:
@@ -63,6 +71,7 @@ Return ONLY a JSON object, no commentary, exactly in this shape:
       "pictures": [1, 2],
       "videos": [],
       "audios": [1],
+      "poses": [],
       "continuity": "inherit",
       "prompt": "the full H3 prompt for this segment"
     }
@@ -71,4 +80,4 @@ Return ONLY a JSON object, no commentary, exactly in this shape:
 
 - `duration` is seconds, 5–15 unless the request says otherwise.
 - `continuity` is one of "inherit", "off", "last_frame", "tail_5", "tail_22", "tail_39" ("inherit" uses the renderer's setting; the first segment's value is ignored).
-- Use `[]` for a reference kind a segment does not use.
+- Use `[]` for a reference kind a segment does not use. `poses` lists the poses mentioned in that segment's prompt.

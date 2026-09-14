@@ -60,6 +60,14 @@ def build_request(
         label = refs.labels.get(f"Picture {number}", "")
         ref_lines.append(f"<Picture {number}> = attached image {len(images)}{' -- ' + label if label else ''}")
 
+    for number, pose in enumerate(refs.poses, 1):
+        images.append(frame_to_data_uri(pose, image_max_side))
+        label = refs.labels.get(f"Pose {number}", "")
+        ref_lines.append(
+            f"<Pose {number}> = attached image {len(images)}, a POSE reference (body pose only)"
+            f"{' -- ' + label if label else ''}"
+        )
+
     for number, video in enumerate(refs.videos, 1):
         frames = video["frames"]
         first = len(images) + 1
@@ -214,6 +222,7 @@ class HawkH3StoryPlanner(io.ComfyNode):
                 video_has_audio=bundle.video_has_audio(),
                 default_seconds=segment_seconds,
                 continuity="tail_22",
+                pose_instruction=bundle.pose_instruction,
                 base_seed=0,
             )
         except ScriptError as exc:

@@ -11,6 +11,7 @@ Working setups for common jobs. Each lists the graph, the settings that matter, 
 - [7. Montage of hard cuts](#7-montage-of-hard-cuts)
 - [8. Product ad with readable text](#8-product-ad-with-readable-text)
 - [9. Rebuilding the original MiniMax H3 workflow](#9-rebuilding-the-original-minimax-h3-workflow)
+- [10. Hit specific body poses](#10-hit-specific-body-poses)
 
 ---
 
@@ -237,3 +238,41 @@ Old settings, new names:
 | Sigma shift 12 / 3 | `shift_video: 12`, `shift_audio: 3` |
 | Sol tau 1.25 → 0.8 | `attention: sol scheduled + sage`, `sol_tau_start: 1.25`, `sol_tau_end: 0.8` |
 | LLM system prompt | Built in (a multi-segment version); or paste yours into the Planner's `system_prompt` and keep its JSON output section |
+
+---
+
+## 10. Hit specific body poses
+
+Ready-made: [`example_workflows/05_pose_guided_sequence.json`](../example_workflows/05_pose_guided_sequence.json).
+
+**Graph:** character picture → References `picture_0`; one image per key pose → References `poses` (`pose_0`, `pose_1`, …).
+
+To make skeleton pose images from photos, run the photos through an OpenPose or DWPose preprocessor (e.g. from comfyui_controlnet_aux) and connect its output to `poses`. Plain photos of someone in the pose also work.
+
+References `labels`:
+```
+Picture 1: the fighter's face and red gi
+Pose 1: guard stance, fists up
+Pose 2: high front kick
+```
+
+```
+style: Martial-arts film, dojo at dusk, warm side light, slow-motion accents. Native audio.
+---
+title: Guard
+duration: 5
+<Picture 1> defines the fighter's face, topknot and red gi.
+He bows, steps back and settles into the stance from <Pose 1>. Static medium-wide shot.
+Sound: wooden floor creak, a sharp exhale.
+---
+title: Kick
+duration: 6
+<Picture 1> defines the fighter's face and red gi.
+He explodes forward and freezes at the top of the kick from <Pose 2>, then lands softly. The camera pushes in during the kick.
+Sound: gi snap, whoosh, foot landing on wood.
+```
+
+Notes:
+- Mentioning `<Pose 2>` is what sends pose 2 to that segment. Segments without a pose mention send none.
+- Check the Director's `prompts` output: poses appear as `<Picture 2>` there, followed by the pose-only instruction.
+- If the pose image's clothes or face leak into the result, switch to a skeleton render, or strengthen `pose_instruction` on the References node.

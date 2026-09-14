@@ -1,8 +1,8 @@
 {
   "id": "72ca7894-518a-5c12-ad73-2afde7299856",
   "revision": 0,
-  "last_node_id": 13,
-  "last_link_id": 12,
+  "last_node_id": 14,
+  "last_link_id": 13,
   "nodes": [
     {
       "id": 1,
@@ -26,7 +26,7 @@
       },
       "title": "Read me",
       "widgets_values": [
-        "## 03 · LLM story planner\n\nAn Atlas Cloud vision LLM reads your brief and references and writes the segment script; the Director renders it.\n\n**Before starting ComfyUI** set your key: `export ATLAS_API_KEY=...` (leave the node's `api_key` blank, otherwise the key is saved into this workflow).\n\n**To run**\n1. Load your references (face, coat, location, voice) and edit the **labels** on Hawk H3 References: the planner reads them.\n2. Write your brief in **Hawk H3 Story Planner → story**. Set `segment_count` and `segment_seconds`.\n3. **Review first:** select the Director and press **Ctrl+B** (bypass), queue. Read the plan in **Plan preview**. Change the planner `seed` for a different plan.\n4. Un-bypass the Director (Ctrl+B again) and queue. The plan is cached, so rendering starts straight away.\n\nThe Director is set to a **cheap preview** (`megapixels 0.4`, run `example_planned_film_preview`). When the film works, set `megapixels 0.98` and a new `run_name` for the final render.\n\n**Hand-edit the plan:** copy the JSON from Plan preview into the Director's `script` box, disconnect the planner's `script` link, edit, queue.\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
+        "## 03 · LLM story planner\n\nAn Atlas Cloud vision LLM reads your brief and references and writes the segment script; the Director renders it.\n\n**Before starting ComfyUI** set your key: `export ATLAS_API_KEY=...` (leave the node's `api_key` blank, otherwise the key is saved into this workflow).\n\n**To run**\n1. Load your references (face, coat, location, waving pose, voice) and edit the **labels** on Hawk H3 References: the planner reads them and decides where each pose happens.\n2. Write your brief in **Hawk H3 Story Planner → story**. Set `segment_count` and `segment_seconds`.\n3. **Review first:** select the Director and press **Ctrl+B** (bypass), queue. Read the plan in **Plan preview**. Change the planner `seed` for a different plan.\n4. Un-bypass the Director (Ctrl+B again) and queue. The plan is cached, so rendering starts straight away.\n\nThe Director is set to a **cheap preview** (`megapixels 0.4`, run `example_planned_film_preview`). When the film works, set `megapixels 0.98` and a new `run_name` for the final render.\n\n**Hand-edit the plan:** copy the JSON from Plan preview into the Director's `script` box, disconnect the planner's `script` link, edit, queue.\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
       ],
       "color": "#222",
       "bgcolor": "#000"
@@ -141,7 +141,7 @@
           "name": "pipe",
           "type": "HAWK_H3_PIPE",
           "links": [
-            6
+            7
           ]
         },
         {
@@ -337,17 +337,60 @@
     },
     {
       "id": 7,
-      "type": "LoadAudio",
+      "type": "LoadImage",
       "pos": [
         0,
         1690
       ],
       "size": [
         300,
-        140
+        330
       ],
       "flags": {},
       "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            5
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "LoadImage"
+      },
+      "title": "Pose 1 · waving pose",
+      "widgets_values": [
+        "pose_wave.png",
+        "image"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 8,
+      "type": "LoadAudio",
+      "pos": [
+        0,
+        2060
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -356,7 +399,7 @@
           "name": "AUDIO",
           "type": "AUDIO",
           "links": [
-            5
+            6
           ]
         }
       ],
@@ -374,7 +417,7 @@
       "bgcolor": "#335"
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "HawkH3References",
       "pos": [
         340,
@@ -382,10 +425,10 @@
       ],
       "size": [
         380,
-        330
+        380
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -428,6 +471,22 @@
           "link": null
         },
         {
+          "localized_name": "poses.pose_0",
+          "name": "poses.pose_0",
+          "type": "IMAGE",
+          "label": "pose_0",
+          "shape": 7,
+          "link": 5
+        },
+        {
+          "localized_name": "poses.pose_1",
+          "name": "poses.pose_1",
+          "type": "IMAGE",
+          "label": "pose_1",
+          "shape": 7,
+          "link": null
+        },
+        {
           "localized_name": "videos.video_0",
           "name": "videos.video_0",
           "type": "IMAGE",
@@ -449,7 +508,7 @@
           "type": "AUDIO",
           "label": "audio_0",
           "shape": 7,
-          "link": 5
+          "link": 6
         },
         {
           "localized_name": "audios.audio_1",
@@ -466,8 +525,8 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "links": [
-            7,
-            8
+            8,
+            9
           ]
         },
         {
@@ -482,16 +541,18 @@
         "Node name for S&R": "HawkH3References"
       },
       "widgets_values": [
-        "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nAudio 1: her voice",
+        "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nPose 1: one arm raised high in a wave\nAudio 1: her voice",
+        "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         24.0
       ],
       "widgets_values_named": {
-        "labels": "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nAudio 1: her voice",
+        "labels": "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nPose 1: one arm raised high in a wave\nAudio 1: her voice",
+        "pose_instruction": "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         "video_fps": 24.0
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "HawkH3StoryPlanner",
       "pos": [
         820,
@@ -502,7 +563,7 @@
         560
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
@@ -510,7 +571,7 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "shape": 7,
-          "link": 7
+          "link": 8
         }
       ],
       "outputs": [
@@ -519,8 +580,8 @@
           "name": "script",
           "type": "STRING",
           "links": [
-            9,
-            10
+            10,
+            11
           ]
         },
         {
@@ -535,7 +596,7 @@
         "Node name for S&R": "HawkH3StoryPlanner"
       },
       "widgets_values": [
-        "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. She calls from the platform, spots the friend across the station, and they end up laughing together in a warm cafe. Understated, warm, a little bittersweet. Her lines: \"I'm here. Where are you?\" and later \"You haven't changed at all.\"",
+        "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. She calls from the platform, spots the friend across the station and waves (use the waving pose), and they end up laughing together in a warm cafe. Understated, warm, a little bittersweet. Her lines: \"I'm here. Where are you?\" and later \"You haven't changed at all.\"",
         4,
         10.0,
         "16:9",
@@ -553,7 +614,7 @@
         3
       ],
       "widgets_values_named": {
-        "story": "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. She calls from the platform, spots the friend across the station, and they end up laughing together in a warm cafe. Understated, warm, a little bittersweet. Her lines: \"I'm here. Where are you?\" and later \"You haven't changed at all.\"",
+        "story": "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. She calls from the platform, spots the friend across the station and waves (use the waving pose), and they end up laughing together in a warm cafe. Understated, warm, a little bittersweet. Her lines: \"I'm here. Where are you?\" and later \"You haven't changed at all.\"",
         "segment_count": 4,
         "segment_seconds": 10.0,
         "aspect_ratio": "16:9",
@@ -572,7 +633,7 @@
       }
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "PreviewAny",
       "pos": [
         820,
@@ -583,14 +644,14 @@
         360
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "source",
           "name": "source",
           "type": "*",
-          "link": 10
+          "link": 11
         }
       ],
       "outputs": [
@@ -613,7 +674,7 @@
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "HawkH3Director",
       "pos": [
         1340,
@@ -624,21 +685,21 @@
         900
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "pipe",
           "name": "pipe",
           "type": "HAWK_H3_PIPE",
-          "link": 6
+          "link": 7
         },
         {
           "localized_name": "refs",
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "shape": 7,
-          "link": 8
+          "link": 9
         },
         {
           "localized_name": "script",
@@ -647,7 +708,7 @@
           "widget": {
             "name": "script"
           },
-          "link": 9
+          "link": 10
         }
       ],
       "outputs": [
@@ -656,7 +717,7 @@
           "name": "video",
           "type": "VIDEO",
           "links": [
-            11
+            12
           ]
         },
         {
@@ -682,7 +743,7 @@
           "name": "info",
           "type": "STRING",
           "links": [
-            12
+            13
           ]
         }
       ],
@@ -734,7 +795,7 @@
       }
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "SaveVideo",
       "pos": [
         1920,
@@ -745,14 +806,14 @@
         520
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
-          "link": 11
+          "link": 12
         }
       ],
       "outputs": [
@@ -774,7 +835,7 @@
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "type": "PreviewAny",
       "pos": [
         1920,
@@ -785,14 +846,14 @@
         360
       ],
       "flags": {},
-      "order": 12,
+      "order": 13,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "source",
           "name": "source",
           "type": "*",
-          "link": 12
+          "link": 13
         }
       ],
       "outputs": [
@@ -828,7 +889,7 @@
       2,
       4,
       0,
-      8,
+      9,
       1,
       "IMAGE"
     ],
@@ -836,7 +897,7 @@
       3,
       5,
       0,
-      8,
+      9,
       2,
       "IMAGE"
     ],
@@ -844,7 +905,7 @@
       4,
       6,
       0,
-      8,
+      9,
       3,
       "IMAGE"
     ],
@@ -852,63 +913,71 @@
       5,
       7,
       0,
-      8,
-      7,
-      "AUDIO"
+      9,
+      5,
+      "IMAGE"
     ],
     [
       6,
+      8,
+      0,
+      9,
+      9,
+      "AUDIO"
+    ],
+    [
+      7,
       3,
       0,
-      11,
+      12,
       0,
       "HAWK_H3_PIPE"
     ],
     [
-      7,
       8,
-      0,
       9,
+      0,
+      10,
       0,
       "HAWK_H3_REFS"
     ],
     [
-      8,
-      8,
+      9,
+      9,
       0,
-      11,
+      12,
       1,
       "HAWK_H3_REFS"
     ],
     [
-      9,
-      9,
+      10,
+      10,
       0,
-      11,
+      12,
       2,
       "STRING"
     ],
     [
+      11,
       10,
-      9,
       0,
-      10,
+      11,
       0,
       "STRING"
     ],
     [
-      11,
-      11,
-      0,
       12,
+      12,
+      0,
+      13,
       0,
       "VIDEO"
     ],
     [
-      12,
-      11,
-      4,
       13,
+      12,
+      4,
+      14,
       0,
       "STRING"
     ]
@@ -933,7 +1002,7 @@
         -20,
         520,
         780,
-        1320
+        1700
       ],
       "color": "#3f789e",
       "flags": {}

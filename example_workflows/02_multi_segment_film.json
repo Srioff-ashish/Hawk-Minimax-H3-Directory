@@ -1,8 +1,8 @@
 {
   "id": "67335a9d-57f5-549b-83e3-768ebc5c39bb",
   "revision": 0,
-  "last_node_id": 12,
-  "last_link_id": 10,
+  "last_node_id": 13,
+  "last_link_id": 11,
   "nodes": [
     {
       "id": 1,
@@ -26,7 +26,7 @@
       },
       "title": "Read me",
       "widgets_values": [
-        "## 02 · Multi-segment film (~34 s)\n\nFour H3 segments joined into one video. Segments 1→2→3 flow continuously: each starts from the last ~1 s of frames and audio of the one before. Segment 4 is a hard cut (`continuity: off`).\n\n**To run**\n1. Load your references: **face**, **coat**, **location** pictures and a clean **voice** sample (5–15 s, one speaker).\n2. Queue. Segments are saved to `output/hawk_h3/example_film/` as they finish.\n3. Edit a segment and queue again: earlier segments are reused; only the edited one and those after it re-render. Keep the Director's **seed on fixed**.\n\n**Script tips**\n- Numbers in `<Picture N>` follow the order on **Hawk H3 References** (see its tag map).\n- `pictures: 1, 2` sends only those references in a segment: faster, less drift.\n- Continuity segments should *continue* the action, not re-introduce the scene.\n\n**Try first at low cost:** set `megapixels` to 0.4 and `run_name` to `example_film_preview`.\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
+        "## 02 · Multi-segment film (~34 s)\n\nFour H3 segments joined into one video. Segments 1→2→3 flow continuously: each starts from the last ~1 s of frames and audio of the one before. Segment 4 is a hard cut (`continuity: off`).\n\n**To run**\n1. Load your references: **face**, **coat**, **location** pictures, a **waving pose** (an OpenPose skeleton or any photo of someone in that pose) and a clean **voice** sample (5–15 s, one speaker).\n2. Queue. Segments are saved to `output/hawk_h3/example_film/` as they finish.\n3. Edit a segment and queue again: earlier segments are reused; only the edited one and those after it re-render. Keep the Director's **seed on fixed**.\n\n**Script tips**\n- Numbers in `<Picture N>` follow the order on **Hawk H3 References** (see its tag map).\n- `pictures: 1, 2` sends only those references in a segment: faster, less drift.\n- Continuity segments should *continue* the action, not re-introduce the scene.\n- `<Pose 1>` in segment 3 makes her end in the waving pose. A pose is only sent to segments that mention it, with an automatic \"pose only, not identity or clothes\" instruction.\n\n**Try first at low cost:** set `megapixels` to 0.4 and `run_name` to `example_film_preview`.\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
       ],
       "color": "#222",
       "bgcolor": "#000"
@@ -141,7 +141,7 @@
           "name": "pipe",
           "type": "HAWK_H3_PIPE",
           "links": [
-            6
+            7
           ]
         },
         {
@@ -337,17 +337,60 @@
     },
     {
       "id": 7,
-      "type": "LoadAudio",
+      "type": "LoadImage",
       "pos": [
         0,
         1690
       ],
       "size": [
         300,
-        140
+        330
       ],
       "flags": {},
       "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            5
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "LoadImage"
+      },
+      "title": "Pose 1 · waving pose",
+      "widgets_values": [
+        "pose_wave.png",
+        "image"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 8,
+      "type": "LoadAudio",
+      "pos": [
+        0,
+        2060
+      ],
+      "size": [
+        300,
+        140
+      ],
+      "flags": {},
+      "order": 7,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -356,7 +399,7 @@
           "name": "AUDIO",
           "type": "AUDIO",
           "links": [
-            5
+            6
           ]
         }
       ],
@@ -374,7 +417,7 @@
       "bgcolor": "#335"
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "HawkH3References",
       "pos": [
         340,
@@ -382,10 +425,10 @@
       ],
       "size": [
         380,
-        330
+        380
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -428,6 +471,22 @@
           "link": null
         },
         {
+          "localized_name": "poses.pose_0",
+          "name": "poses.pose_0",
+          "type": "IMAGE",
+          "label": "pose_0",
+          "shape": 7,
+          "link": 5
+        },
+        {
+          "localized_name": "poses.pose_1",
+          "name": "poses.pose_1",
+          "type": "IMAGE",
+          "label": "pose_1",
+          "shape": 7,
+          "link": null
+        },
+        {
           "localized_name": "videos.video_0",
           "name": "videos.video_0",
           "type": "IMAGE",
@@ -449,7 +508,7 @@
           "type": "AUDIO",
           "label": "audio_0",
           "shape": 7,
-          "link": 5
+          "link": 6
         },
         {
           "localized_name": "audios.audio_1",
@@ -466,7 +525,7 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "links": [
-            7
+            8
           ]
         },
         {
@@ -481,16 +540,18 @@
         "Node name for S&R": "HawkH3References"
       },
       "widgets_values": [
-        "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nAudio 1: her voice",
+        "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nPose 1: one arm raised high in a wave\nAudio 1: her voice",
+        "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         24.0
       ],
       "widgets_values_named": {
-        "labels": "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nAudio 1: her voice",
+        "labels": "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nPose 1: one arm raised high in a wave\nAudio 1: her voice",
+        "pose_instruction": "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         "video_fps": 24.0
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "HawkH3Director",
       "pos": [
         940,
@@ -501,21 +562,21 @@
         900
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "pipe",
           "name": "pipe",
           "type": "HAWK_H3_PIPE",
-          "link": 6
+          "link": 7
         },
         {
           "localized_name": "refs",
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "shape": 7,
-          "link": 7
+          "link": 8
         }
       ],
       "outputs": [
@@ -524,7 +585,7 @@
           "name": "video",
           "type": "VIDEO",
           "links": [
-            8
+            9
           ]
         },
         {
@@ -544,7 +605,7 @@
           "name": "prompts",
           "type": "STRING",
           "links": [
-            9
+            10
           ]
         },
         {
@@ -552,7 +613,7 @@
           "name": "info",
           "type": "STRING",
           "links": [
-            10
+            11
           ]
         }
       ],
@@ -561,7 +622,7 @@
         "Node name for S&R": "HawkH3Director"
       },
       "widgets_values": [
-        "style: Cinematic live-action, soft overcast light, 35mm lens feel, light film grain. Native audio. No subtitles, no on-screen text.\n---\ntitle: Arrival\nduration: 8\npictures: 1, 2, 3\n<Picture 1> defines her face and hair. <Picture 2> defines her coat: take its colour, fabric and cut, not the person wearing it. <Picture 3> defines the station platform.\nShe steps off a tram onto the rain-wet platform, adjusts her coat collar and looks up at the station clock. Slow push-in from a medium-wide shot.\nSound: tram brakes hiss, distant announcements, light rain on the canopy. Music N/A.\n---\ntitle: The call\nduration: 10\npictures: 1, 2\naudios: 1\n<Picture 1> defines her face. <Picture 2> defines her coat. <Audio 1> is her voice: its timbre and calm pace.\nShe turns toward camera, takes out her phone and answers: \"I'm here. Where are you?\" The camera tracks backwards at walking pace in a medium close-up.\nSound: footsteps on wet tiles, her voice close and clear, rain continues.\n---\ntitle: The wave\nduration: 8\npictures: 1\nShe lowers the phone, spots someone off-screen left and waves, breaking into a wide smile. The camera pans left to follow her gaze, then settles.\nSound: rain, a distant voice calling her name.\n---\ntitle: Cafe (hard cut)\nduration: 10\ncontinuity: off\npictures: 1, 2\naudios: 1\nHard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, now hanging on the chair behind her. <Audio 1> is her voice.\nA warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: \"You haven't changed at all.\"\nStatic medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass.",
+        "style: Cinematic live-action, soft overcast light, 35mm lens feel, light film grain. Native audio. No subtitles, no on-screen text.\n---\ntitle: Arrival\nduration: 8\npictures: 1, 2, 3\n<Picture 1> defines her face and hair. <Picture 2> defines her coat: take its colour, fabric and cut, not the person wearing it. <Picture 3> defines the station platform.\nShe steps off a tram onto the rain-wet platform, adjusts her coat collar and looks up at the station clock. Slow push-in from a medium-wide shot.\nSound: tram brakes hiss, distant announcements, light rain on the canopy. Music N/A.\n---\ntitle: The call\nduration: 10\npictures: 1, 2\naudios: 1\n<Picture 1> defines her face. <Picture 2> defines her coat. <Audio 1> is her voice: its timbre and calm pace.\nShe turns toward camera, takes out her phone and answers: \"I'm here. Where are you?\" The camera tracks backwards at walking pace in a medium close-up.\nSound: footsteps on wet tiles, her voice close and clear, rain continues.\n---\ntitle: The wave\nduration: 8\npictures: 1\nShe lowers the phone, spots someone off-screen left and waves, breaking into a wide smile, and ends in the pose from <Pose 1>. The camera pans left to follow her gaze, then settles.\nSound: rain, a distant voice calling her name.\n---\ntitle: Cafe (hard cut)\nduration: 10\ncontinuity: off\npictures: 1, 2\naudios: 1\nHard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, now hanging on the chair behind her. <Audio 1> is her voice.\nA warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: \"You haven't changed at all.\"\nStatic medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass.",
         "16:9",
         0.98,
         10.0,
@@ -582,7 +643,7 @@
         false
       ],
       "widgets_values_named": {
-        "script": "style: Cinematic live-action, soft overcast light, 35mm lens feel, light film grain. Native audio. No subtitles, no on-screen text.\n---\ntitle: Arrival\nduration: 8\npictures: 1, 2, 3\n<Picture 1> defines her face and hair. <Picture 2> defines her coat: take its colour, fabric and cut, not the person wearing it. <Picture 3> defines the station platform.\nShe steps off a tram onto the rain-wet platform, adjusts her coat collar and looks up at the station clock. Slow push-in from a medium-wide shot.\nSound: tram brakes hiss, distant announcements, light rain on the canopy. Music N/A.\n---\ntitle: The call\nduration: 10\npictures: 1, 2\naudios: 1\n<Picture 1> defines her face. <Picture 2> defines her coat. <Audio 1> is her voice: its timbre and calm pace.\nShe turns toward camera, takes out her phone and answers: \"I'm here. Where are you?\" The camera tracks backwards at walking pace in a medium close-up.\nSound: footsteps on wet tiles, her voice close and clear, rain continues.\n---\ntitle: The wave\nduration: 8\npictures: 1\nShe lowers the phone, spots someone off-screen left and waves, breaking into a wide smile. The camera pans left to follow her gaze, then settles.\nSound: rain, a distant voice calling her name.\n---\ntitle: Cafe (hard cut)\nduration: 10\ncontinuity: off\npictures: 1, 2\naudios: 1\nHard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, now hanging on the chair behind her. <Audio 1> is her voice.\nA warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: \"You haven't changed at all.\"\nStatic medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass.",
+        "script": "style: Cinematic live-action, soft overcast light, 35mm lens feel, light film grain. Native audio. No subtitles, no on-screen text.\n---\ntitle: Arrival\nduration: 8\npictures: 1, 2, 3\n<Picture 1> defines her face and hair. <Picture 2> defines her coat: take its colour, fabric and cut, not the person wearing it. <Picture 3> defines the station platform.\nShe steps off a tram onto the rain-wet platform, adjusts her coat collar and looks up at the station clock. Slow push-in from a medium-wide shot.\nSound: tram brakes hiss, distant announcements, light rain on the canopy. Music N/A.\n---\ntitle: The call\nduration: 10\npictures: 1, 2\naudios: 1\n<Picture 1> defines her face. <Picture 2> defines her coat. <Audio 1> is her voice: its timbre and calm pace.\nShe turns toward camera, takes out her phone and answers: \"I'm here. Where are you?\" The camera tracks backwards at walking pace in a medium close-up.\nSound: footsteps on wet tiles, her voice close and clear, rain continues.\n---\ntitle: The wave\nduration: 8\npictures: 1\nShe lowers the phone, spots someone off-screen left and waves, breaking into a wide smile, and ends in the pose from <Pose 1>. The camera pans left to follow her gaze, then settles.\nSound: rain, a distant voice calling her name.\n---\ntitle: Cafe (hard cut)\nduration: 10\ncontinuity: off\npictures: 1, 2\naudios: 1\nHard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, now hanging on the chair behind her. <Audio 1> is her voice.\nA warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: \"You haven't changed at all.\"\nStatic medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass.",
         "aspect_ratio": "16:9",
         "megapixels": 0.98,
         "default_seconds": 10.0,
@@ -604,7 +665,7 @@
       }
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "SaveVideo",
       "pos": [
         1520,
@@ -615,14 +676,14 @@
         520
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
-          "link": 8
+          "link": 9
         }
       ],
       "outputs": [
@@ -644,7 +705,7 @@
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "PreviewAny",
       "pos": [
         1520,
@@ -655,14 +716,14 @@
         360
       ],
       "flags": {},
-      "order": 10,
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "source",
           "name": "source",
           "type": "*",
-          "link": 9
+          "link": 10
         }
       ],
       "outputs": [
@@ -685,7 +746,7 @@
       ]
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "PreviewAny",
       "pos": [
         1520,
@@ -696,14 +757,14 @@
         360
       ],
       "flags": {},
-      "order": 11,
+      "order": 12,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "source",
           "name": "source",
           "type": "*",
-          "link": 10
+          "link": 11
         }
       ],
       "outputs": [
@@ -739,7 +800,7 @@
       2,
       4,
       0,
-      8,
+      9,
       1,
       "IMAGE"
     ],
@@ -747,7 +808,7 @@
       3,
       5,
       0,
-      8,
+      9,
       2,
       "IMAGE"
     ],
@@ -755,7 +816,7 @@
       4,
       6,
       0,
-      8,
+      9,
       3,
       "IMAGE"
     ],
@@ -763,47 +824,55 @@
       5,
       7,
       0,
-      8,
-      7,
-      "AUDIO"
+      9,
+      5,
+      "IMAGE"
     ],
     [
       6,
-      3,
+      8,
       0,
       9,
+      9,
+      "AUDIO"
+    ],
+    [
+      7,
+      3,
+      0,
+      10,
       0,
       "HAWK_H3_PIPE"
     ],
     [
-      7,
       8,
-      0,
       9,
+      0,
+      10,
       1,
       "HAWK_H3_REFS"
     ],
     [
-      8,
       9,
-      0,
       10,
+      0,
+      11,
       0,
       "VIDEO"
     ],
     [
-      9,
-      9,
+      10,
+      10,
       3,
-      11,
+      12,
       0,
       "STRING"
     ],
     [
+      11,
       10,
-      9,
       4,
-      12,
+      13,
       0,
       "STRING"
     ]
@@ -828,7 +897,7 @@
         -20,
         520,
         780,
-        1320
+        1700
       ],
       "color": "#3f789e",
       "flags": {}

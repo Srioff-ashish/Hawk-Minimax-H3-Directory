@@ -24,6 +24,7 @@ AUX_ID = "Srioff-ashish/Hawk-Minimax-H3-Directory"
 
 sys.path.insert(0, str(ROOT))
 from hawk_h3.lora_stack import NO_LORA, slot_widget_names  # noqa: E402
+from hawk_h3.script import DEFAULT_POSE_INSTRUCTION  # noqa: E402
 
 NODE_FILES = {
     "HawkH3ModelLoader": "loader.py",
@@ -202,10 +203,11 @@ def models(g: Graph) -> dict:
     return loras
 
 
-def references(g: Graph, pos, *, pictures=0, videos=0, soundtracks=0, audios=0, labels="", link_fps=False) -> dict:
+def references(g: Graph, pos, *, pictures=0, poses=0, videos=0, soundtracks=0, audios=0, labels="", link_fps=False) -> dict:
     inputs = [sock("refs_in", "HAWK_H3_REFS", optional=True)]
     for group, prefix, count, limit, type_ in (
         ("pictures", "picture_", pictures, 9, "IMAGE"),
+        ("poses", "pose_", poses, 9, "IMAGE"),
         ("videos", "video_", videos, 3, "IMAGE"),
         ("video_soundtracks", "video_soundtrack_", soundtracks, 3, "AUDIO"),
         ("audios", "audio_", audios, 3, "AUDIO"),
@@ -216,9 +218,9 @@ def references(g: Graph, pos, *, pictures=0, videos=0, soundtracks=0, audios=0, 
     if link_fps:
         inputs.append(sock("video_fps", "FLOAT", optional=True, widget=True))
     return g.add(
-        "HawkH3References", pos, [380, 330], core=False, inputs=inputs,
+        "HawkH3References", pos, [380, 380], core=False, inputs=inputs,
         outputs=[out("refs", "HAWK_H3_REFS"), out("tag_map", "STRING")],
-        widgets={"labels": labels, "video_fps": 24.0},
+        widgets={"labels": labels, "pose_instruction": DEFAULT_POSE_INSTRUCTION, "video_fps": 24.0},
     )
 
 
@@ -391,7 +393,7 @@ Sound: footsteps on wet tiles, her voice close and clear, rain continues.
 title: The wave
 duration: 8
 pictures: 1
-She lowers the phone, spots someone off-screen left and waves, breaking into a wide smile. The camera pans left to follow her gaze, then settles.
+She lowers the phone, spots someone off-screen left and waves, breaking into a wide smile, and ends in the pose from <Pose 1>. The camera pans left to follow her gaze, then settles.
 Sound: rain, a distant voice calling her name.
 ---
 title: Cafe (hard cut)
@@ -403,18 +405,23 @@ Hard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, n
 A warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: "You haven't changed at all."
 Static medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass."""
 
-FILM_LABELS = "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\nAudio 1: her voice"
+FILM_LABELS = (
+    "Picture 1: her face and hair\nPicture 2: her coat\nPicture 3: the station platform\n"
+    "Pose 1: one arm raised high in a wave\nAudio 1: her voice"
+)
 
 
 def film_references(g: Graph, x: int, y: int) -> dict:
     face = load_image(g, (x, y), "face.png", "Picture 1 · face")
     coat = load_image(g, (x, y + 370), "coat.png", "Picture 2 · coat")
     place = load_image(g, (x, y + 740), "platform.png", "Picture 3 · location")
-    voice = load_audio(g, (x, y + 1110), "voice.mp3", "Audio 1 · voice sample")
-    refs = references(g, (x + 340, y), pictures=3, audios=1, labels=FILM_LABELS)
+    wave = load_image(g, (x, y + 1110), "pose_wave.png", "Pose 1 · waving pose")
+    voice = load_audio(g, (x, y + 1480), "voice.mp3", "Audio 1 · voice sample")
+    refs = references(g, (x + 340, y), pictures=3, poses=1, audios=1, labels=FILM_LABELS)
     g.link(face, "IMAGE", refs, "pictures.picture_0")
     g.link(coat, "IMAGE", refs, "pictures.picture_1")
     g.link(place, "IMAGE", refs, "pictures.picture_2")
+    g.link(wave, "IMAGE", refs, "poses.pose_0")
     g.link(voice, "AUDIO", refs, "audios.audio_0")
     return refs
 
@@ -426,7 +433,7 @@ def workflow_multi_segment_film() -> Graph:
 Four H3 segments joined into one video. Segments 1→2→3 flow continuously: each starts from the last ~1 s of frames and audio of the one before. Segment 4 is a hard cut (`continuity: off`).
 
 **To run**
-1. Load your references: **face**, **coat**, **location** pictures and a clean **voice** sample (5–15 s, one speaker).
+1. Load your references: **face**, **coat**, **location** pictures, a **waving pose** (an OpenPose skeleton or any photo of someone in that pose) and a clean **voice** sample (5–15 s, one speaker).
 2. Queue. Segments are saved to `output/hawk_h3/example_film/` as they finish.
 3. Edit a segment and queue again: earlier segments are reused; only the edited one and those after it re-render. Keep the Director's **seed on fixed**.
 
@@ -434,6 +441,7 @@ Four H3 segments joined into one video. Segments 1→2→3 flow continuously: ea
 - Numbers in `<Picture N>` follow the order on **Hawk H3 References** (see its tag map).
 - `pictures: 1, 2` sends only those references in a segment: faster, less drift.
 - Continuity segments should *continue* the action, not re-introduce the scene.
+- `<Pose 1>` in segment 3 makes her end in the waving pose. A pose is only sent to segments that mention it, with an automatic "pose only, not identity or clothes" instruction.
 
 **Try first at low cost:** set `megapixels` to 0.4 and `run_name` to `example_film_preview`.
 {MODELS_NOTE}""")
@@ -448,7 +456,7 @@ Four H3 segments joined into one video. Segments 1→2→3 flow continuously: ea
     g.link(direct, "video", save, "video")
     g.link(direct, "prompts", prompts, "source")
     g.link(direct, "info", info, "source")
-    g.group("2 · References", -20, 520, 780, 1320)
+    g.group("2 · References", -20, 520, 780, 1700)
     g.group("3 · Direct & render", 920, -60, 1240, 1420)
     return g
 
@@ -462,7 +470,7 @@ An Atlas Cloud vision LLM reads your brief and references and writes the segment
 **Before starting ComfyUI** set your key: `export ATLAS_API_KEY=...` (leave the node's `api_key` blank, otherwise the key is saved into this workflow).
 
 **To run**
-1. Load your references (face, coat, location, voice) and edit the **labels** on Hawk H3 References: the planner reads them.
+1. Load your references (face, coat, location, waving pose, voice) and edit the **labels** on Hawk H3 References: the planner reads them and decides where each pose happens.
 2. Write your brief in **Hawk H3 Story Planner → story**. Set `segment_count` and `segment_seconds`.
 3. **Review first:** select the Director and press **Ctrl+B** (bypass), queue. Read the plan in **Plan preview**. Change the planner `seed` for a different plan.
 4. Un-bypass the Director (Ctrl+B again) and queue. The plan is cached, so rendering starts straight away.
@@ -477,7 +485,8 @@ The Director is set to a **cheap preview** (`megapixels 0.4`, run `example_plann
         g, (820, 580),
         story=(
             "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. "
-            "She calls from the platform, spots the friend across the station, and they end up laughing together "
+            "She calls from the platform, spots the friend across the station and waves (use the waving pose), "
+            "and they end up laughing together "
             "in a warm cafe. Understated, warm, a little bittersweet. Her lines: \"I'm here. Where are you?\" "
             "and later \"You haven't changed at all.\""
         ),
@@ -495,7 +504,7 @@ The Director is set to a **cheap preview** (`megapixels 0.4`, run `example_plann
     g.link(plan, "script", plan_view, "source")
     g.link(direct, "video", save, "video")
     g.link(direct, "info", info, "source")
-    g.group("2 · References", -20, 520, 780, 1320)
+    g.group("2 · References", -20, 520, 780, 1700)
     g.group("3 · Plan (Atlas LLM)", 800, 520, 660, 1100, color="#8a5a2b")
     g.group("4 · Direct & render", 1320, -60, 1240, 1000)
     return g
@@ -568,7 +577,83 @@ Segment 1 uses only the motion (`audios: none`), segment 2 only the voice (`vide
     return g
 
 
-WORKFLOWS = [workflow_single_clip, workflow_multi_segment_film, workflow_llm_story_planner, workflow_video_reference]
+POSE_SCRIPT = """style: Contemporary dance film, empty white studio, soft top light, slow elegant camera. Native audio. Music: sparse solo piano. No subtitles.
+---
+title: Rise
+duration: 6
+<Picture 1> defines the dancer's face, hair and black leotard.
+She stands still in the centre of the studio, then slowly lifts both arms and ends in the pose from <Pose 1>. Slow push-in from a full shot.
+Sound: soft footfalls, fabric movement, piano.
+---
+title: Lunge
+duration: 6
+<Picture 1> defines the dancer's face and leotard.
+She flows down out of the stretch into the pose from <Pose 2> and holds it for a beat. The camera arcs slowly to her side.
+Sound: a slow breath, bare feet sliding on the floor, piano.
+---
+title: Bow
+duration: 6
+<Picture 1> defines the dancer's face and leotard.
+She rises out of the lunge, steps back and finishes in the bow from <Pose 3>. The camera settles into a static wide shot.
+Sound: the piano holds a final chord, then silence."""
+
+
+def workflow_pose_sequence() -> Graph:
+    g = Graph("05_pose_guided_sequence")
+    note(g, (-520, 0), [470, 1080], f"""## 05 · Pose-guided sequence
+
+A dancer moves through three key poses across three continuous segments. Each segment ends in the pose it names, and the next segment starts from it.
+
+**To run**
+1. **Picture 1**: the dancer (face and outfit).
+2. **Pose 1–3**: one image per key pose. Use OpenPose / DWPose skeleton renders, or photos of anyone in the pose: only the pose is used.
+3. Queue.
+
+**How poses work**
+- Connect pose images to the **poses** input of Hawk H3 References; they are numbered `<Pose 1>`, `<Pose 2>`… separately from pictures.
+- A segment sends only the poses its prompt mentions. Add `poses: 1, 2` to a segment to choose explicitly.
+- Write *when* the pose happens: "…and ends in the pose from `<Pose 2>`".
+- Each segment gets an automatic instruction to copy only the pose, not the face, clothes or style of the pose image. Edit it in `pose_instruction` (advanced) on the References node.
+- Pictures + poses count toward H3's 9 images per segment.
+
+**Tip:** land poses at the **end** of a segment. With continuity on, the next segment then starts exactly in that pose.
+{MODELS_NOTE}""")
+    loras = models(g)
+    dancer = load_image(g, (0, 580), "dancer.png", "Picture 1 · dancer")
+    poses = [load_image(g, (0, 950 + 370 * i), f"pose_{i + 1}.png", f"Pose {i + 1}") for i in range(3)]
+    refs = references(
+        g, (340, 580), pictures=1, poses=3,
+        labels=(
+            "Picture 1: the dancer's face, hair and black leotard\n"
+            "Pose 1: standing, both arms stretched overhead\n"
+            "Pose 2: deep lunge, one arm reaching forward\n"
+            "Pose 3: a low bow, one hand on the chest"
+        ),
+    )
+    direct = director(g, (940, 0), run_name="example_pose_sequence", default_seconds=6.0, script=POSE_SCRIPT)
+    save = save_video(g, (1520, 0), "video/hawk_h3_pose_sequence")
+    prompts = preview(g, (1520, 560), "Encoded prompts (poses become pictures)")
+    info = preview(g, (1520, 960), "Render report")
+    g.link(loras, "pipe", direct, "pipe")
+    g.link(dancer, "IMAGE", refs, "pictures.picture_0")
+    for index, pose in enumerate(poses):
+        g.link(pose, "IMAGE", refs, f"poses.pose_{index}")
+    g.link(refs, "refs", direct, "refs")
+    g.link(direct, "video", save, "video")
+    g.link(direct, "prompts", prompts, "source")
+    g.link(direct, "info", info, "source")
+    g.group("2 · References & poses", -20, 520, 780, 1560)
+    g.group("3 · Direct & render", 920, -60, 1240, 1420)
+    return g
+
+
+WORKFLOWS = [
+    workflow_single_clip,
+    workflow_multi_segment_film,
+    workflow_llm_story_planner,
+    workflow_video_reference,
+    workflow_pose_sequence,
+]
 
 
 def validate(workflow: dict, name: str) -> None:

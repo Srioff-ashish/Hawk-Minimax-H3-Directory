@@ -151,6 +151,7 @@ Continuity carries identity from one segment to the next, but small drift adds u
 - **`ref_image_size: max`** for the final render when the face must hold.
 - **Put the look in `style:`** so lighting and colour don't wander.
 - **Voices:** connect a clean voice sample to `audios`, send it in segments where the character speaks (`audios: 1`), and write `<Audio 1> is her voice` in those prompts. `carry_audio` also helps keep the tone across joins.
+- **Land key poses at segment ends.** A `<Pose N>` reached at the end of a segment gives the next segment a precise, known starting pose. See [pose references](scripts.md#pose-references).
 - **Cut occasionally.** A `continuity: off` scene change that re-establishes the character from references resets accumulated drift.
 
 ---

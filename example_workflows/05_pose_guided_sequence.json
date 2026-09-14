@@ -1,7 +1,7 @@
 {
-  "id": "1946fcb4-589c-5dad-bb53-aef6852cdc51",
+  "id": "901dfa67-0f95-5e73-95b2-c7648471c3b8",
   "revision": 0,
-  "last_node_id": 10,
+  "last_node_id": 12,
   "last_link_id": 10,
   "nodes": [
     {
@@ -13,7 +13,7 @@
       ],
       "size": [
         470,
-        940
+        1080
       ],
       "flags": {},
       "order": 0,
@@ -26,7 +26,7 @@
       },
       "title": "Read me",
       "widgets_values": [
-        "## 04 · Motion and voice from a video\n\nTakes the **movement and camera** from a reference video and the **voice** from its soundtrack, and puts them on the person from a reference picture.\n\n**To run**\n1. **Reference video**: a 2–15 s clip with the movement you want and one clear speaker. Trim longer clips first.\n2. **Reference picture**: the person who should appear.\n3. Queue.\n\n**How it is wired**\n- Video frames → `videos` = `<Video 1>` (motion, timing, camera).\n- Video audio → `audios` (not `video_soundtracks`) = `<Audio 1>`, a voice you can name in prompts.\n- Video fps → `video_fps`, so any frame rate is resampled to H3's 24 fps.\n\nSegment 1 uses only the motion (`audios: none`), segment 2 only the voice (`videos: none`). Always say what a video must **not** contribute (person, clothes, location).\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
+        "## 05 · Pose-guided sequence\n\nA dancer moves through three key poses across three continuous segments. Each segment ends in the pose it names, and the next segment starts from it.\n\n**To run**\n1. **Picture 1**: the dancer (face and outfit).\n2. **Pose 1–3**: one image per key pose. Use OpenPose / DWPose skeleton renders, or photos of anyone in the pose: only the pose is used.\n3. Queue.\n\n**How poses work**\n- Connect pose images to the **poses** input of Hawk H3 References; they are numbered `<Pose 1>`, `<Pose 2>`… separately from pictures.\n- A segment sends only the poses its prompt mentions. Add `poses: 1, 2` to a segment to choose explicitly.\n- Write *when* the pose happens: \"…and ends in the pose from `<Pose 2>`\".\n- Each segment gets an automatic instruction to copy only the pose, not the face, clothes or style of the pose image. Edit it in `pose_instruction` (advanced) on the References node.\n- Pictures + poses count toward H3's 9 images per segment.\n\n**Tip:** land poses at the **end** of a segment. With continuity on, the next segment then starts exactly in that pose.\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
       ],
       "color": "#222",
       "bgcolor": "#000"
@@ -208,7 +208,7 @@
     },
     {
       "id": 4,
-      "type": "LoadVideo",
+      "type": "LoadImage",
       "pos": [
         0,
         580
@@ -223,21 +223,27 @@
       "inputs": [],
       "outputs": [
         {
-          "localized_name": "VIDEO",
-          "name": "VIDEO",
-          "type": "VIDEO",
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
           "links": [
             3
           ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
         }
       ],
       "properties": {
         "cnr_id": "comfy-core",
-        "Node name for S&R": "LoadVideo"
+        "Node name for S&R": "LoadImage"
       },
-      "title": "Reference video",
+      "title": "Picture 1 · dancer",
       "widgets_values": [
-        "reference.mp4",
+        "dancer.png",
         "image"
       ],
       "color": "#223",
@@ -245,75 +251,53 @@
     },
     {
       "id": 5,
-      "type": "GetVideoComponents",
+      "type": "LoadImage",
       "pos": [
         0,
         950
       ],
       "size": [
-        240,
-        150
+        300,
+        330
       ],
       "flags": {},
       "order": 4,
       "mode": 0,
-      "inputs": [
-        {
-          "localized_name": "video",
-          "name": "video",
-          "type": "VIDEO",
-          "link": 3
-        }
-      ],
+      "inputs": [],
       "outputs": [
         {
-          "localized_name": "images",
-          "name": "images",
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
           "type": "IMAGE",
           "links": [
             4
           ]
         },
         {
-          "localized_name": "audio",
-          "name": "audio",
-          "type": "AUDIO",
-          "links": [
-            5
-          ]
-        },
-        {
-          "localized_name": "fps",
-          "name": "fps",
-          "type": "FLOAT",
-          "links": [
-            6
-          ]
-        },
-        {
-          "localized_name": "bit_depth",
-          "name": "bit_depth",
-          "type": "COMBO",
-          "links": null
-        },
-        {
-          "localized_name": "color_space",
-          "name": "color_space",
-          "type": "COMBO",
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
           "links": null
         }
       ],
       "properties": {
         "cnr_id": "comfy-core",
-        "Node name for S&R": "GetVideoComponents"
-      }
+        "Node name for S&R": "LoadImage"
+      },
+      "title": "Pose 1",
+      "widgets_values": [
+        "pose_1.png",
+        "image"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
     },
     {
       "id": 6,
       "type": "LoadImage",
       "pos": [
         0,
-        1140
+        1320
       ],
       "size": [
         300,
@@ -329,7 +313,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            7
+            5
           ]
         },
         {
@@ -343,9 +327,9 @@
         "cnr_id": "comfy-core",
         "Node name for S&R": "LoadImage"
       },
-      "title": "Reference picture",
+      "title": "Pose 2",
       "widgets_values": [
-        "face.png",
+        "pose_2.png",
         "image"
       ],
       "color": "#223",
@@ -353,9 +337,52 @@
     },
     {
       "id": 7,
+      "type": "LoadImage",
+      "pos": [
+        0,
+        1690
+      ],
+      "size": [
+        300,
+        330
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "localized_name": "IMAGE",
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            6
+          ]
+        },
+        {
+          "localized_name": "MASK",
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "LoadImage"
+      },
+      "title": "Pose 3",
+      "widgets_values": [
+        "pose_3.png",
+        "image"
+      ],
+      "color": "#223",
+      "bgcolor": "#335"
+    },
+    {
+      "id": 8,
       "type": "HawkH3References",
       "pos": [
-        360,
+        340,
         580
       ],
       "size": [
@@ -363,7 +390,7 @@
         380
       ],
       "flags": {},
-      "order": 6,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
@@ -379,7 +406,7 @@
           "type": "IMAGE",
           "label": "picture_0",
           "shape": 7,
-          "link": 7
+          "link": 3
         },
         {
           "localized_name": "pictures.picture_1",
@@ -395,6 +422,30 @@
           "type": "IMAGE",
           "label": "pose_0",
           "shape": 7,
+          "link": 4
+        },
+        {
+          "localized_name": "poses.pose_1",
+          "name": "poses.pose_1",
+          "type": "IMAGE",
+          "label": "pose_1",
+          "shape": 7,
+          "link": 5
+        },
+        {
+          "localized_name": "poses.pose_2",
+          "name": "poses.pose_2",
+          "type": "IMAGE",
+          "label": "pose_2",
+          "shape": 7,
+          "link": 6
+        },
+        {
+          "localized_name": "poses.pose_3",
+          "name": "poses.pose_3",
+          "type": "IMAGE",
+          "label": "pose_3",
+          "shape": 7,
           "link": null
         },
         {
@@ -402,14 +453,6 @@
           "name": "videos.video_0",
           "type": "IMAGE",
           "label": "video_0",
-          "shape": 7,
-          "link": 4
-        },
-        {
-          "localized_name": "videos.video_1",
-          "name": "videos.video_1",
-          "type": "IMAGE",
-          "label": "video_1",
           "shape": 7,
           "link": null
         },
@@ -427,25 +470,7 @@
           "type": "AUDIO",
           "label": "audio_0",
           "shape": 7,
-          "link": 5
-        },
-        {
-          "localized_name": "audios.audio_1",
-          "name": "audios.audio_1",
-          "type": "AUDIO",
-          "label": "audio_1",
-          "shape": 7,
           "link": null
-        },
-        {
-          "localized_name": "video_fps",
-          "name": "video_fps",
-          "type": "FLOAT",
-          "shape": 7,
-          "widget": {
-            "name": "video_fps"
-          },
-          "link": 6
         }
       ],
       "outputs": [
@@ -454,7 +479,7 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "links": [
-            8
+            7
           ]
         },
         {
@@ -469,18 +494,18 @@
         "Node name for S&R": "HawkH3References"
       },
       "widgets_values": [
-        "Picture 1: the person to show\nVideo 1: the movement and camera move to copy\nAudio 1: the voice",
+        "Picture 1: the dancer's face, hair and black leotard\nPose 1: standing, both arms stretched overhead\nPose 2: deep lunge, one arm reaching forward\nPose 3: a low bow, one hand on the chest",
         "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         24.0
       ],
       "widgets_values_named": {
-        "labels": "Picture 1: the person to show\nVideo 1: the movement and camera move to copy\nAudio 1: the voice",
+        "labels": "Picture 1: the dancer's face, hair and black leotard\nPose 1: standing, both arms stretched overhead\nPose 2: deep lunge, one arm reaching forward\nPose 3: a low bow, one hand on the chest",
         "pose_instruction": "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
         "video_fps": 24.0
       }
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "HawkH3Director",
       "pos": [
         940,
@@ -491,7 +516,7 @@
         900
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
@@ -505,7 +530,7 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "shape": 7,
-          "link": 8
+          "link": 7
         }
       ],
       "outputs": [
@@ -514,7 +539,7 @@
           "name": "video",
           "type": "VIDEO",
           "links": [
-            9
+            8
           ]
         },
         {
@@ -533,7 +558,9 @@
           "localized_name": "prompts",
           "name": "prompts",
           "type": "STRING",
-          "links": null
+          "links": [
+            9
+          ]
         },
         {
           "localized_name": "info",
@@ -549,10 +576,10 @@
         "Node name for S&R": "HawkH3Director"
       },
       "widgets_values": [
-        "style: Natural handheld documentary look, daylight. Native audio. No subtitles.\n---\ntitle: Motion\nduration: 8\npictures: 1\nvideos: 1\naudios: none\n<Picture 1> defines the person's face and hair. <Video 1> supplies ONLY the body movement, its timing and the camera move; do not take the person, clothes or location from it.\nThey perform that movement on a sunny rooftop terrace with plants and a city skyline behind them, wearing a plain white t-shirt.\nSound: light wind, footsteps on wooden decking, distant traffic. Music N/A.\n---\ntitle: Talk\nduration: 8\npictures: 1\nvideos: none\naudios: 1\n<Picture 1> defines their face. <Audio 1> is their voice: take its timbre, accent and pace.\nThey finish the movement, catch their breath, look into the lens and say: \"Okay. Your turn.\"\nMedium close-up, handheld. Sound: breathing, wind, their voice close and clear.",
+        "style: Contemporary dance film, empty white studio, soft top light, slow elegant camera. Native audio. Music: sparse solo piano. No subtitles.\n---\ntitle: Rise\nduration: 6\n<Picture 1> defines the dancer's face, hair and black leotard.\nShe stands still in the centre of the studio, then slowly lifts both arms and ends in the pose from <Pose 1>. Slow push-in from a full shot.\nSound: soft footfalls, fabric movement, piano.\n---\ntitle: Lunge\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe flows down out of the stretch into the pose from <Pose 2> and holds it for a beat. The camera arcs slowly to her side.\nSound: a slow breath, bare feet sliding on the floor, piano.\n---\ntitle: Bow\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe rises out of the lunge, steps back and finishes in the bow from <Pose 3>. The camera settles into a static wide shot.\nSound: the piano holds a final chord, then silence.",
         "16:9",
         0.98,
-        8.0,
+        6.0,
         8,
         "res_multistep",
         "simple",
@@ -561,7 +588,7 @@
         "tail_22",
         true,
         "match",
-        "example_motion_voice",
+        "example_pose_sequence",
         true,
         "increment per segment",
         60,
@@ -570,10 +597,10 @@
         false
       ],
       "widgets_values_named": {
-        "script": "style: Natural handheld documentary look, daylight. Native audio. No subtitles.\n---\ntitle: Motion\nduration: 8\npictures: 1\nvideos: 1\naudios: none\n<Picture 1> defines the person's face and hair. <Video 1> supplies ONLY the body movement, its timing and the camera move; do not take the person, clothes or location from it.\nThey perform that movement on a sunny rooftop terrace with plants and a city skyline behind them, wearing a plain white t-shirt.\nSound: light wind, footsteps on wooden decking, distant traffic. Music N/A.\n---\ntitle: Talk\nduration: 8\npictures: 1\nvideos: none\naudios: 1\n<Picture 1> defines their face. <Audio 1> is their voice: take its timbre, accent and pace.\nThey finish the movement, catch their breath, look into the lens and say: \"Okay. Your turn.\"\nMedium close-up, handheld. Sound: breathing, wind, their voice close and clear.",
+        "script": "style: Contemporary dance film, empty white studio, soft top light, slow elegant camera. Native audio. Music: sparse solo piano. No subtitles.\n---\ntitle: Rise\nduration: 6\n<Picture 1> defines the dancer's face, hair and black leotard.\nShe stands still in the centre of the studio, then slowly lifts both arms and ends in the pose from <Pose 1>. Slow push-in from a full shot.\nSound: soft footfalls, fabric movement, piano.\n---\ntitle: Lunge\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe flows down out of the stretch into the pose from <Pose 2> and holds it for a beat. The camera arcs slowly to her side.\nSound: a slow breath, bare feet sliding on the floor, piano.\n---\ntitle: Bow\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe rises out of the lunge, steps back and finishes in the bow from <Pose 3>. The camera settles into a static wide shot.\nSound: the piano holds a final chord, then silence.",
         "aspect_ratio": "16:9",
         "megapixels": 0.98,
-        "default_seconds": 8.0,
+        "default_seconds": 6.0,
         "steps": 8,
         "sampler_name": "res_multistep",
         "scheduler": "simple",
@@ -582,7 +609,7 @@
         "continuity": "tail_22",
         "carry_audio": true,
         "ref_image_size": "match",
-        "run_name": "example_motion_voice",
+        "run_name": "example_pose_sequence",
         "resume": true,
         "seed_mode": "increment per segment",
         "audio_crossfade_ms": 60,
@@ -592,7 +619,7 @@
       }
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "SaveVideo",
       "pos": [
         1520,
@@ -603,14 +630,14 @@
         520
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
-          "link": 9
+          "link": 8
         }
       ],
       "outputs": [
@@ -626,13 +653,13 @@
         "Node name for S&R": "SaveVideo"
       },
       "widgets_values": [
-        "video/hawk_h3_motion_voice",
+        "video/hawk_h3_pose_sequence",
         "auto",
         "auto"
       ]
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "PreviewAny",
       "pos": [
         1520,
@@ -643,7 +670,48 @@
         360
       ],
       "flags": {},
-      "order": 9,
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "source",
+          "name": "source",
+          "type": "*",
+          "link": 9
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "STRING",
+          "name": "STRING",
+          "type": "STRING",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "Node name for S&R": "PreviewAny"
+      },
+      "title": "Encoded prompts (poses become pictures)",
+      "widgets_values": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 12,
+      "type": "PreviewAny",
+      "pos": [
+        1520,
+        960
+      ],
+      "size": [
+        620,
+        360
+      ],
+      "flags": {},
+      "order": 11,
       "mode": 0,
       "inputs": [
         {
@@ -686,7 +754,7 @@
       2,
       3,
       0,
-      8,
+      9,
       0,
       "HAWK_H3_PIPE"
     ],
@@ -694,63 +762,63 @@
       3,
       4,
       0,
-      5,
-      0,
-      "VIDEO"
+      8,
+      1,
+      "IMAGE"
     ],
     [
       4,
       5,
       0,
-      7,
-      4,
+      8,
+      3,
       "IMAGE"
     ],
     [
       5,
-      5,
-      1,
-      7,
-      7,
-      "AUDIO"
+      6,
+      0,
+      8,
+      4,
+      "IMAGE"
     ],
     [
       6,
-      5,
-      2,
       7,
+      0,
+      8,
+      5,
+      "IMAGE"
+    ],
+    [
+      7,
+      8,
+      0,
       9,
-      "FLOAT"
-    ],
-    [
-      7,
-      6,
-      0,
-      7,
-      1,
-      "IMAGE"
-    ],
-    [
-      8,
-      7,
-      0,
-      8,
       1,
       "HAWK_H3_REFS"
     ],
     [
-      9,
       8,
-      0,
       9,
+      0,
+      10,
       0,
       "VIDEO"
     ],
     [
+      9,
+      9,
+      3,
+      11,
+      0,
+      "STRING"
+    ],
+    [
       10,
-      8,
+      9,
       4,
-      10,
+      12,
       0,
       "STRING"
     ]
@@ -770,12 +838,12 @@
     },
     {
       "id": 2,
-      "title": "2 · References",
+      "title": "2 · References & poses",
       "bounding": [
         -20,
         520,
-        800,
-        1000
+        780,
+        1560
       ],
       "color": "#3f789e",
       "flags": {}
@@ -787,7 +855,7 @@
         920,
         -60,
         1240,
-        1000
+        1420
       ],
       "color": "#3f789e",
       "flags": {}

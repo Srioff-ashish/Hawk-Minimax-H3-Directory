@@ -16,8 +16,17 @@ FPS = 24
 #: 362 frames -- the top of H3's trained range.
 MAX_SECONDS = 15.1
 MIN_FRAMES = 5
-#: Per-request reference caps of the ref2va model.
-LIMITS = {"Picture": 9, "Video": 3, "Audio": 3}
+#: Per-kind caps. Pictures and poses both travel as H3 reference images, so a
+#: segment may send at most MAX_IMAGES of them combined.
+LIMITS = {"Picture": 9, "Pose": 9, "Video": 3, "Audio": 3}
+MAX_IMAGES = 9
+
+#: Appended to a segment that sends pose references; {tags} becomes their picture tags.
+DEFAULT_POSE_INSTRUCTION = (
+    "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and "
+    "framing. Do not take identity, face, hair, clothing, colours, lighting, style or background "
+    "from any pose reference."
+)
 
 #: continuity mode -> trailing frames of the previous segment re-anchored at frame 0.
 #: Multi-frame guides must sit on H3's 17k+5 grid, hence 5 / 22 / 39.
@@ -52,6 +61,8 @@ class Segment:
     pictures: list[int] | None = None
     videos: list[int] | None = None
     audios: list[int] | None = None
+    #: None means the poses the prompt mentions.
+    poses: list[int] | None = None
     seed: int | None = None
     #: None inherits the Director's continuity setting.
     continuity: str | None = None
@@ -76,13 +87,15 @@ class Job:
 
     index: int
     title: str
-    #: Final encoder text: style + prompt, tags renumbered for this segment's references.
+    #: Final encoder text: style + prompt (+ pose instruction), tags renumbered for this segment.
     prompt: str
     seconds: float
     frames: int
     pictures: list[int]
     videos: list[int]
     audios: list[int]
+    #: Sent as reference images after the pictures.
+    poses: list[int]
     seed: int
     #: Frames of the previous segment anchored at frame 0 (0 for the first segment).
     tail_frames: int
@@ -178,6 +191,7 @@ def _from_json(data) -> Script:
                 pictures=_parse_indices(item.get("pictures", item.get("images")), "Picture", where),
                 videos=_parse_indices(item.get("videos"), "Video", where),
                 audios=_parse_indices(item.get("audios"), "Audio", where),
+                poses=_parse_indices(item.get("poses"), "Pose", where),
                 seed=_parse_seed(item.get("seed"), where),
                 continuity=_parse_continuity(item.get("continuity"), where),
             )
@@ -187,7 +201,7 @@ def _from_json(data) -> Script:
 
 _SEPARATOR = re.compile(r"^\s*-{3,}\s*$", re.MULTILINE)
 _HEADER = re.compile(
-    r"^\s*(title|duration|seconds|pictures|images|videos|audios|seed|continuity|style)\s*:\s*(.*?)\s*$",
+    r"^\s*(title|duration|seconds|pictures|images|videos|audios|poses|seed|continuity|style)\s*:\s*(.*?)\s*$",
     re.IGNORECASE,
 )
 
@@ -226,6 +240,7 @@ def _from_text(text: str) -> Script:
                 pictures=_parse_indices(fields.get("pictures", fields.get("images")), "Picture", where),
                 videos=_parse_indices(fields.get("videos"), "Video", where),
                 audios=_parse_indices(fields.get("audios"), "Audio", where),
+                poses=_parse_indices(fields.get("poses"), "Pose", where),
                 seed=_parse_seed(fields.get("seed"), where),
                 continuity=_parse_continuity(fields.get("continuity"), where),
             )
@@ -309,12 +324,12 @@ def _parse_indices(value, kind: str, where: str) -> list[int] | None:
 # ------------------------------------------------------------------------- tags
 
 _TAG = re.compile(
-    r"<\s*(picture|image|video|audio)\s*_?(\d{1,2})\s*>"  # <Picture 1>, <image_1>
-    r"|@(picture|image|video|audio)\s*_?(\d{1,2})\b"  # @image1
-    r"|\b(picture|image|video|audio)\s+(\d{1,2})\b",  # Image 1
+    r"<\s*(picture|image|pose|video|audio)\s*_?(\d{1,2})\s*>"  # <Picture 1>, <image_1>, <pose_1>
+    r"|@(picture|image|pose|video|audio)\s*_?(\d{1,2})\b"  # @image1, @pose2
+    r"|\b(picture|image|pose|video|audio)\s+(\d{1,2})\b",  # Image 1, Pose 2
     re.IGNORECASE,
 )
-_KIND = {"picture": "Picture", "image": "Picture", "video": "Video", "audio": "Audio"}
+_KIND = {"picture": "Picture", "image": "Picture", "pose": "Pose", "video": "Video", "audio": "Audio"}
 
 
 def find_tags(text: str) -> list[tuple[str, int]]:
@@ -327,13 +342,14 @@ def find_tags(text: str) -> list[tuple[str, int]]:
 
 def remap_tags(
     text: str,
-    mapping: dict[str, dict[int, int]],
+    mapping: dict[str, dict[int, tuple[str, int]]],
     available: dict[str, int],
     where: str,
 ) -> str:
-    """Normalise every reference mention to H3's ``<Picture i>`` form and renumber
-    it for this segment. Scripts number references as they are connected; each
-    segment only sends the ones it uses, so H3 sees them renumbered from 1."""
+    """Normalise every reference mention to the tag H3 expects and renumber it for
+    this segment. Scripts number references as they are connected; each segment only
+    sends the ones it uses, so H3 sees them renumbered from 1 -- and poses, which
+    travel as extra pictures, become ``<Picture k>``."""
 
     def replace(match: re.Match) -> str:
         word, number = [g for g in match.groups() if g is not None]
@@ -341,18 +357,22 @@ def remap_tags(
         target = mapping[kind].get(number)
         if target is None:
             count = available.get(kind, 0)
-            if number > count:
+            noun = kind.lower()
+            if number < 1 or number > count:
                 raise ScriptError(
-                    f"{where} mentions <{kind} {number}> but only {count} "
-                    f"{kind.lower()}(s) are connected."
+                    f"{where} mentions <{kind} {number}> but only {count} {noun}(s) are connected."
                 )
             raise ScriptError(
-                f"{where} mentions <{kind} {number}> but its {kind.lower()}s list leaves "
-                f"it out. Add {number} to the list or remove the mention."
+                f"{where} mentions <{kind} {number}> but its {noun}s list leaves it out. "
+                f"Add {number} to the list or remove the mention."
             )
-        return f"<{kind} {target}>"
+        return "<%s %d>" % target
 
     return _TAG.sub(replace, text)
+
+
+def _join_tags(tags: list[str]) -> str:
+    return tags[0] if len(tags) == 1 else ", ".join(tags[:-1]) + " and " + tags[-1]
 
 
 # ------------------------------------------------------------------------- jobs
@@ -367,6 +387,7 @@ def build_jobs(
     continuity: str,
     base_seed: int,
     seed_mode: str = "increment",
+    pose_instruction: str = DEFAULT_POSE_INSTRUCTION,
 ) -> list[Job]:
     """Validate the whole script up front, so a long run never dies at segment 7."""
     if continuity not in CONTINUITY_FRAMES:
@@ -377,14 +398,24 @@ def build_jobs(
         where = f"Segment {index + 1}" + (f" ({segment.title})" if segment.title else "")
         warnings: list[str] = []
 
+        style = script.style.strip()
+        text = f"{style}\n\n{segment.prompt.strip()}" if style else segment.prompt.strip()
+
         selected: dict[str, list[int]] = {}
         for kind, chosen in (
             ("Picture", segment.pictures),
             ("Video", segment.videos),
             ("Audio", segment.audios),
+            ("Pose", segment.poses),
         ):
             count = available.get(kind, 0)
-            chosen = list(range(1, count + 1)) if chosen is None else list(chosen)
+            if chosen is None:
+                if kind == "Pose":
+                    # Poses are moment-specific: send only the ones this segment names.
+                    chosen = sorted({n for k, n in find_tags(text) if k == "Pose" and 1 <= n <= count})
+                else:
+                    chosen = list(range(1, count + 1))
+            chosen = list(chosen)
             missing = [n for n in chosen if n > count]
             if missing:
                 raise ScriptError(
@@ -393,19 +424,31 @@ def build_jobs(
                 )
             selected[kind] = chosen
 
+        images = len(selected["Picture"]) + len(selected["Pose"])
+        if images > MAX_IMAGES:
+            raise ScriptError(
+                f"{where} sends {len(selected['Picture'])} picture(s) and {len(selected['Pose'])} "
+                f"pose(s); H3 takes at most {MAX_IMAGES} images per segment. List fewer with "
+                f"'pictures:' or 'poses:'."
+            )
+
         # H3 numbers audio labels across both kinds: each selected video's
         # soundtrack takes an <Audio j> first, then the standalone clips follow.
+        # Poses are sent as pictures after the regular ones.
         soundtracks = sum(
             1 for n in selected["Video"] if n <= len(video_has_audio) and video_has_audio[n - 1]
         )
+        picture_count = len(selected["Picture"])
         mapping = {
-            "Picture": {n: slot + 1 for slot, n in enumerate(selected["Picture"])},
-            "Video": {n: slot + 1 for slot, n in enumerate(selected["Video"])},
-            "Audio": {n: soundtracks + slot + 1 for slot, n in enumerate(selected["Audio"])},
+            "Picture": {n: ("Picture", slot + 1) for slot, n in enumerate(selected["Picture"])},
+            "Pose": {n: ("Picture", picture_count + slot + 1) for slot, n in enumerate(selected["Pose"])},
+            "Video": {n: ("Video", slot + 1) for slot, n in enumerate(selected["Video"])},
+            "Audio": {n: ("Audio", soundtracks + slot + 1) for slot, n in enumerate(selected["Audio"])},
         }
-        style = script.style.strip()
-        text = f"{style}\n\n{segment.prompt.strip()}" if style else segment.prompt.strip()
         prompt = remap_tags(text, mapping, available, where)
+        if selected["Pose"] and pose_instruction.strip():
+            tags = [f"<Picture {mapping['Pose'][n][1]}>" for n in selected["Pose"]]
+            prompt = f"{prompt}\n\n{pose_instruction.strip().replace('{tags}', _join_tags(tags))}"
 
         seconds = segment.duration if segment.duration is not None else float(default_seconds)
         if seconds > MAX_SECONDS:
@@ -444,6 +487,7 @@ def build_jobs(
                 pictures=selected["Picture"],
                 videos=selected["Video"],
                 audios=selected["Audio"],
+                poses=selected["Pose"],
                 seed=seed & 0xFFFFFFFFFFFFFFFF,
                 tail_frames=tail,
                 warnings=warnings,

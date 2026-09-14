@@ -59,12 +59,14 @@ class ExampleWorkflows(unittest.TestCase):
                     (nodes[link[1]] for link in workflow["links"] if link[3] == node["id"] and link[5] == "HAWK_H3_REFS"),
                     None,
                 )
-                counts = {"Picture": 0, "Video": 0, "Audio": 0}
+                counts = {"Picture": 0, "Pose": 0, "Video": 0, "Audio": 0}
                 if refs is not None:
                     for entry in refs["inputs"]:
                         if entry["link"] is None:
                             continue
-                        for prefix, kind in (("pictures.", "Picture"), ("videos.", "Video"), ("audios.", "Audio")):
+                        for prefix, kind in (
+                            ("pictures.", "Picture"), ("poses.", "Pose"), ("videos.", "Video"), ("audios.", "Audio"),
+                        ):
                             if entry["name"].startswith(prefix):
                                 counts[kind] += 1
                 with self.subTest(workflow=name):
