@@ -33,6 +33,7 @@ Replace the placeholder file names in the Load Image / Load Audio / Load Video n
 | [Recipes](docs/recipes.md) | Ready setups: outfits, voices, motion copy, LLM stories, vertical shorts, ads, migrating the old workflow |
 | [Troubleshooting](docs/troubleshooting.md) | Every error message and what to do |
 | [API (REST + MCP)](docs/api.md) | Run the pipeline on a GPU pod as a web service and drive it from Claude or Grok chats or scripts |
+| [API on Google Colab](docs/colab.md) | One notebook: install, download models, start ComfyUI + API behind a Cloudflare quick tunnel on a G4 GPU |
 
 ## Nodes
 

@@ -14,6 +14,7 @@ Hawk MiniMax H3 Director is a ComfyUI node pack for **MiniMax H3 reference-to-vi
 | Copy a working setup for a common job | [Recipes](recipes.md) |
 | Fix an error message | [Troubleshooting](troubleshooting.md) |
 | Run it as an API and use it from Claude or Grok chats | [API (REST + MCP)](api.md) |
+| Run that API on Google Colab | [API on Google Colab](colab.md) |
 
 ## The pack in one picture
 

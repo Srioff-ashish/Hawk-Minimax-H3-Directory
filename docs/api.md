@@ -30,6 +30,8 @@ The gateway builds the same graph as the example workflows (Model Loader → LoR
 
 ## 1. Set up the pod
 
+> **Using Google Colab?** Skip this section and use the notebook instead: [Running the API on Google Colab](colab.md). The rest of this page (LoRAs, connecting chats, REST and MCP) applies to both.
+
 Works on any GPU pod that keeps running (RunPod, Vast, Lambda…). The examples use RunPod paths.
 
 1. **ComfyUI with the pack and models.** Install ComfyUI in `/workspace/ComfyUI`, clone this repo into `custom_nodes/`, and download the H3 models and the turbo LoRA ([Getting started](getting-started.md)). Check that a workflow renders in the ComfyUI UI once before adding the API.

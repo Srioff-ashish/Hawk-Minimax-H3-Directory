@@ -1,0 +1,114 @@
+# Running the API on Google Colab (G4)
+
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Srioff-ashish/Hawk-Minimax-H3-Directory/blob/main/deploy/colab/Hawk_H3_API_Colab.ipynb)
+
+The notebook [`deploy/colab/Hawk_H3_API_Colab.ipynb`](../deploy/colab/Hawk_H3_API_Colab.ipynb) runs the whole stack on one Colab GPU, so Claude or Grok can plan and render from a chat:
+
+```
+Claude / Grok ──► https://<random>.trycloudflare.com ──► Hawk H3 API (127.0.0.1:8000) ──► ComfyUI (127.0.0.1:8188)
+                  Cloudflare quick tunnel                  inside the Colab runtime
+```
+
+Each session starts from nothing. The notebook installs everything, downloads the models, starts ComfyUI and the API, and opens a tunnel with a new URL. When the runtime stops, everything is gone, including models, job history and rendered videos.
+
+- [What you need](#what-you-need)
+- [Run a session](#run-a-session)
+- [Connect Claude or Grok each session](#connect-claude-or-grok-each-session)
+- [Limits of this setup](#limits-of-this-setup)
+- [Settings](#settings)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## What you need
+
+- **A paid Colab plan with G4 GPUs.** G4 is an NVIDIA RTX PRO 6000 Blackwell with 96 GB of VRAM. H3 fits comfortably, and the notebook's NVFP4 text encoder runs natively on it.
+- **A positive compute-unit balance** for the whole session. [Colab's rules](https://research.google.com/colaboratory/faq.html) forbid web services and web UIs on runtimes that run free of charge; a paid plan with a positive balance lifts that restriction. G4 uses compute units quickly, so stop the runtime when you're done.
+- **An Atlas Cloud API key** if you want LLM planning. Rendering your own scripts works without it.
+
+## Run a session
+
+1. **Open the notebook**, using the badge above or File → Open notebook → GitHub → `Srioff-ashish/Hawk-Minimax-H3-Directory`.
+2. **Runtime → Change runtime type → G4.**
+3. **Add secrets** (🔑 on the left sidebar), each with *Notebook access* on:
+
+   | Secret | Needed? | Purpose |
+   |---|---|---|
+   | `ATLAS_API_KEY` | for planning | The Story Planner calls Atlas Cloud |
+   | `HAWK_API_TOKEN` | recommended | Your API secret (`openssl rand -hex 24`). Without it a new random token is made every session |
+   | `HF_TOKEN` | optional | Faster or authenticated Hugging Face downloads |
+
+   Secrets stay in your Colab account and are never written into the notebook or its outputs, except the token, which is printed inside the connector URL for you to copy.
+
+4. **Run the cells in order:**
+
+   | Cell | Time | What happens |
+   |---|---|---|
+   | 1 · Settings | instant | Choose models, extra LoRAs, attention |
+   | 2 · Install | ~5 min | Clones ComfyUI, this pack and Sol attention; installs requirements. Installs a Blackwell-capable torch only if Colab's lacks it |
+   | 3 · Download | ~5–15 min | About 45 GB from [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3), plus your extra LoRAs |
+   | 4 · Start | ~2–5 min | Starts ComfyUI on 127.0.0.1, opens the tunnel, starts the API with the tunnel URL, checks it's reachable, prints your links |
+   | 5 · Watch | keep running | Prints job status every minute; reopens the tunnel and restarts the API if either dies |
+
+5. **Copy the printed links** (next section).
+
+The **first render of a session** is slower. Sol attention's Triton kernels compile for each new resolution and length, and with nothing persisted every session pays that again. Later renders at the same size are fast.
+
+## Connect Claude or Grok each session
+
+The quick-tunnel URL is new every session, so the connector has to be updated every time.
+
+**Claude (claude.ai, desktop, mobile):**
+1. Settings → Connectors. Remove the previous session's Hawk H3 connector.
+2. *Add custom connector*, and paste the printed `https://….trycloudflare.com/t/<token>/mcp` URL.
+3. Enable it in your chat's tools menu.
+
+**Grok:** Connectors → New Connector → Custom. Use the `…/t/<token>/mcp` URL, or the `…/mcp` URL with the `Authorization: Bearer <token>` header if the form has a header field.
+
+**Claude Code:**
+```bash
+claude mcp remove hawk-h3 2>/dev/null
+claude mcp add --transport http hawk-h3 https://<random>.trycloudflare.com/mcp \
+  --header "Authorization: Bearer <token>"
+```
+
+Then work in the chat as described in [API → Using it from a chat](api.md#5-using-it-from-a-chat). For example: *"Give me the upload link"* → upload → *"Plan a 3-segment film"* → *"Render a preview at 0.4 megapixels"*.
+
+## Limits of this setup
+
+| Limit | Cause | What to do |
+|---|---|---|
+| **URL changes every session** | Cloudflare quick tunnels have random, temporary names | Update the connector each session. A stable URL needs ngrok's free static domain or a Cloudflare named tunnel on your own domain |
+| **Uploads through the tunnel ≤ 100 MB** | Cloudflare's free proxy limit | Big reference videos: put them online (Drive share link, Hugging Face…) and use `add_reference_from_url`; that download happens inside Colab, not through the tunnel |
+| **Nothing survives the session** | Chosen setup: no Drive | Download finished videos before stopping (the `video_url` links die with the runtime). Unfinished renders can't be resumed in a new session |
+| **Session time limits** | Colab idle and maximum runtime limits | Keep cell 5 running and the tab open during long renders; plan long films as several shorter jobs |
+| **One render at a time** | One GPU | Jobs queue; `get_job` shows 0 progress while waiting |
+| **Quick tunnels are for testing** | Cloudflare's terms: no uptime guarantee, 200 concurrent requests | Fine for personal use from your chats; not for sharing publicly |
+
+## Settings
+
+| Setting | Options | Notes |
+|---|---|---|
+| `diffusion_model` | pruned int8 **(default, 21 GB)**, pruned fp8, pruned bf16 (40 GB), full int8 (34 GB), full bf16 (66 GB) | All are ref2va models. Larger = slower download, possibly slightly better quality |
+| `text_encoder` | nvfp4 **(default, 16 GB)**, int8 (27 GB), bf16 (52 GB) | NVFP4 is native on Blackwell |
+| `extra_loras` | comma-separated `owner/repo/path/file.safetensors` or direct URLs | Downloaded into `models/loras`; use them by name in `settings.loras` or `lora_preset` |
+| `attention` | `sol scheduled` **(default)**, `comfy default` | Sol falls back to normal attention by itself if its kernel can't run |
+| `install_rife_interpolation` | off / on | Needed only for `interpolation: 48/60 fps` |
+| `pack_branch` | `main` | Which branch of this repo to run |
+
+The turbo LoRA is always downloaded and is required by default ([loras.json](api.md#2-choose-loras-lorasjson)). To use extra LoRAs in every render, edit `/content/hawk_api_data/loras.json` during the session. It resets next session; to keep a change, add it to `deploy/loras.example.json` in your fork.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `No CUDA GPU found` | Runtime → Change runtime type → G4, then run from cell 2 |
+| `Not enough disk` | Pick smaller models in cell 1 |
+| Download very slow or 401/403 | Add an `HF_TOKEN` secret |
+| `ComfyUI exited during startup` | Run the *Show logs* cell. A missing package usually means cell 2 didn't finish; rerun it |
+| `Cloudflare quick tunnel did not start` | Rerun cell 4. Cloudflare occasionally refuses new quick tunnels for a few minutes |
+| `API runs locally but the tunnel URL is not reachable yet` | Wait a minute and open the Health link; new trycloudflare names take a moment to resolve |
+| Claude says the connector can't connect | The URL is from an old session. Copy the current one from cell 4 (or from cell 5's output after a tunnel restart) |
+| Chat reports `422 Required default LoRA … missing` | Cell 3 didn't finish; rerun it, then retry |
+| Planning fails with an Atlas error | Add the `ATLAS_API_KEY` secret with notebook access, then rerun cell 4 |
+| Colab disconnected mid-render | The session and all files are gone; start a new session and render again (use a lower `megapixels` preview first) |
