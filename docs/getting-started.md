@@ -73,6 +73,24 @@ You don't need a key if you write scripts yourself.
 
 ---
 
+## Example workflows
+
+The quickest start is a ready-made graph. Drag a file from [`example_workflows/`](../example_workflows) onto the ComfyUI canvas, or open **Workflow → Browse Templates** and pick it under *Hawk-Minimax-H3-Directory*.
+
+| File | Use it to |
+|---|---|
+| `01_single_clip.json` | Render one clip from one picture (same as step 6 below) |
+| `02_multi_segment_film.json` | Render a four-segment film with continuous joins and a hard cut (same as step 7) |
+| `03_llm_story_planner.json` | Have the Atlas LLM write the script, review it, then render (same as step 8) |
+| `04_video_motion_and_voice.json` | Copy movement from a reference video and use its voice |
+
+After loading:
+1. Pick your own files in every **Load Image / Load Audio / Load Video** node. The names in them (`face.png`, `voice.mp3`, `reference.mp4`) are placeholders and show as missing until you replace them.
+2. Check the four model dropdowns on **Hawk H3 Model Loader**.
+3. Read the *Read me* note on the canvas, then queue.
+
+The steps below build the same graphs by hand, which is the best way to understand them.
+
 ## 6. Your first clip (one segment, no LLM)
 
 1. **Add `Hawk H3 Model Loader`.** Check that the four model dropdowns show the files from step 3. Put this in `lora_stack`:

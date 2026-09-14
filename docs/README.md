@@ -7,6 +7,7 @@ Hawk MiniMax H3 Director is a ComfyUI node pack for **MiniMax H3 reference-to-vi
 | If you want to… | Read |
 |---|---|
 | Install the pack and render your first clip | [Getting started](getting-started.md) |
+| Load a ready-made graph and just press Queue | [Example workflows](../example_workflows) (see [Getting started → example workflows](getting-started.md#example-workflows)) |
 | Know what every input and output does | [Node reference](nodes.md) |
 | Write scripts, use reference tags, write prompts H3 follows | [Writing scripts](scripts.md) |
 | Make long videos: continuity, resume, re-rendering one segment | [Long videos](long-videos.md) |

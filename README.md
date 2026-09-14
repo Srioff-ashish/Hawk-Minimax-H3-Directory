@@ -8,6 +8,19 @@ Hawk H3 References ────refs──┬────────────
                              └─► Hawk H3 Story Planner ──script──► Hawk H3 Director ──video──► Save Video
 ```
 
+## Example workflows
+
+Drag a file from [`example_workflows/`](example_workflows) onto ComfyUI, or open it from **Workflow → Browse Templates** under this pack's name. Each one has a *Read me* note on the canvas.
+
+| Workflow | What it shows |
+|---|---|
+| [`01_single_clip.json`](example_workflows/01_single_clip.json) | One picture, one prompt, one clip: the minimal setup |
+| [`02_multi_segment_film.json`](example_workflows/02_multi_segment_film.json) | A four-segment ~34 s film: face, outfit, location and voice references, continuous joins and a hard cut |
+| [`03_llm_story_planner.json`](example_workflows/03_llm_story_planner.json) | An Atlas LLM writes the script from a brief; review the plan, then render a cheap preview |
+| [`04_video_motion_and_voice.json`](example_workflows/04_video_motion_and_voice.json) | Movement and camera from a reference video, the voice from its audio, on the person from a picture |
+
+Replace the placeholder file names in the Load Image / Load Audio / Load Video nodes with your own files.
+
 ## Documentation
 
 | | |
