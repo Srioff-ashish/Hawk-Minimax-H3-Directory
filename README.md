@@ -1,9 +1,9 @@
 # Hawk MiniMax H3 Director
 
-ComfyUI nodes that run the **MiniMax H3 reference-to-video** workflow in four nodes instead of ~40, and **direct long videos** made of many related H3 segments that flow into each other.
+ComfyUI nodes that run the **MiniMax H3 reference-to-video** workflow in five nodes instead of ~40, and **direct long videos** made of many related H3 segments that flow into each other.
 
 ```
-Hawk H3 Model Loader ──pipe──────────────────────────────┐
+Hawk H3 Model Loader ─► Hawk H3 LoRA Stack ──pipe────────┐
 Hawk H3 References ────refs──┬───────────────────────────┤
                              └─► Hawk H3 Story Planner ──script──► Hawk H3 Director ──video──► Save Video
 ```
@@ -37,6 +37,7 @@ Replace the placeholder file names in the Load Image / Load Audio / Load Video n
 | Node | Replaces in the stock template | What it does |
 |---|---|---|
 | **Hawk H3 Model Loader** | UNETLoader, CLIPLoader, 2× VAELoader, ModelSamplingMiniMaxH3, LoRA stack loader, Sol attention patch, Sage attention patch | Loads the ref2va model, Qwen3-VL text encoder and both VAEs. Applies the sigma shift, a LoRA stack with per-modality (video/audio/text) strengths, and optional Sol + Sage attention. Missing optional backends are skipped with a log line. |
+| **Hawk H3 LoRA Stack** | The LoRA loader's dropdown stack | Up to 4 LoRAs per node, picked from dropdowns with strength and optional video/audio/text multipliers. Chain nodes for more. Changing a LoRA doesn't reload the model. |
 | **Hawk H3 References** | The loose image / video / audio inputs of MiniMaxH3ReferenceToVideo | Up to 9 pictures, 3 videos (with an optional paired soundtrack) and 3 audio clips in one bundle. Picture batches expand to one picture per frame. Chainable. Optional labels tell the planner what each reference is for. |
 | **Hawk H3 Story Planner** | HawkAtlasLLM + prompt switch + string concat | A vision LLM on Atlas Cloud reads your brief and the references and writes a segment script. The reply is validated against the connected references before it leaves the node. `segment_count = 1` makes it a single-prompt refiner. |
 | **Hawk H3 Director** | MiniMaxH3ReferenceToVideo, RandomNoise, KSamplerSelect, BasicScheduler, BasicGuider, SamplerCustomAdvanced, VAEDecode, VAEDecodeAudio, CreateVideo, duration math, resolution selector | Renders the script: one segment or forty. Outputs the whole film as one VIDEO with synced audio, plus frames, audio, the exact prompts and a JSON report. |

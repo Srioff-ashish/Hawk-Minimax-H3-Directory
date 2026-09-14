@@ -216,7 +216,8 @@ How the old ~40-node graph maps onto this pack:
 
 | Old nodes | New |
 |---|---|
-| UNETLoader, CLIPLoader, 2× VAELoader, ModelSamplingMiniMaxH3, LTX_lora_loader, MiniMaxH3ScheduledSolAttentionPatch, PathchSageAttentionKJ | **Hawk H3 Model Loader** (paste the LoRA loader's stack JSON straight into `lora_stack`) |
+| UNETLoader, CLIPLoader, 2× VAELoader, ModelSamplingMiniMaxH3, MiniMaxH3ScheduledSolAttentionPatch, PathchSageAttentionKJ | **Hawk H3 Model Loader** |
+| LTX_lora_loader | **Hawk H3 LoRA Stack** (pick each LoRA in a slot, chain nodes for more), or paste the old loader's stack JSON into the Model Loader's `lora_stack` |
 | LoadImage ×N, DenoMultiImageLoader, Any Switch, the ref inputs of MiniMaxH3ReferenceToVideo | **Hawk H3 References** (keep the loaders; connect their images into `pictures`) |
 | LoadVideoUI `images` / `audio` | References `videos` + `audios` (as before, audio as a standalone clip) |
 | LoadAudio | References `audios` |

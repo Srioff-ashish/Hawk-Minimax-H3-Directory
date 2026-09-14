@@ -1,7 +1,7 @@
 [project]
 name = "hawk-minimax-h3-directory"
 version = "0.1.0"
-description = "Hawk MiniMax H3 Director for ComfyUI: the MiniMax H3 reference-to-video workflow in four nodes, with multi-segment long-video direction, continuity guides, resume and an Atlas Cloud story planner."
+description = "Hawk MiniMax H3 Director for ComfyUI: the MiniMax H3 reference-to-video workflow in five nodes, with a dropdown LoRA stack, multi-segment long-video direction, continuity guides, resume and an Atlas Cloud story planner."
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"

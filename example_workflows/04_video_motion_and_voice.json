@@ -1,8 +1,8 @@
 {
   "id": "1946fcb4-589c-5dad-bb53-aef6852cdc51",
   "revision": 0,
-  "last_node_id": 9,
-  "last_link_id": 9,
+  "last_node_id": 10,
+  "last_link_id": 10,
   "nodes": [
     {
       "id": 1,
@@ -13,7 +13,7 @@
       ],
       "size": [
         470,
-        860
+        940
       ],
       "flags": {},
       "order": 0,
@@ -26,7 +26,7 @@
       },
       "title": "Read me",
       "widgets_values": [
-        "## 04 · Motion and voice from a video\n\nTakes the **movement and camera** from a reference video and the **voice** from its soundtrack, and puts them on the person from a reference picture.\n\n**To run**\n1. **Reference video**: a 2–15 s clip with the movement you want and one clear speaker. Trim longer clips first.\n2. **Reference picture**: the person who should appear.\n3. Queue.\n\n**How it is wired**\n- Video frames → `videos` = `<Video 1>` (motion, timing, camera).\n- Video audio → `audios` (not `video_soundtracks`) = `<Audio 1>`, a voice you can name in prompts.\n- Video fps → `video_fps`, so any frame rate is resampled to H3's 24 fps.\n\nSegment 1 uses only the motion (`audios: none`), segment 2 only the voice (`videos: none`). Always say what a video must **not** contribute (person, clothes, location).\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
+        "## 04 · Motion and voice from a video\n\nTakes the **movement and camera** from a reference video and the **voice** from its soundtrack, and puts them on the person from a reference picture.\n\n**To run**\n1. **Reference video**: a 2–15 s clip with the movement you want and one clear speaker. Trim longer clips first.\n2. **Reference picture**: the person who should appear.\n3. Queue.\n\n**How it is wired**\n- Video frames → `videos` = `<Video 1>` (motion, timing, camera).\n- Video audio → `audios` (not `video_soundtracks`) = `<Audio 1>`, a voice you can name in prompts.\n- Video fps → `video_fps`, so any frame rate is resampled to H3's 24 fps.\n\nSegment 1 uses only the motion (`audios: none`), segment 2 only the voice (`videos: none`). Always say what a video must **not** contribute (person, clothes, location).\n\n**Models** ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))\n- `diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors`\n- `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`\n- `vae/minimax_h3_video_vae_fp16.safetensors`\n- `vae/minimax_h3_audio_vae_fp32.safetensors`\n- `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`\n\n**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.\n\nNo Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.\n\nDocs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs\n"
       ],
       "color": "#222",
       "bgcolor": "#000"
@@ -89,7 +89,7 @@
         "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         "minimax_h3_video_vae_fp16.safetensors",
         "minimax_h3_audio_vae_fp32.safetensors",
-        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors : 1.0",
+        "",
         12.0,
         3.0,
         "sol scheduled + sage",
@@ -103,7 +103,7 @@
         "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         "video_vae": "minimax_h3_video_vae_fp16.safetensors",
         "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
-        "lora_stack": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors : 1.0",
+        "lora_stack": "",
         "shift_video": 12.0,
         "shift_audio": 3.0,
         "attention": "sol scheduled + sage",
@@ -115,17 +115,110 @@
     },
     {
       "id": 3,
+      "type": "HawkH3LoraStack",
+      "pos": [
+        460,
+        0
+      ],
+      "size": [
+        410,
+        330
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "localized_name": "pipe",
+          "name": "pipe",
+          "type": "HAWK_H3_PIPE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "localized_name": "pipe",
+          "name": "pipe",
+          "type": "HAWK_H3_PIPE",
+          "links": [
+            2
+          ]
+        },
+        {
+          "localized_name": "model",
+          "name": "model",
+          "type": "MODEL",
+          "links": null
+        },
+        {
+          "localized_name": "clip",
+          "name": "clip",
+          "type": "CLIP",
+          "links": null
+        }
+      ],
+      "properties": {
+        "aux_id": "Srioff-ashish/Hawk-Minimax-H3-Directory",
+        "Node name for S&R": "HawkH3LoraStack"
+      },
+      "widgets_values": [
+        "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        1.0,
+        "None",
+        1.0,
+        "None",
+        1.0,
+        "None",
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "widgets_values_named": {
+        "lora_1": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+        "strength_1": 1.0,
+        "lora_2": "None",
+        "strength_2": 1.0,
+        "lora_3": "None",
+        "strength_3": 1.0,
+        "lora_4": "None",
+        "strength_4": 1.0,
+        "video_1": 1.0,
+        "audio_1": 1.0,
+        "text_1": 1.0,
+        "video_2": 1.0,
+        "audio_2": 1.0,
+        "text_2": 1.0,
+        "video_3": 1.0,
+        "audio_3": 1.0,
+        "text_3": 1.0,
+        "video_4": 1.0,
+        "audio_4": 1.0,
+        "text_4": 1.0
+      }
+    },
+    {
+      "id": 4,
       "type": "LoadVideo",
       "pos": [
         0,
-        540
+        580
       ],
       "size": [
         300,
         330
       ],
       "flags": {},
-      "order": 2,
+      "order": 3,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -134,7 +227,7 @@
           "name": "VIDEO",
           "type": "VIDEO",
           "links": [
-            2
+            3
           ]
         }
       ],
@@ -151,25 +244,25 @@
       "bgcolor": "#335"
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "GetVideoComponents",
       "pos": [
         0,
-        910
+        950
       ],
       "size": [
         240,
         150
       ],
       "flags": {},
-      "order": 3,
+      "order": 4,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
-          "link": 2
+          "link": 3
         }
       ],
       "outputs": [
@@ -178,7 +271,7 @@
           "name": "images",
           "type": "IMAGE",
           "links": [
-            3
+            4
           ]
         },
         {
@@ -186,7 +279,7 @@
           "name": "audio",
           "type": "AUDIO",
           "links": [
-            4
+            5
           ]
         },
         {
@@ -194,7 +287,7 @@
           "name": "fps",
           "type": "FLOAT",
           "links": [
-            5
+            6
           ]
         },
         {
@@ -216,18 +309,18 @@
       }
     },
     {
-      "id": 5,
+      "id": 6,
       "type": "LoadImage",
       "pos": [
         0,
-        1100
+        1140
       ],
       "size": [
         300,
         330
       ],
       "flags": {},
-      "order": 4,
+      "order": 5,
       "mode": 0,
       "inputs": [],
       "outputs": [
@@ -236,7 +329,7 @@
           "name": "IMAGE",
           "type": "IMAGE",
           "links": [
-            6
+            7
           ]
         },
         {
@@ -259,18 +352,18 @@
       "bgcolor": "#335"
     },
     {
-      "id": 6,
+      "id": 7,
       "type": "HawkH3References",
       "pos": [
         360,
-        540
+        580
       ],
       "size": [
         380,
         330
       ],
       "flags": {},
-      "order": 5,
+      "order": 6,
       "mode": 0,
       "inputs": [
         {
@@ -286,7 +379,7 @@
           "type": "IMAGE",
           "label": "picture_0",
           "shape": 7,
-          "link": 6
+          "link": 7
         },
         {
           "localized_name": "pictures.picture_1",
@@ -302,7 +395,7 @@
           "type": "IMAGE",
           "label": "video_0",
           "shape": 7,
-          "link": 3
+          "link": 4
         },
         {
           "localized_name": "videos.video_1",
@@ -326,7 +419,7 @@
           "type": "AUDIO",
           "label": "audio_0",
           "shape": 7,
-          "link": 4
+          "link": 5
         },
         {
           "localized_name": "audios.audio_1",
@@ -344,7 +437,7 @@
           "widget": {
             "name": "video_fps"
           },
-          "link": 5
+          "link": 6
         }
       ],
       "outputs": [
@@ -353,7 +446,7 @@
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "links": [
-            7
+            8
           ]
         },
         {
@@ -377,10 +470,10 @@
       }
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "HawkH3Director",
       "pos": [
-        820,
+        940,
         0
       ],
       "size": [
@@ -388,21 +481,21 @@
         900
       ],
       "flags": {},
-      "order": 6,
+      "order": 7,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "pipe",
           "name": "pipe",
           "type": "HAWK_H3_PIPE",
-          "link": 1
+          "link": 2
         },
         {
           "localized_name": "refs",
           "name": "refs",
           "type": "HAWK_H3_REFS",
           "shape": 7,
-          "link": 7
+          "link": 8
         }
       ],
       "outputs": [
@@ -411,7 +504,7 @@
           "name": "video",
           "type": "VIDEO",
           "links": [
-            8
+            9
           ]
         },
         {
@@ -437,7 +530,7 @@
           "name": "info",
           "type": "STRING",
           "links": [
-            9
+            10
           ]
         }
       ],
@@ -489,10 +582,10 @@
       }
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "SaveVideo",
       "pos": [
-        1400,
+        1520,
         0
       ],
       "size": [
@@ -500,14 +593,14 @@
         520
       ],
       "flags": {},
-      "order": 7,
+      "order": 8,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "video",
           "name": "video",
           "type": "VIDEO",
-          "link": 8
+          "link": 9
         }
       ],
       "outputs": [
@@ -529,10 +622,10 @@
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "PreviewAny",
       "pos": [
-        1400,
+        1520,
         560
       ],
       "size": [
@@ -540,14 +633,14 @@
         360
       ],
       "flags": {},
-      "order": 8,
+      "order": 9,
       "mode": 0,
       "inputs": [
         {
           "localized_name": "source",
           "name": "source",
           "type": "*",
-          "link": 9
+          "link": 10
         }
       ],
       "outputs": [
@@ -575,7 +668,7 @@
       1,
       2,
       0,
-      7,
+      3,
       0,
       "HAWK_H3_PIPE"
     ],
@@ -583,63 +676,71 @@
       2,
       3,
       0,
+      8,
+      0,
+      "HAWK_H3_PIPE"
+    ],
+    [
+      3,
       4,
+      0,
+      5,
       0,
       "VIDEO"
     ],
     [
-      3,
       4,
+      5,
       0,
-      6,
+      7,
       3,
       "IMAGE"
     ],
     [
-      4,
-      4,
+      5,
+      5,
       1,
-      6,
+      7,
       6,
       "AUDIO"
     ],
     [
-      5,
-      4,
-      2,
       6,
+      5,
+      2,
+      7,
       8,
       "FLOAT"
     ],
     [
+      7,
       6,
-      5,
       0,
-      6,
+      7,
       1,
       "IMAGE"
     ],
     [
+      8,
       7,
-      6,
       0,
-      7,
+      8,
       1,
       "HAWK_H3_REFS"
     ],
     [
+      9,
       8,
-      7,
       0,
-      8,
+      9,
       0,
       "VIDEO"
     ],
     [
-      9,
-      7,
+      10,
+      8,
       4,
-      9,
+      10,
       0,
       "STRING"
     ]
@@ -647,11 +748,11 @@
   "groups": [
     {
       "id": 1,
-      "title": "1 · Models",
+      "title": "1 · Models & LoRAs",
       "bounding": [
         -20,
         -60,
-        470,
+        910,
         560
       ],
       "color": "#3f789e",
@@ -662,7 +763,7 @@
       "title": "2 · References",
       "bounding": [
         -20,
-        480,
+        520,
         800,
         1000
       ],
@@ -673,7 +774,7 @@
       "id": 3,
       "title": "3 · Direct & render",
       "bounding": [
-        800,
+        920,
         -60,
         1240,
         1000

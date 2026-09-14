@@ -29,10 +29,11 @@ except ImportError as exc:  # pragma: no cover
 if ComfyExtension is not None:
     from .hawk_h3.director import HawkH3Director
     from .hawk_h3.loader import HawkH3ModelLoader
+    from .hawk_h3.lora_node import HawkH3LoraStack
     from .hawk_h3.planner import HawkH3StoryPlanner
     from .hawk_h3.references import HawkH3References
 
-    NODES = [HawkH3ModelLoader, HawkH3References, HawkH3StoryPlanner, HawkH3Director]
+    NODES = [HawkH3ModelLoader, HawkH3LoraStack, HawkH3References, HawkH3StoryPlanner, HawkH3Director]
 
     class HawkH3Extension(ComfyExtension):
         async def get_node_list(self) -> list:
@@ -43,6 +44,7 @@ if ComfyExtension is not None:
 
     __all__ = [
         "HawkH3ModelLoader",
+        "HawkH3LoraStack",
         "HawkH3References",
         "HawkH3StoryPlanner",
         "HawkH3Director",

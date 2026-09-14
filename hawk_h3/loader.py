@@ -125,7 +125,8 @@ class HawkH3ModelLoader(io.ComfyNode):
                     ),
                     tooltip=(
                         "LoRAs applied in order. v/a/t scale only H3's video, audio and text "
-                        "projection layers; the shared transformer blocks follow the main strength."
+                        "projection layers; the shared transformer blocks follow the main strength. "
+                        "Prefer dropdowns? Leave this empty and add Hawk H3 LoRA Stack nodes after the loader."
                     ),
                 ),
                 io.Float.Input("shift_video", default=12.0, min=0.01, max=100.0, step=0.01),

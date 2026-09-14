@@ -30,6 +30,12 @@ No files in that model folder. See [Getting started → models](getting-started.
 **`unet_name: no files in models/diffusion_models…`** (or `clip_name`, `video_vae`, `audio_vae`)
 Same as above: the model folder is empty or the file is somewhere else.
 
+**A LoRA doesn't appear in the LoRA Stack dropdown.**
+Put the file in `ComfyUI/models/loras/` (subfolders are fine), then press **R** in ComfyUI or restart.
+
+**I need more than 4 LoRAs.**
+Chain another **Hawk H3 LoRA Stack** node: previous LoRA Stack `pipe` → new LoRA Stack `pipe` → Director `pipe`. Or list them all as lines in the Model Loader's `lora_stack`.
+
 **`LoRA not found in models/loras: <name>`**
 The name in `lora_stack` must match the file's path relative to `models/loras`, including subfolders and extension (`subfolder/my_lora.safetensors`).
 

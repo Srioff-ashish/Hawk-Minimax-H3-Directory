@@ -15,9 +15,10 @@ cd ComfyUI/custom_nodes
 git clone https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory.git
 ```
 
-Restart ComfyUI. In the node search, type **hawk h3**. You should see four nodes under **Hawk / MiniMax H3**:
+Restart ComfyUI. In the node search, type **hawk h3**. You should see five nodes under **Hawk / MiniMax H3**:
 
 - Hawk H3 Model Loader
+- Hawk H3 LoRA Stack
 - Hawk H3 References
 - Hawk H3 Story Planner (Atlas LLM)
 - Hawk H3 Director
@@ -93,18 +94,16 @@ The steps below build the same graphs by hand, which is the best way to understa
 
 ## 6. Your first clip (one segment, no LLM)
 
-1. **Add `Hawk H3 Model Loader`.** Check that the four model dropdowns show the files from step 3. Put this in `lora_stack`:
-   ```
-   minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors : 1.0
-   ```
-   If you haven't installed Sol or Sage, set `attention` to `comfy default` (or leave it; it will just skip them).
+1. **Add `Hawk H3 Model Loader`.** Check that the four model dropdowns show the files from step 3. If you haven't installed Sol or Sage, set `attention` to `comfy default` (or leave it; it will just skip them).
+
+   **Add `Hawk H3 LoRA Stack`** and connect Model Loader `pipe` → LoRA Stack `pipe`. Set `lora_1` to `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`, strength 1.0. Use slots 2–4 for style or character LoRAs; for more than four, add another LoRA Stack after this one.
 
 2. **Add `Load Image`** and pick a clear photo of a person's face.
 
 3. **Add `Hawk H3 References`.** Connect the image to `pictures → picture_0`. A new empty slot appears each time you connect one.
 
 4. **Add `Hawk H3 Director`.**
-   - `pipe` ← Model Loader `pipe`
+   - `pipe` ← LoRA Stack `pipe`
    - `refs` ← References `refs`
    - Replace the `script` text with:
      ```

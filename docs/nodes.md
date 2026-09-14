@@ -1,8 +1,9 @@
 # Node reference
 
-Every input and output of the four nodes. Inputs marked *advanced* are hidden until you expand the node's advanced section.
+Every input and output of the five nodes. Inputs marked *advanced* are hidden until you expand the node's advanced section.
 
 - [Hawk H3 Model Loader](#hawk-h3-model-loader)
+- [Hawk H3 LoRA Stack](#hawk-h3-lora-stack)
 - [Hawk H3 References](#hawk-h3-references)
 - [Hawk H3 Story Planner](#hawk-h3-story-planner-atlas-llm)
 - [Hawk H3 Director](#hawk-h3-director)
@@ -58,6 +59,52 @@ subfolder/character.safetensors : 0.8
 - You can also paste the JSON `stack_data` from Plaguekind's *LoRA Loader Stack* node; rows with `"on": false` are skipped.
 
 A typo in a line stops the node **before** any model loads, so you don't wait a minute to find out.
+
+---
+
+## Hawk H3 LoRA Stack
+
+Adds LoRAs to the pipe from dropdowns. Place it between the Model Loader and the Director:
+
+```
+Hawk H3 Model Loader ─pipe─► Hawk H3 LoRA Stack ─pipe─► Hawk H3 LoRA Stack ─pipe─► Hawk H3 Director
+                             (LoRAs 1–4)               (LoRAs 5–8, optional)
+```
+
+Each node has **4 slots**. For more LoRAs, chain another LoRA Stack node pipe → pipe; there's no limit. LoRAs apply in order: slot 1 → 4, then the next node.
+
+Changing a LoRA re-runs only this node. The model isn't reloaded, because ComfyUI applies LoRAs as patches on the already-loaded model.
+
+### Inputs
+
+| Input | Default | What it does |
+|---|---|---|
+| `pipe` | — | From the Model Loader or a previous LoRA Stack. |
+| `lora_1` … `lora_4` | `None` | A file from `models/loras`. `None` leaves the slot off. |
+| `strength_1` … `strength_4` | 1.0 | Strength of that LoRA (−10 to 10). `0` also turns the slot off. |
+| `video_N`, `audio_N`, `text_N` *(advanced)* | 1.0 | Multipliers for slot N on H3's video-, audio- and text-only layers, as in the loader's `v=` / `a=` / `t=`. H3's shared transformer blocks always use the plain strength. |
+
+### Outputs
+
+| Output | Use |
+|---|---|
+| `pipe` | To the Director, or to another LoRA Stack. |
+| `model`, `clip` | The patched model and text encoder, for other nodes. |
+
+The node shows the LoRAs it applied. A LoRA change also changes the pipe's fingerprint, so the Director's [resume](long-videos.md#resume-and-re-rendering) re-renders segments with the new LoRAs instead of reusing old ones.
+
+### LoRA Stack or the loader's `lora_stack` text?
+
+Both work, and they can be combined; the loader's LoRAs apply first.
+
+| | LoRA Stack node | Loader `lora_stack` text |
+|---|---|---|
+| Choosing files | Dropdowns | Typing exact file names |
+| How many | 4 per node, chain for more | Unlimited lines |
+| Changing a LoRA | Re-runs only the LoRA node | Reloads the model |
+| Paste Plaguekind stack JSON | No | Yes |
+
+When a LoRA file is added while ComfyUI is running, press **R** to refresh the dropdowns.
 
 ---
 

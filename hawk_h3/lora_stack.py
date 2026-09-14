@@ -30,6 +30,39 @@ class LoraEntry:
     text: float = 1.0
 
 
+#: Dropdown slots per Hawk H3 LoRA Stack node; chain nodes for more.
+LORA_SLOTS = 4
+NO_LORA = "None"
+
+
+def slot_widget_names(slots: int = LORA_SLOTS) -> tuple[list[str], list[str]]:
+    """Widget names of the LoRA Stack node: (required, optional) in schema order.
+    The node schema and tools/build_workflows.py both use this, so they cannot disagree."""
+    required = [name for i in range(1, slots + 1) for name in (f"lora_{i}", f"strength_{i}")]
+    optional = [name for i in range(1, slots + 1) for name in (f"video_{i}", f"audio_{i}", f"text_{i}")]
+    return required, optional
+
+
+def entries_from_slots(values: dict, slots: int = LORA_SLOTS) -> list[LoraEntry]:
+    """Selected slots, in slot order. 'None' or strength 0 means the slot is off."""
+    entries = []
+    for i in range(1, slots + 1):
+        name = values.get(f"lora_{i}") or NO_LORA
+        strength = float(values.get(f"strength_{i}", 1.0))
+        if name == NO_LORA or strength == 0.0:
+            continue
+        entries.append(
+            LoraEntry(
+                name,
+                strength,
+                float(values.get(f"video_{i}", 1.0)),
+                float(values.get(f"audio_{i}", 1.0)),
+                float(values.get(f"text_{i}", 1.0)),
+            )
+        )
+    return entries
+
+
 _LINE = re.compile(r"^(?P<name>.+?\.(?:safetensors|pt|pth|ckpt|bin))\s*(?::\s*(?P<rest>.*))?$", re.IGNORECASE)
 
 

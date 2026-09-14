@@ -13,7 +13,13 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hawk_h3.lora_stack import modality, parse_lora_stack  # noqa: E402
+from hawk_h3.lora_stack import (  # noqa: E402
+    LORA_SLOTS,
+    entries_from_slots,
+    modality,
+    parse_lora_stack,
+    slot_widget_names,
+)
 from hawk_h3.script import (  # noqa: E402
     ScriptError,
     build_jobs,
@@ -201,6 +207,25 @@ class LoraStack(unittest.TestCase):
         for text in ("not a lora", "a.safetensors : loud", "a.safetensors : 1 : q=2"):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 parse_lora_stack(text)
+
+    def test_slot_widgets(self):
+        required, optional = slot_widget_names()
+        self.assertEqual(required[:4], ["lora_1", "strength_1", "lora_2", "strength_2"])
+        self.assertEqual(optional[:3], ["video_1", "audio_1", "text_1"])
+        self.assertEqual((len(required), len(optional)), (2 * LORA_SLOTS, 3 * LORA_SLOTS))
+
+    def test_entries_from_slots(self):
+        entries = entries_from_slots(
+            {
+                "lora_1": "turbo.safetensors", "strength_1": 1.0,
+                "lora_2": "None", "strength_2": 1.0,
+                "lora_3": "off.safetensors", "strength_3": 0.0,
+                "lora_4": "style.safetensors", "strength_4": 0.6, "audio_4": 0.0,
+            }
+        )
+        self.assertEqual([(e.name, e.strength, e.audio) for e in entries],
+                         [("turbo.safetensors", 1.0, 1.0), ("style.safetensors", 0.6, 0.0)])
+        self.assertEqual(entries_from_slots({}), [])
 
     def test_modality(self):
         self.assertEqual(modality("diffusion_model.video_patch_proj.lora_up.weight"), "video")

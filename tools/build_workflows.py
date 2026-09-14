@@ -3,7 +3,8 @@
 
     python tools/build_workflows.py
 
-Widget order for the Hawk nodes is read from their define_schema source, so a
+Widget order for the Hawk nodes is read from their define_schema source (or, for
+the LoRA Stack's generated slots, from the helper its schema is built with), so a
 workflow can never silently fall out of step with a node: add, remove or rename a
 widget and this script refuses to build until the workflow specs below match.
 Pure Python -- no ComfyUI needed.
@@ -14,18 +15,25 @@ from __future__ import annotations
 import json
 import pathlib
 import re
+import sys
 import uuid
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 OUT = ROOT / "example_workflows"
 AUX_ID = "Srioff-ashish/Hawk-Minimax-H3-Directory"
 
+sys.path.insert(0, str(ROOT))
+from hawk_h3.lora_stack import NO_LORA, slot_widget_names  # noqa: E402
+
 NODE_FILES = {
     "HawkH3ModelLoader": "loader.py",
+    "HawkH3LoraStack": "lora_node.py",
     "HawkH3References": "references.py",
     "HawkH3StoryPlanner": "planner.py",
     "HawkH3Director": "director.py",
 }
+
+TURBO_LORA = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 
 _INPUT = re.compile(r'\b(H3Pipe|H3Refs|io\.\w+)\.Input\(\s*"(\w+)"')
 _WIDGET_KINDS = {"io.String", "io.Int", "io.Float", "io.Boolean", "io.Combo"}
@@ -37,6 +45,10 @@ def widget_order(node_type: str) -> list[str]:
     """The order ComfyUI's frontend stores widgets_values in: required widgets in
     schema order, then optional ones; a seed's control_after_generate value
     follows the seed."""
+    if node_type == "HawkH3LoraStack":
+        required, optional = slot_widget_names()
+        return required + optional
+
     source = (ROOT / "hawk_h3" / NODE_FILES[node_type]).read_text(encoding="utf-8")
     schema = source[source.index("def define_schema") : source.index("def execute")]
     matches = list(_INPUT.finditer(schema))
@@ -155,7 +167,7 @@ def model_loader(g: Graph, pos) -> dict:
             "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
             "video_vae": "minimax_h3_video_vae_fp16.safetensors",
             "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
-            "lora_stack": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors : 1.0",
+            "lora_stack": "",
             "shift_video": 12.0,
             "shift_audio": 3.0,
             "attention": "sol scheduled + sage",
@@ -165,6 +177,29 @@ def model_loader(g: Graph, pos) -> dict:
             "sol_tau_end": 0.8,
         },
     )
+
+
+def lora_stack(g: Graph, pos, loras=()) -> dict:
+    required, optional = slot_widget_names()
+    widgets = {name: (NO_LORA if name.startswith("lora_") else 1.0) for name in required + optional}
+    for slot, (name, strength) in enumerate(loras, 1):
+        widgets[f"lora_{slot}"] = name
+        widgets[f"strength_{slot}"] = strength
+    return g.add(
+        "HawkH3LoraStack", pos, [410, 330], core=False,
+        inputs=[sock("pipe", "HAWK_H3_PIPE")],
+        outputs=[out("pipe", "HAWK_H3_PIPE"), out("model", "MODEL"), out("clip", "CLIP")],
+        widgets=widgets,
+    )
+
+
+def models(g: Graph) -> dict:
+    """Model Loader -> LoRA Stack (turbo LoRA in slot 1). Returns the node whose pipe feeds the Director."""
+    loader = model_loader(g, (0, 0))
+    loras = lora_stack(g, (460, 0), [(TURBO_LORA, 1.0)])
+    g.link(loader, "pipe", loras, "pipe")
+    g.group("1 · Models & LoRAs", -20, -60, 910, 560)
+    return loras
 
 
 def references(g: Graph, pos, *, pictures=0, videos=0, soundtracks=0, audios=0, labels="", link_fps=False) -> dict:
@@ -291,6 +326,8 @@ MODELS_NOTE = """
 - `vae/minimax_h3_audio_vae_fp32.safetensors`
 - `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors`
 
+**LoRAs:** pick up to 4 in **Hawk H3 LoRA Stack**. Need more? Add another LoRA Stack node between it and the Director (pipe → pipe). Without the turbo LoRA, raise the Director's `steps` to ~30.
+
 No Sol / Sage installed? They are skipped automatically, or set `attention` to `comfy default`.
 
 Docs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs
@@ -299,7 +336,7 @@ Docs: https://github.com/Srioff-ashish/Hawk-Minimax-H3-Directory/tree/main/docs
 
 def workflow_single_clip() -> Graph:
     g = Graph("01_single_clip")
-    note(g, (-520, 0), [470, 700], f"""## 01 · Single clip
+    note(g, (-520, 0), [470, 780], f"""## 01 · Single clip
 
 The simplest setup: one reference picture, one prompt, one H3 clip with native audio.
 
@@ -310,11 +347,11 @@ The simplest setup: one reference picture, one prompt, one H3 clip with native a
 
 Change `duration:` in the script (1–15 s) and `aspect_ratio` / `megapixels` on the Director.
 {MODELS_NOTE}""")
-    loader = model_loader(g, (0, 0))
+    loras = models(g)
     image = load_image(g, (0, 540), "example.png", "Reference picture")
     refs = references(g, (340, 540), pictures=1, labels="Picture 1: the main character")
     direct = director(
-        g, (500, 0), run_name="example_single_clip",
+        g, (940, 0), run_name="example_single_clip",
         script=(
             "duration: 6\n"
             "<Picture 1> defines the person's face and hair. They stand by a tall window in soft morning light, "
@@ -322,16 +359,15 @@ Change `duration:` in the script (1–15 s) and `aspect_ratio` / `megapixels` on
             "Sound: quiet room tone, distant birdsong, fabric rustle as they turn. Music N/A."
         ),
     )
-    save = save_video(g, (1080, 0), "video/hawk_h3_single_clip")
-    info = preview(g, (1080, 560), "Render report")
-    g.link(loader, "pipe", direct, "pipe")
+    save = save_video(g, (1520, 0), "video/hawk_h3_single_clip")
+    info = preview(g, (1520, 560), "Render report")
+    g.link(loras, "pipe", direct, "pipe")
     g.link(image, "IMAGE", refs, "pictures.picture_0")
     g.link(refs, "refs", direct, "refs")
     g.link(direct, "video", save, "video")
     g.link(direct, "info", info, "source")
-    g.group("1 · Models", -20, -60, 470, 560)
-    g.group("2 · References", -20, 480, 760, 420)
-    g.group("3 · Direct & render", 480, -60, 1240, 1000)
+    g.group("2 · References", -20, 520, 760, 400)
+    g.group("3 · Direct & render", 920, -60, 1240, 1000)
     return g
 
 
@@ -385,7 +421,7 @@ def film_references(g: Graph, x: int, y: int) -> dict:
 
 def workflow_multi_segment_film() -> Graph:
     g = Graph("02_multi_segment_film")
-    note(g, (-520, 0), [470, 900], f"""## 02 · Multi-segment film (~34 s)
+    note(g, (-520, 0), [470, 980], f"""## 02 · Multi-segment film (~34 s)
 
 Four H3 segments joined into one video. Segments 1→2→3 flow continuously: each starts from the last ~1 s of frames and audio of the one before. Segment 4 is a hard cut (`continuity: off`).
 
@@ -401,26 +437,25 @@ Four H3 segments joined into one video. Segments 1→2→3 flow continuously: ea
 
 **Try first at low cost:** set `megapixels` to 0.4 and `run_name` to `example_film_preview`.
 {MODELS_NOTE}""")
-    loader = model_loader(g, (0, 0))
-    refs = film_references(g, (0), 540)
-    direct = director(g, (820, 0), run_name="example_film", script=FILM_SCRIPT)
-    save = save_video(g, (1400, 0), "video/hawk_h3_film")
-    prompts = preview(g, (1400, 560), "Encoded prompts (after tag renumbering)")
-    info = preview(g, (1400, 960), "Render report")
-    g.link(loader, "pipe", direct, "pipe")
+    loras = models(g)
+    refs = film_references(g, 0, 580)
+    direct = director(g, (940, 0), run_name="example_film", script=FILM_SCRIPT)
+    save = save_video(g, (1520, 0), "video/hawk_h3_film")
+    prompts = preview(g, (1520, 560), "Encoded prompts (after tag renumbering)")
+    info = preview(g, (1520, 960), "Render report")
+    g.link(loras, "pipe", direct, "pipe")
     g.link(refs, "refs", direct, "refs")
     g.link(direct, "video", save, "video")
     g.link(direct, "prompts", prompts, "source")
     g.link(direct, "info", info, "source")
-    g.group("1 · Models", -20, -60, 470, 560)
-    g.group("2 · References", -20, 480, 780, 1320)
-    g.group("3 · Direct & render", 800, -60, 1240, 1420)
+    g.group("2 · References", -20, 520, 780, 1320)
+    g.group("3 · Direct & render", 920, -60, 1240, 1420)
     return g
 
 
 def workflow_llm_story_planner() -> Graph:
     g = Graph("03_llm_story_planner")
-    note(g, (-520, 0), [470, 1000], f"""## 03 · LLM story planner
+    note(g, (-520, 0), [470, 1080], f"""## 03 · LLM story planner
 
 An Atlas Cloud vision LLM reads your brief and references and writes the segment script; the Director renders it.
 
@@ -436,10 +471,10 @@ The Director is set to a **cheap preview** (`megapixels 0.4`, run `example_plann
 
 **Hand-edit the plan:** copy the JSON from Plan preview into the Director's `script` box, disconnect the planner's `script` link, edit, queue.
 {MODELS_NOTE}""")
-    loader = model_loader(g, (0, 0))
-    refs = film_references(g, 0, 540)
+    loras = models(g)
+    refs = film_references(g, 0, 580)
     plan = story_planner(
-        g, (820, 540),
+        g, (820, 580),
         story=(
             "A woman arrives by tram in a rainy city to meet an old friend she has not seen in ten years. "
             "She calls from the platform, spots the friend across the station, and they end up laughing together "
@@ -449,27 +484,26 @@ The Director is set to a **cheap preview** (`megapixels 0.4`, run `example_plann
         segment_count=4,
         segment_seconds=10.0,
     )
-    plan_view = preview(g, (820, 1160), "Plan preview (script JSON)")
-    direct = director(g, (1320, 0), run_name="example_planned_film_preview", script="", link_script=True, megapixels=0.4)
-    save = save_video(g, (1900, 0), "video/hawk_h3_planned_film")
-    info = preview(g, (1900, 560), "Render report")
-    g.link(loader, "pipe", direct, "pipe")
+    plan_view = preview(g, (820, 1200), "Plan preview (script JSON)")
+    direct = director(g, (1340, 0), run_name="example_planned_film_preview", script="", link_script=True, megapixels=0.4)
+    save = save_video(g, (1920, 0), "video/hawk_h3_planned_film")
+    info = preview(g, (1920, 560), "Render report")
+    g.link(loras, "pipe", direct, "pipe")
     g.link(refs, "refs", plan, "refs")
     g.link(refs, "refs", direct, "refs")
     g.link(plan, "script", direct, "script")
     g.link(plan, "script", plan_view, "source")
     g.link(direct, "video", save, "video")
     g.link(direct, "info", info, "source")
-    g.group("1 · Models", -20, -60, 470, 560)
-    g.group("2 · References", -20, 480, 780, 1320)
-    g.group("3 · Plan (Atlas LLM)", 800, 480, 660, 1100, color="#8a5a2b")
-    g.group("4 · Direct & render", 1300, -60, 1240, 1000)
+    g.group("2 · References", -20, 520, 780, 1320)
+    g.group("3 · Plan (Atlas LLM)", 800, 520, 660, 1100, color="#8a5a2b")
+    g.group("4 · Direct & render", 1320, -60, 1240, 1000)
     return g
 
 
 def workflow_video_reference() -> Graph:
     g = Graph("04_video_motion_and_voice")
-    note(g, (-520, 0), [470, 860], f"""## 04 · Motion and voice from a video
+    note(g, (-520, 0), [470, 940], f"""## 04 · Motion and voice from a video
 
 Takes the **movement and camera** from a reference video and the **voice** from its soundtrack, and puts them on the person from a reference picture.
 
@@ -485,16 +519,16 @@ Takes the **movement and camera** from a reference video and the **voice** from 
 
 Segment 1 uses only the motion (`audios: none`), segment 2 only the voice (`videos: none`). Always say what a video must **not** contribute (person, clothes, location).
 {MODELS_NOTE}""")
-    loader = model_loader(g, (0, 0))
-    clip = load_video(g, (0, 540), "reference.mp4", "Reference video")
-    parts = video_components(g, (0, 910))
-    face = load_image(g, (0, 1100), "face.png", "Reference picture")
+    loras = models(g)
+    clip = load_video(g, (0, 580), "reference.mp4", "Reference video")
+    parts = video_components(g, (0, 950))
+    face = load_image(g, (0, 1140), "face.png", "Reference picture")
     refs = references(
-        g, (360, 540), pictures=1, videos=1, audios=1, link_fps=True,
+        g, (360, 580), pictures=1, videos=1, audios=1, link_fps=True,
         labels="Picture 1: the person to show\nVideo 1: the movement and camera move to copy\nAudio 1: the voice",
     )
     direct = director(
-        g, (820, 0), run_name="example_motion_voice", default_seconds=8.0,
+        g, (940, 0), run_name="example_motion_voice", default_seconds=8.0,
         script=(
             "style: Natural handheld documentary look, daylight. Native audio. No subtitles.\n"
             "---\n"
@@ -518,9 +552,9 @@ Segment 1 uses only the motion (`audios: none`), segment 2 only the voice (`vide
             "Medium close-up, handheld. Sound: breathing, wind, their voice close and clear."
         ),
     )
-    save = save_video(g, (1400, 0), "video/hawk_h3_motion_voice")
-    info = preview(g, (1400, 560), "Render report")
-    g.link(loader, "pipe", direct, "pipe")
+    save = save_video(g, (1520, 0), "video/hawk_h3_motion_voice")
+    info = preview(g, (1520, 560), "Render report")
+    g.link(loras, "pipe", direct, "pipe")
     g.link(clip, "VIDEO", parts, "video")
     g.link(parts, "images", refs, "videos.video_0")
     g.link(parts, "audio", refs, "audios.audio_0")
@@ -529,9 +563,8 @@ Segment 1 uses only the motion (`audios: none`), segment 2 only the voice (`vide
     g.link(refs, "refs", direct, "refs")
     g.link(direct, "video", save, "video")
     g.link(direct, "info", info, "source")
-    g.group("1 · Models", -20, -60, 470, 560)
-    g.group("2 · References", -20, 480, 800, 1000)
-    g.group("3 · Direct & render", 800, -60, 1240, 1000)
+    g.group("2 · References", -20, 520, 800, 1000)
+    g.group("3 · Direct & render", 920, -60, 1240, 1000)
     return g
 
 

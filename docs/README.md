@@ -25,11 +25,12 @@ Hawk MiniMax H3 Director is a ComfyUI node pack for **MiniMax H3 reference-to-vi
   your brief ──────────► Hawk H3 Story Planner ─script─►│                      │
                          (optional, Atlas LLM)          │                      │
                                                         │                      │
-  Hawk H3 Model Loader ─────────────pipe───────────────►│                      │
+  Hawk H3 Model Loader ─► Hawk H3 LoRA Stack ──pipe────►│                      │
                                                         └──────────────────────┘
 ```
 
-- **Model Loader** loads the model once. It feeds the Director.
+- **Model Loader** loads the model once.
+- **LoRA Stack** adds LoRAs from dropdowns. Chain more of them for more LoRAs. It feeds the Director.
 - **References** bundles what the video should look and sound like.
 - **Story Planner** (optional) writes the script for you using an LLM.
 - **Director** renders the script and outputs one finished video with audio.
