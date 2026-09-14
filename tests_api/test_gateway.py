@@ -247,7 +247,12 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await anonymous.get("/v1/jobs", headers={"Authorization": "Bearer wrong"})).status_code, 401)
             self.assertEqual((await anonymous.get(f"/t/{TOKEN}/v1/jobs")).status_code, 200)
             self.assertEqual((await anonymous.get("/t/wrong-token/v1/jobs")).status_code, 401)
-            self.assertEqual((await anonymous.post("/mcp", json={})).status_code, 401)
+            denied = await anonymous.post("/mcp", json={})
+            self.assertEqual(denied.status_code, 401)
+            self.assertNotIn("www-authenticate", denied.headers, "would make connector apps ask for OAuth")
+            for probe in ("/.well-known/oauth-protected-resource", f"/.well-known/oauth-protected-resource/t/{TOKEN}/mcp",
+                          "/.well-known/oauth-authorization-server"):
+                self.assertEqual((await anonymous.get(probe)).status_code, 404, probe)
 
     async def test_plan_then_render_with_loras_and_downloads(self):
         asset = await self.upload_picture()

@@ -349,6 +349,7 @@ One render runs at a time. ComfyUI queues further jobs, and they show `rendering
 | Job `failed` with a node error (e.g. out of memory) | Lower `megapixels`, fewer references per segment, then retry. |
 | Planning fails with an Atlas error | `ATLAS_API_KEY` must be set in the environment that starts ComfyUI. |
 | Upload fails for a large video | Raise `MAX_UPLOAD_MB` (it also sets ComfyUI's `--max-upload-size`) and restart. |
+| Connector form asks for OAuth credentials | Cancel. This API uses no OAuth: add the connector with the `…/t/<token>/mcp` URL (or `…/mcp` plus a Bearer header where the form has a header field) |
 | Chat assistant doesn't see the tools | Enable the connector in that chat; for claude.ai check the URL includes `/t/<token>/mcp`. |
 
 ---

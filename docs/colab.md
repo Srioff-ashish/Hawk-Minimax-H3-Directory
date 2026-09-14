@@ -167,6 +167,7 @@ The turbo LoRA is always downloaded and is required by default ([loras.json](api
 | `ComfyUI exited during startup` | Run the *Show logs* cell. A missing package usually means cell 2 didn't finish; rerun it |
 | `Cloudflare quick tunnel did not start` | Rerun cell 4. Cloudflare occasionally refuses new quick tunnels for a few minutes |
 | `API runs locally but the tunnel URL is not reachable yet` | Wait a minute and open the Health link; new trycloudflare names take a moment to resolve |
+| Connector form asks for **OAuth credentials** (Client ID, Authorization Endpoint…) | Cancel it; this API uses no OAuth. Use the URL that contains `/t/<token>/mcp`. If you already did, update the pack and reload the API: `!git -C /content/ComfyUI/custom_nodes/Hawk-Minimax-H3-Directory pull` then `hawk_colab.restart_api(session)`, and add the connector again |
 | Claude says the connector can't connect | The URL is from an old session. Copy the current one from cell 4 (or from cell 5's output after a tunnel restart) |
 | Chat reports `422 Required default LoRA … missing` | Cell 3 didn't finish; rerun it, then retry |
 | Planning fails with an Atlas error | Add the `ATLAS_API_KEY` secret with notebook access, then rerun cell 4 |

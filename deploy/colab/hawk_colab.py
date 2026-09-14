@@ -636,6 +636,19 @@ def watch(session: Session, interval: int = 60) -> None:
         print("Stopped watching. Services are still running.")
 
 
+def restart_api(session: Session) -> None:
+    """Reload the API code (e.g. after `git pull`) keeping ComfyUI and the tunnel URL."""
+    api = session.procs.get("api")
+    if api is not None and api.poll() is None:
+        api.terminate()
+        try:
+            api.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            api.kill()
+    _start_api(session)
+    print(session.summary())
+
+
 def show_logs(session: Session, lines: int = 60) -> None:
     for name in ("comfyui", "tunnel", "api"):
         print(f"----- {name} -----\n{log_tail(session.log(name), lines)}")

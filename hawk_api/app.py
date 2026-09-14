@@ -47,7 +47,9 @@ class AuthMiddleware:
             scope = dict(scope, path=rest, raw_path=rest.encode("utf-8"))
             return await self.app(scope, receive, send)
 
-        if path in PUBLIC_PATHS:
+        if path in PUBLIC_PATHS or path.startswith("/.well-known/"):
+            # Connector apps probe /.well-known/oauth-* first; a 401 there makes them
+            # demand OAuth credentials. Let it through so the app answers 404: no OAuth.
             return await self.app(scope, receive, send)
 
         headers = {key.decode("latin-1").lower(): value.decode("latin-1") for key, value in scope.get("headers", [])}
@@ -64,8 +66,10 @@ class AuthMiddleware:
     @staticmethod
     async def _deny(send):
         body = json.dumps({"error": "Missing or invalid token. Send 'Authorization: Bearer <token>', use a /t/<token>/ URL, or a fresh signed link."}).encode()
+        # No WWW-Authenticate header on purpose: MCP clients treat it as the start of an
+        # OAuth flow, and this API authenticates with the token in the header or URL instead.
         await send({"type": "http.response.start", "status": 401,
-                    "headers": [(b"content-type", b"application/json"), (b"www-authenticate", b"Bearer")]})
+                    "headers": [(b"content-type", b"application/json")]})
         await send({"type": "http.response.body", "body": body})
 
 
