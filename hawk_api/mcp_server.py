@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .schemas import LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
@@ -31,12 +32,14 @@ Renders take many minutes. Never wait inside a tool call; poll get_job instead.
 """
 
 
-def _error(exc: Exception) -> ValueError:
+def _error(exc: Exception) -> ToolError:
+    """An expected failure the chat model should read and act on. The SDK only passes a
+    ToolError's message to the client; any other exception becomes 'Error executing tool'."""
     details = getattr(exc, "details", None)
     message = str(exc)
     if details:
         message += "\nDetails: " + json.dumps(details, ensure_ascii=False)[:1500]
-    return ValueError(message)
+    return ToolError(message)
 
 
 def build_mcp(service: HawkService) -> MCPServer:
@@ -85,7 +88,7 @@ def build_mcp(service: HawkService) -> MCPServer:
                 segment_seconds=segment_seconds, aspect_ratio=aspect_ratio, model=model, seed=seed,
             )
         except ValueError as exc:
-            raise ValueError(str(exc)) from None
+            raise ToolError(str(exc)) from None
         return service.job_view(await run(service.create_plan(request)))
 
     @mcp.tool(description=(
@@ -121,7 +124,7 @@ def build_mcp(service: HawkService) -> MCPServer:
                 settings=settings,
             )
         except ValueError as exc:
-            raise ValueError(str(exc)) from None
+            raise ToolError(str(exc)) from None
         return service.job_view(await run(service.create_video(request)))
 
     @mcp.tool(description="Status of a plan or render job: progress (segments_done / segments_total), script, LoRAs applied, errors, and the signed video_url when done.")
@@ -129,7 +132,7 @@ def build_mcp(service: HawkService) -> MCPServer:
         try:
             return service.job_view(service.get_job(job_id))
         except NotFound as exc:
-            raise ValueError(str(exc)) from None
+            raise ToolError(str(exc)) from None
 
     @mcp.tool(description="Recent jobs, newest first.")
     async def list_jobs(limit: int = 10) -> dict:

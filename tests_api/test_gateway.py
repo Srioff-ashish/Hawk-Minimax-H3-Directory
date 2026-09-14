@@ -381,6 +381,12 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
 
             bad = await client.call_tool("render_film", {"script": "<Picture 3>"})
             self.assertTrue(bad.is_error)
+            message = " ".join(getattr(block, "text", "") for block in bad.content)
+            self.assertIn("only 0 picture(s) are connected", message, "the chat model must see why the call failed")
+
+            missing = await client.call_tool("get_job", {"job_id": "no-such-job"})
+            self.assertTrue(missing.is_error)
+            self.assertIn("No job", " ".join(getattr(block, "text", "") for block in missing.content))
 
 
 if __name__ == "__main__":
