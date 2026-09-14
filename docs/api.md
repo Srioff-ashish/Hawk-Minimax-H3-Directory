@@ -13,6 +13,8 @@ Upload page (browser) ────┘            │ localhost only
                          ComfyUI 127.0.0.1:8188 + Hawk H3 nodes + models
 ```
 
+There is also **Hawk H3 Studio**, a web page at `<base URL>/t/<token>/studio`. Upload images, pick LoRAs, set duration and resolution, write a prompt (or let the AI planner write segments), then watch progress and play the finished videos. It uses the same REST API. Open `/studio` without the token in the path and it asks for the token once, keeping it in that browser.
+
 The gateway builds the same graph as the example workflows (Model Loader → LoRA Stack → References → Story Planner → Director). All rendering happens in your ComfyUI; the gateway only wires, queues and tracks jobs.
 
 - [1. Set up the pod](#1-set-up-the-pod)

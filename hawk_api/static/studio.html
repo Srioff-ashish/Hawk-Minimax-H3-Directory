@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hawk H3 Studio</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f3ef; --panel: #ffffff; --sunk: #f0efea; --ink: #1c1c1a; --muted: #6c6b66; --line: #dddbd3;
+    --accent: #2f6f5e; --accent-ink: #ffffff; --accent-soft: #e2efe9; --warn: #9a5b00; --bad: #b3261e; --ok: #2f6f5e;
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #141413; --panel: #1d1d1b; --sunk: #242422; --ink: #ecebe5; --muted: #9d9b94; --line: #33322e;
+            --accent: #6fbfa6; --accent-ink: #0f1f1a; --accent-soft: #1f3530; --warn: #e0a84a; --bad: #f08a80; --ok: #6fbfa6; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 12px 20px;
+         background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 650; font-size: 16px; letter-spacing: -0.01em; }
+  .spacer { flex: 1; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+          background: var(--sunk); color: var(--muted); white-space: nowrap; }
+  .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .pill.ok { color: var(--ok); } .pill.warn { color: var(--warn); } .pill.bad { color: var(--bad); }
+  .banner { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 20px; background: var(--accent-soft); border-bottom: 1px solid var(--line); }
+  .banner input { min-width: 260px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 460px) minmax(0, 1fr); gap: 20px; padding: 20px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 920px) { .layout { grid-template-columns: minmax(0, 1fr); padding: 16px; } .top { padding: 12px 16px; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; }
+  .create { align-self: start; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 22px 0 10px; font-weight: 600; }
+  h2:first-child { margin-top: 0; }
+  input[type=text], input[type=number], input[type=password], input:not([type]), select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  textarea { resize: vertical; min-height: 120px; }
+  input:focus, select:focus, textarea:focus, button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 1px; }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.small { padding: 4px 10px; font-size: 12px; }
+  .row { display: flex; gap: 8px; margin-top: 8px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  @media (max-width: 420px) { .grid2 { grid-template-columns: 1fr; } }
+  .field label, .lbl { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .muted { color: var(--muted); } .small { font-size: 12px; } .error { color: var(--bad); } .warn { color: var(--warn); }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: var(--radius); padding: 18px; text-align: center; cursor: pointer; background: var(--sunk); }
+  .drop.over { border-color: var(--accent); background: var(--accent-soft); }
+  .drop input { display: none; }
+  .refs { display: grid; gap: 10px; margin-top: 12px; }
+  .ref { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; }
+  .thumb { width: 72px; height: 72px; border-radius: 8px; overflow: hidden; background: var(--sunk); display: grid; place-items: center; color: var(--muted); font-size: 11px; text-transform: uppercase; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; }
+  .ref-body { display: grid; gap: 6px; min-width: 0; }
+  .ref-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--muted); }
+  .tag { padding: 2px 8px; border-radius: 6px; background: var(--accent-soft); border: 1px solid transparent; color: var(--accent); font: 600 12px ui-monospace, monospace; }
+  .icon { padding: 0 8px; border: none; background: none; font-size: 18px; color: var(--muted); }
+  .ref select, .ref input { padding: 5px 8px; font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 3px; margin-bottom: 10px; background: var(--sunk); }
+  .seg label { padding: 5px 12px; border-radius: 7px; cursor: pointer; font-size: 13px; }
+  .seg input { display: none; }
+  .seg label:has(input:checked) { background: var(--panel); box-shadow: 0 1px 2px rgba(0,0,0,.12); font-weight: 600; }
+  .range { display: flex; align-items: center; gap: 10px; }
+  .range input { flex: 1; accent-color: var(--accent); }
+  .range output { min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .loras { display: grid; gap: 4px; max-height: 260px; overflow: auto; margin-top: 8px; padding-right: 2px; }
+  .lora { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 8px; border: 1px solid transparent; }
+  .lora.on { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .lora label { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+  .lname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .badge { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); }
+  .strength { padding: 3px 6px !important; font-size: 12px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+  .results h2 { margin-bottom: 14px; }
+  .jobs { display: grid; gap: 14px; }
+  .job { border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; display: grid; gap: 10px; min-width: 0; }
+  .job-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .job-title { font-weight: 600; }
+  .status { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--sunk); color: var(--muted); }
+  .status.done { color: var(--ok); background: var(--accent-soft); } .status.failed { color: var(--bad); } .status.rendering, .status.planning, .status.queued { color: var(--warn); }
+  .plabel { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--muted); }
+  .bar { height: 6px; border-radius: 3px; background: var(--sunk); overflow: hidden; }
+  .bar.thin { height: 4px; }
+  .bar i { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+  .indet { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--sunk) 0%, var(--accent) 50%, var(--sunk) 100%); background-size: 200% 100%; animation: slide 1.4s linear infinite; }
+  @keyframes slide { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+  video { width: 100%; max-height: 70vh; border-radius: 10px; background: #000; display: block; }
+  .meta { font-size: 12px; color: var(--muted); display: grid; gap: 2px; overflow-wrap: anywhere; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; }
+  .links a { color: var(--accent); }
+  .empty { padding: 40px 16px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: var(--radius); }
+  .plan textarea { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; min-height: 220px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">Hawk H3 Studio</div>
+  <span id="health" class="pill">checking…</span>
+  <div class="spacer"></div>
+  <button id="tokenBtn" class="small" hidden>API token</button>
+</header>
+
+<form id="tokenBar" class="banner" hidden>
+  <strong>API token</strong>
+  <input id="tokenInput" type="password" autocomplete="off" placeholder="HAWK_API_TOKEN">
+  <button id="tokenSave" type="submit" class="primary small">Save</button>
+  <span class="small muted">Kept in this browser only. Opening <code>…/t/&lt;token&gt;/studio</code> skips this.</span>
+</form>
+
+<main class="layout">
+  <section class="panel create" aria-label="Create">
+    <h2>1 · References</h2>
+    <label class="drop" id="drop">
+      <input type="file" id="fileInput" multiple accept="image/*,audio/*,video/*">
+      <strong>Add images</strong> <span class="muted">— or audio / video. Drop here or click.</span>
+    </label>
+    <div class="row">
+      <input id="urlInput" placeholder="…or a file URL (needed for files over 100 MB)">
+      <button id="urlAdd">Add</button>
+    </div>
+    <div id="refs" class="refs"></div>
+    <p class="small muted" id="refHint">Click a tag to put it in the prompt. <em>Picture</em> = who / what / where; <em>Pose</em> = body pose only.</p>
+
+    <h2>2 · Prompt</h2>
+    <div class="seg" role="radiogroup" aria-label="Mode">
+      <label><input type="radio" name="mode" value="direct" checked> Direct prompt</label>
+      <label><input type="radio" name="mode" value="planner"> AI planner</label>
+    </div>
+    <textarea id="prompt" rows="7"></textarea>
+    <p class="small muted" id="modeHint"></p>
+
+    <h2>3 · Video</h2>
+    <div class="grid2">
+      <div class="field" style="grid-column: 1 / -1">
+        <label for="duration" id="durationLabel">Duration</label>
+        <div class="range"><input type="range" id="duration" min="1" max="15" step="0.5" value="6"><output id="durationOut">6 s</output></div>
+      </div>
+      <div class="field" id="segmentsField" hidden>
+        <label for="segments">Segments</label>
+        <input type="number" id="segments" min="1" max="12" value="3">
+      </div>
+      <div class="field">
+        <label for="aspect">Aspect ratio</label>
+        <select id="aspect"></select>
+      </div>
+      <div class="field">
+        <label for="resolution">Resolution</label>
+        <select id="resolution">
+          <option value="0.4">Preview · 0.4 MP</option>
+          <option value="0.6">Draft · 0.6 MP</option>
+          <option value="0.8">Good · 0.8 MP</option>
+          <option value="0.98" selected>Native · 0.98 MP</option>
+          <option value="1.5">High · 1.5 MP</option>
+        </select>
+      </div>
+      <div class="field"><span class="lbl">Output size</span><div id="dims" class="small">—</div></div>
+    </div>
+    <details>
+      <summary>Advanced</summary>
+      <div class="grid2" style="margin-top:10px">
+        <div class="field"><label for="steps">Steps</label><input type="number" id="steps" min="1" max="100" placeholder="auto (8 with turbo)"></div>
+        <div class="field"><label for="seed">Seed</label><input type="number" id="seed" min="0" placeholder="random"></div>
+        <div class="field"><label for="continuity">Segment continuity</label>
+          <select id="continuity"><option value="tail_22" selected>tail_22 (smooth)</option><option value="tail_39">tail_39</option><option value="tail_5">tail_5</option><option value="last_frame">last_frame</option><option value="off">off (hard cuts)</option></select></div>
+        <div class="field"><label for="refSize">Reference detail</label>
+          <select id="refSize"><option value="match" selected>match (faster)</option><option value="max">max (stronger identity)</option></select></div>
+        <label class="check" style="grid-column: 1 / -1"><input type="checkbox" id="carryAudio" checked> Carry audio across segments</label>
+      </div>
+    </details>
+
+    <h2>4 · LoRAs</h2>
+    <div class="grid2">
+      <label class="check"><input type="checkbox" id="useDefaults" checked> Use default LoRAs</label>
+      <select id="preset" aria-label="LoRA preset"><option value="">No preset</option></select>
+    </div>
+    <input id="loraSearch" placeholder="Filter LoRAs…" style="margin-top:8px">
+    <div id="loras" class="loras"><p class="small muted">Loading…</p></div>
+
+    <div class="actions">
+      <button id="generate" class="primary">Generate video</button>
+      <button id="planBtn" hidden>Write plan</button>
+      <button id="planRender" class="primary" hidden>Plan &amp; render</button>
+    </div>
+    <p id="formError" class="error small" hidden></p>
+  </section>
+
+  <section class="panel results" aria-label="Results">
+    <h2>Videos &amp; plans</h2>
+    <p id="jobsError" class="error small" hidden></p>
+    <div id="jobs" class="jobs"><div class="empty">Your generations will appear here.</div></div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const PREFIX = (location.pathname.match(/^(\/t\/[^/]+)\//) || [])[1] || "";
+  const storage = {
+    get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch { /* private mode */ } },
+  };
+  let token = PREFIX ? "" : storage.get("hawkH3Token") || "";
+
+  const MAX_TUNNEL_BYTES = 100 * 1024 * 1024;
+  const ACTIVE = ["queued", "planning", "rendering"];
+  const TAG = { picture: "Picture", pose: "Pose", video: "Video", audio: "Audio" };
+  const ROLES = {
+    image: [["picture", "Picture — who / what / where"], ["pose", "Pose — body pose only"]],
+    video: [["video", "Video — motion & camera"], ["audio", "Audio — use its sound"]],
+    audio: [["audio", "Audio — voice / music"]],
+  };
+  const FALLBACK_ASPECTS = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21", "match first picture"];
+  const STATUS = { queued: "Queued", planning: "Writing plan", rendering: "Rendering", done: "Done", failed: "Failed", cancelled: "Cancelled" };
+
+  const state = { refs: [], options: null, lora: {}, jobs: new Map(), cards: new Map() };
+
+  const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // ------------------------------------------------------------------ API
+
+  function errorText(body, fallback) {
+    if (body && typeof body.error === "string") return body.error;
+    if (body && Array.isArray(body.detail)) return body.detail.map((d) => `${(d.loc || []).slice(1).join(".") || "request"}: ${d.msg}`).join("; ");
+    return fallback;
+  }
+
+  async function api(path, options = {}) {
+    const headers = { ...(options.headers || {}) };
+    if (!PREFIX && token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(PREFIX + path, { ...options, headers });
+    let body = {};
+    try { body = await response.json(); } catch { /* empty body */ }
+    if (response.status === 401 && !PREFIX) showTokenBar();
+    if (!response.ok) {
+      const error = new Error(errorText(body, `HTTP ${response.status}`));
+      error.status = response.status;
+      throw error;
+    }
+    return body;
+  }
+  const post = (path, data) => api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+
+  function uploadFile(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", PREFIX + "/v1/assets");
+      if (!PREFIX && token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+      xhr.upload.onprogress = (event) => event.lengthComputable && onProgress(event.loaded / event.total);
+      xhr.onload = () => {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* not JSON */ }
+        if (xhr.status === 401 && !PREFIX) showTokenBar();
+        if (xhr.status >= 200 && xhr.status < 300 && body.assets) resolve(body.assets[0]);
+        else reject(new Error(errorText(body, `Upload failed (HTTP ${xhr.status})`)));
+      };
+      xhr.onerror = () => reject(new Error("Upload failed: network error (a file over 100 MB is refused by the tunnel)."));
+      const form = new FormData();
+      form.append("files", file);
+      xhr.send(form);
+    });
+  }
+
+  // --------------------------------------------------------------- health
+
+  async function checkHealth() {
+    const pill = $("health");
+    try {
+      const response = await fetch(PREFIX + "/healthz");
+      const health = await response.json();
+      if (!health.ok) { pill.className = "pill bad"; pill.textContent = "GPU server unreachable"; }
+      else if (health.loras === "degraded") { pill.className = "pill warn"; pill.textContent = "Required LoRA missing"; }
+      else { pill.className = "pill ok"; pill.textContent = "Ready"; }
+    } catch {
+      pill.className = "pill bad"; pill.textContent = "Offline";
+    }
+  }
+
+  // ---------------------------------------------------------------- token
+
+  function showTokenBar() { $("tokenBar").hidden = false; $("tokenInput").focus(); }
+  $("tokenBtn").hidden = Boolean(PREFIX);
+  $("tokenBtn").onclick = showTokenBar;
+  $("tokenBar").addEventListener("submit", (event) => {
+    event.preventDefault();
+    token = $("tokenInput").value.trim();
+    storage.set("hawkH3Token", token);
+    $("tokenBar").hidden = true;
+    loadOptions();
+    refreshJobs();
+  });
+
+  // ----------------------------------------------------------- references
+
+  function kindOf(file) {
+    const type = file.type || "";
+    if (type.startsWith("image/")) return "image";
+    if (type.startsWith("video/")) return "video";
+    if (type.startsWith("audio/")) return "audio";
+    return null;
+  }
+
+  function newRef(kind, filename, preview) {
+    return {
+      id: (crypto.randomUUID && crypto.randomUUID()) || String(Date.now() + Math.random()),
+      kind, filename, preview, role: ROLES[kind][0][0], label: "", status: "uploading", progress: 0, asset: null, error: "",
+    };
+  }
+
+  function addFiles(files) {
+    clearError();
+    for (const file of files) {
+      const kind = kindOf(file);
+      if (!kind) { showError(`${file.name} is not an image, audio or video file.`); continue; }
+      if (file.size > MAX_TUNNEL_BYTES) { showError(`${file.name} is over 100 MB, which the tunnel refuses. Put it online and add it by URL.`); continue; }
+      const ref = newRef(kind, file.name, kind === "image" ? URL.createObjectURL(file) : "");
+      state.refs.push(ref);
+      renderRefs();
+      uploadFile(file, (fraction) => { ref.progress = fraction; paintProgress(ref); })
+        .then((asset) => { ref.asset = asset.id; ref.status = "ready"; renderRefs(); })
+        .catch((error) => { ref.status = "error"; ref.error = error.message; renderRefs(); });
+    }
+  }
+
+  async function addUrl() {
+    const url = $("urlInput").value.trim();
+    if (!url) return;
+    clearError();
+    $("urlAdd").disabled = true;
+    try {
+      const asset = await post("/v1/assets/from-url", { url });
+      const ref = newRef(asset.kind, asset.filename, asset.kind === "image" ? url : "");
+      ref.asset = asset.id; ref.status = "ready";
+      state.refs.push(ref);
+      $("urlInput").value = "";
+      renderRefs();
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      $("urlAdd").disabled = false;
+    }
+  }
+
+  function tags() {
+    const counts = {};
+    const result = new Map();
+    for (const ref of state.refs) {
+      if (ref.status === "error") continue;
+      counts[ref.role] = (counts[ref.role] || 0) + 1;
+      result.set(ref.id, `<${TAG[ref.role]} ${counts[ref.role]}>`);
+    }
+    return result;
+  }
+
+  function renderRefs() {
+    const tagMap = tags();
+    $("refs").innerHTML = state.refs.map((ref) => `
+      <div class="ref" data-id="${ref.id}">
+        <div class="thumb">${ref.preview ? `<img src="${esc(ref.preview)}" alt="">` : esc(ref.kind)}</div>
+        <div class="ref-body">
+          <div class="ref-top">
+            ${tagMap.has(ref.id) ? `<button class="tag" data-act="tag" title="Insert into prompt" ${ref.status !== "ready" ? "disabled" : ""}>${esc(tagMap.get(ref.id))}</button>` : ""}
+            <span class="fname" title="${esc(ref.filename)}">${esc(ref.filename)}</span>
+            <button class="icon" data-act="remove" aria-label="Remove ${esc(ref.filename)}">×</button>
+          </div>
+          <select data-act="role" aria-label="Role">${ROLES[ref.kind].map(([value, text]) => `<option value="${value}" ${value === ref.role ? "selected" : ""}>${text}</option>`).join("")}</select>
+          <input data-act="label" placeholder="What is it for? (optional, helps the planner)" value="${esc(ref.label)}">
+          ${ref.status === "uploading" ? `<div class="bar thin"><i style="width:${Math.round(ref.progress * 100)}%"></i></div>` : ""}
+          ${ref.status === "error" ? `<div class="error small">${esc(ref.error)}</div>` : ""}
+        </div>
+      </div>`).join("");
+    updateDims();
+  }
+
+  function paintProgress(ref) {
+    const bar = document.querySelector(`.ref[data-id="${ref.id}"] .bar i`);
+    if (bar) bar.style.width = `${Math.round(ref.progress * 100)}%`;
+  }
+
+  function insertAtCursor(textarea, text) {
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? textarea.value.length;
+    const before = textarea.value.slice(0, start);
+    const pad = before && !/\s$/.test(before) ? " " : "";
+    textarea.value = `${before}${pad}${text} ${textarea.value.slice(end)}`;
+    const caret = before.length + pad.length + text.length + 1;
+    textarea.focus();
+    textarea.setSelectionRange(caret, caret);
+  }
+
+  $("refs").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-act]");
+    if (!button) return;
+    const id = button.closest(".ref").dataset.id;
+    const ref = state.refs.find((item) => item.id === id);
+    if (button.dataset.act === "remove") {
+      state.refs = state.refs.filter((item) => item.id !== id);
+      renderRefs();
+    } else if (button.dataset.act === "tag") {
+      insertAtCursor($("prompt"), tags().get(ref.id));
+    }
+  });
+  $("refs").addEventListener("change", (event) => {
+    if (event.target.dataset.act !== "role") return;
+    state.refs.find((item) => item.id === event.target.closest(".ref").dataset.id).role = event.target.value;
+    renderRefs();
+  });
+  $("refs").addEventListener("input", (event) => {
+    if (event.target.dataset.act !== "label") return;
+    state.refs.find((item) => item.id === event.target.closest(".ref").dataset.id).label = event.target.value;
+  });
+
+  const drop = $("drop");
+  $("fileInput").addEventListener("change", (event) => { addFiles(event.target.files); event.target.value = ""; });
+  drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", (event) => { event.preventDefault(); drop.classList.remove("over"); addFiles(event.dataTransfer.files); });
+  $("urlAdd").onclick = addUrl;
+  $("urlInput").addEventListener("keydown", (event) => event.key === "Enter" && addUrl());
+
+  const referencesPayload = () => state.refs.filter((ref) => ref.status === "ready").map((ref) => ({ asset_id: ref.asset, role: ref.role, label: ref.label }));
+
+  // --------------------------------------------------------- mode & video
+
+  const mode = () => document.querySelector('input[name="mode"]:checked').value;
+
+  function applyMode() {
+    const planner = mode() === "planner";
+    $("generate").hidden = planner;
+    $("planBtn").hidden = !planner;
+    $("planRender").hidden = !planner;
+    $("segmentsField").hidden = !planner;
+    $("durationLabel").textContent = planner ? "Seconds per segment" : "Duration";
+    $("prompt").placeholder = planner
+      ? "Describe the film: story, characters, mood, locations, lines of dialogue. The planner splits it into segments."
+      : "Describe the shot: who (click reference tags), what happens, camera, sound. e.g. <Picture 1> walks through a rainy street at night, slow push-in. Sound: rain, footsteps.";
+    $("modeHint").textContent = planner
+      ? "Write plan lets you read and edit the segments before rendering. Needs ATLAS_API_KEY on the server."
+      : "Tip: separate segments with a line of --- to make a longer film.";
+  }
+  document.querySelectorAll('input[name="mode"]').forEach((input) => input.addEventListener("change", applyMode));
+
+  function dims(aspect, megapixels) {
+    let ratio;
+    if (aspect === "match first picture") {
+      const first = state.refs.find((ref) => ref.role === "picture" && ref.preview);
+      const image = first && document.querySelector(`.ref[data-id="${first.id}"] img`);
+      if (!image || !image.naturalWidth) return null;
+      ratio = image.naturalWidth / image.naturalHeight;
+    } else {
+      const [a, b] = aspect.split(":").map(Number);
+      ratio = a / b;
+    }
+    const width = Math.sqrt(megapixels * 1024 * 1024 * ratio);
+    const snap = (value) => Math.max(32, Math.round(value / 32) * 32);
+    return [snap(width), snap(width / ratio)];
+  }
+
+  function updateDims() {
+    const size = dims($("aspect").value || "16:9", Number($("resolution").value));
+    $("dims").textContent = size ? `${size[0]} × ${size[1]}` : "from first picture";
+  }
+
+  function updateDuration() { $("durationOut").textContent = `${$("duration").value} s`; }
+  $("duration").addEventListener("input", updateDuration);
+  $("aspect").addEventListener("change", updateDims);
+  $("resolution").addEventListener("change", updateDims);
+
+  // ---------------------------------------------------------------- LoRAs
+
+  async function loadOptions() {
+    try {
+      state.options = await api("/v1/options");
+    } catch (error) {
+      $("loras").innerHTML = `<p class="error small">${esc(error.message)}</p>`;
+      return;
+    }
+    const aspects = state.options.aspect_ratios?.length ? state.options.aspect_ratios : FALLBACK_ASPECTS;
+    const current = $("aspect").value || "16:9";
+    $("aspect").innerHTML = aspects.map((a) => `<option ${a === current ? "selected" : ""}>${esc(a)}</option>`).join("");
+    $("preset").innerHTML = `<option value="">No preset</option>` + Object.keys(state.options.lora_presets || {}).map((name) => `<option>${esc(name)}</option>`).join("");
+    for (const row of state.options.default_loras || []) {
+      if (row.file && !state.lora[row.file]) state.lora[row.file] = { on: true, strength: row.strength };
+    }
+    renderLoras();
+    updateDims();
+  }
+
+  function defaultFiles() {
+    return new Map((state.options?.default_loras || []).filter((row) => row.file).map((row) => [row.file, row]));
+  }
+
+  function renderLoras() {
+    if (!state.options) return;
+    const query = $("loraSearch").value.trim().toLowerCase();
+    const defaults = defaultFiles();
+    const useDefaults = $("useDefaults").checked;
+    const missing = (state.options.default_loras || []).filter((row) => !row.present);
+    const rows = state.options.available_loras
+      .filter((file) => !query || file.toLowerCase().includes(query))
+      .map((file) => {
+        const selection = (state.lora[file] ||= { on: false, strength: 1 });
+        const isDefault = defaults.has(file);
+        const disabled = isDefault && !useDefaults;
+        const on = selection.on && !disabled;
+        return `<div class="lora ${on ? "on" : ""}">
+          <label title="${esc(file)}"><input type="checkbox" data-file="${esc(file)}" ${on ? "checked" : ""} ${disabled ? "disabled" : ""}><span class="lname">${esc(file.replace(/\.(safetensors|pt|ckpt|bin)$/i, ""))}</span></label>
+          <span class="badge">${isDefault ? "default" : ""}</span>
+          <input type="number" class="strength" data-file="${esc(file)}" min="-2" max="2" step="0.05" value="${selection.strength}" aria-label="Strength" ${disabled ? "disabled" : ""}>
+        </div>`;
+      });
+    $("loras").innerHTML =
+      (missing.length ? `<p class="error small">Required LoRA missing on the server: ${esc(missing.map((row) => row.name).join(", "))}</p>` : "") +
+      (rows.join("") || `<p class="small muted">No LoRA files ${query ? "match" : "on the server"}.</p>`);
+  }
+
+  $("loras").addEventListener("change", (event) => {
+    const file = event.target.dataset.file;
+    if (!file) return;
+    const selection = (state.lora[file] ||= { on: false, strength: 1 });
+    if (event.target.type === "checkbox") selection.on = event.target.checked;
+    else selection.strength = Number(event.target.value);
+    renderLoras();
+  });
+  $("loraSearch").addEventListener("input", renderLoras);
+  $("useDefaults").addEventListener("change", renderLoras);
+
+  function loraPayload() {
+    const payload = { use_default_loras: $("useDefaults").checked, loras: [] };
+    if ($("preset").value) payload.lora_preset = $("preset").value;
+    const defaults = defaultFiles();
+    for (const [file, selection] of Object.entries(state.lora)) {
+      const fallback = defaults.get(file);
+      if (fallback && payload.use_default_loras) {
+        if (!selection.on) payload.loras.push({ name: file, strength: 0 });
+        else if (Number(selection.strength) !== fallback.strength) payload.loras.push({ name: file, strength: Number(selection.strength) });
+      } else if (!fallback && selection.on) {
+        payload.loras.push({ name: file, strength: Number(selection.strength) });
+      }
+    }
+    return payload;
+  }
+
+  function settingsPayload() {
+    const settings = {
+      aspect_ratio: $("aspect").value || "16:9",
+      megapixels: Number($("resolution").value),
+      default_seconds: Number($("duration").value),
+      continuity: $("continuity").value,
+      ref_image_size: $("refSize").value,
+      carry_audio: $("carryAudio").checked,
+      ...loraPayload(),
+    };
+    if ($("steps").value.trim()) settings.steps = Number($("steps").value);
+    if ($("seed").value.trim()) settings.seed = Number($("seed").value);
+    return settings;
+  }
+
+  // ------------------------------------------------------------- generate
+
+  function directScript(prompt, seconds) {
+    const text = prompt.trim();
+    const firstLine = text.split("\n")[0];
+    const structured = /^\s*-{3,}\s*$/m.test(text) || /^\s*(title|duration|seconds|pictures|images|videos|audios|poses|seed|continuity|style)\s*:/i.test(firstLine);
+    return structured ? text : `duration: ${seconds}\n${text}`;
+  }
+
+  function showError(message) { $("formError").textContent = message; $("formError").hidden = false; }
+  function clearError() { $("formError").hidden = true; }
+
+  function setBusy(busy) { ["generate", "planBtn", "planRender"].forEach((id) => { $(id).disabled = busy; }); }
+
+  async function submit(kind) {
+    clearError();
+    const prompt = $("prompt").value;
+    if (!prompt.trim()) return showError("Write a prompt first.");
+    if (state.refs.some((ref) => ref.status === "uploading")) return showError("Wait until the uploads finish.");
+    const references = referencesPayload();
+    const seconds = Number($("duration").value);
+    const planner = { story: prompt, segment_count: Number($("segments").value), segment_seconds: seconds, aspect_ratio: $("aspect").value || "16:9" };
+    setBusy(true);
+    try {
+      let job;
+      if (kind === "direct") job = await post("/v1/videos", { references, script: directScript(prompt, seconds), settings: settingsPayload() });
+      else if (kind === "plan") job = await post("/v1/plans", { ...planner, references });
+      else job = await post("/v1/videos", { references, story: planner, settings: settingsPayload() });
+      upsertJob(job, true);
+      schedule(1500);
+    } catch (error) {
+      showError(error.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  $("generate").onclick = () => submit("direct");
+  $("planBtn").onclick = () => submit("plan");
+  $("planRender").onclick = () => submit("oneshot");
+
+  // ----------------------------------------------------------------- jobs
+
+  function planToText(script) {
+    try {
+      const data = JSON.parse(script);
+      const blocks = [];
+      if (data.style) blocks.push(`style: ${data.style}`);
+      for (const segment of data.segments || []) {
+        const lines = [];
+        if (segment.title) lines.push(`title: ${segment.title}`);
+        if (segment.duration) lines.push(`duration: ${segment.duration}`);
+        for (const key of ["pictures", "poses", "videos", "audios"]) {
+          if (Array.isArray(segment[key])) lines.push(`${key}: ${segment[key].length ? segment[key].join(", ") : "none"}`);
+        }
+        if (segment.continuity) lines.push(`continuity: ${segment.continuity}`);
+        if (segment.seed != null) lines.push(`seed: ${segment.seed}`);
+        lines.push(segment.prompt);
+        blocks.push(lines.join("\n"));
+      }
+      return blocks.join("\n---\n");
+    } catch {
+      return script || "";
+    }
+  }
+
+  function progressHtml(job) {
+    const p = job.progress || {};
+    if (job.status === "queued") return `<div class="indet"></div><p class="small muted">Waiting for the GPU…</p>`;
+    if (job.status === "planning") return `<div class="indet"></div><p class="small muted">The planner is writing the segments…</p>`;
+    if (job.status !== "rendering") return "";
+    const total = p.segments_total || 0;
+    const done = p.segments_done || 0;
+    const steps = p.steps_total ? `<div class="plabel"><span>Sampling step ${p.steps_done}/${p.steps_total}</span></div><div class="bar thin"><i style="width:${(p.steps_done / p.steps_total) * 100}%"></i></div>` : `<p class="small muted">Loading models and encoding the prompt…</p>`;
+    return `<div class="plabel"><span>${total ? `Segment ${Math.min(done + 1, total)} of ${total}` : "Rendering"}</span><span>${done}/${total || "?"} segments done</span></div>
+            <div class="bar"><i style="width:${total ? (done / total) * 100 : 0}%"></i></div>${steps}`;
+  }
+
+  function metaHtml(job) {
+    const rows = [];
+    if (job.kind === "render") {
+      if (job.steps) rows.push(`${job.steps} steps${job.steps_reason ? ` — ${esc(job.steps_reason)}` : ""}`);
+      const applied = job.status === "done" ? job.loras_applied : job.loras;
+      if (applied?.length) rows.push(`LoRAs${job.status === "done" ? " applied" : ""}: ${applied.map((l) => `${esc(l.file)} @ ${l.strength}`).join(", ")}`);
+      if (job.seed != null) rows.push(`seed ${job.seed}`);
+    }
+    for (const warning of job.warnings || []) rows.push(`<span class="warn">⚠ ${esc(warning)}</span>`);
+    if (job.error) rows.push(`<span class="error">${esc(job.error)}</span>`);
+    return rows.map((row) => `<div>${row}</div>`).join("");
+  }
+
+  function actionsHtml(job) {
+    const parts = [];
+    if (ACTIVE.includes(job.status)) parts.push(`<button class="small" data-act="cancel">Cancel</button>`);
+    if (["failed", "cancelled"].includes(job.status) && job.resumable) parts.push(`<button class="small" data-act="retry">Retry (reuses finished segments)</button>`);
+    if (job.video_url) parts.push(`<a href="${esc(job.video_url)}" download>Download video</a>`);
+    if (job.segment_urls?.length > 1 || (job.segment_urls?.length && job.status !== "done")) {
+      parts.push(job.segment_urls.map((url, index) => `<a href="${esc(url)}" download>segment ${index + 1}</a>`).join(" · "));
+    }
+    return parts.join("");
+  }
+
+  function upsertJob(job, prepend = false) {
+    const previous = state.jobs.get(job.id);
+    state.jobs.set(job.id, job);
+    let card = state.cards.get(job.id);
+    const list = $("jobs");
+    list.querySelector(".empty")?.remove();
+    if (!card) {
+      card = document.createElement("article");
+      card.className = "job";
+      card.dataset.id = job.id;
+      card.innerHTML = `<div class="job-head"><span class="job-title"></span><span class="status"></span><span class="small muted time"></span></div>
+        <div class="progress"></div><div class="media"></div><div class="plan"></div><div class="meta"></div><div class="links"></div><p class="error small card-error" hidden></p>`;
+      state.cards.set(job.id, card);
+      if (prepend) list.prepend(card); else list.append(card);
+    } else if (previous && previous.updated_at === job.updated_at && previous.video_url) {
+      return;
+    }
+    card.querySelector(".job-title").textContent = job.kind === "plan" ? "Plan" : "Video";
+    const status = card.querySelector(".status");
+    status.className = `status ${job.status}`;
+    status.textContent = STATUS[job.status] || job.status;
+    card.querySelector(".time").textContent = new Date(job.created_at * 1000).toLocaleString();
+    card.querySelector(".progress").innerHTML = progressHtml(job);
+    card.querySelector(".meta").innerHTML = metaHtml(job);
+    card.querySelector(".links").innerHTML = actionsHtml(job);
+
+    const media = card.querySelector(".media");
+    if (job.video_url && !media.querySelector("video")) {
+      media.innerHTML = `<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>`;
+    }
+    const plan = card.querySelector(".plan");
+    if (job.kind === "plan" && job.status === "done" && job.script && !plan.querySelector("textarea")) {
+      plan.innerHTML = `<div class="lbl">Plan — edit prompts, durations or reference numbers, then render</div>
+        <textarea spellcheck="false"></textarea>
+        <div class="actions" style="margin-top:8px"><button class="primary small" data-act="render-plan">Render this plan</button><span class="small muted">Uses the video settings and LoRAs on the left.</span></div>`;
+      plan.querySelector("textarea").value = planToText(job.script);
+    }
+  }
+
+  async function cardAction(event) {
+    const button = event.target.closest("button[data-act]");
+    if (!button) return;
+    const card = button.closest(".job");
+    const job = state.jobs.get(card.dataset.id);
+    const errorBox = card.querySelector(".card-error");
+    errorBox.hidden = true;
+    button.disabled = true;
+    try {
+      if (button.dataset.act === "cancel") upsertJob(await post(`/v1/jobs/${job.id}/cancel`, {}));
+      else if (button.dataset.act === "retry") upsertJob(await post(`/v1/jobs/${job.id}/retry`, {}));
+      else if (button.dataset.act === "render-plan") {
+        const text = card.querySelector(".plan textarea").value;
+        const edited = text.trim() !== planToText(job.script).trim();
+        const payload = edited
+          ? { references: referencesPayload(), script: text, settings: settingsPayload() }
+          : { plan_job_id: job.id, settings: settingsPayload() };
+        upsertJob(await post("/v1/videos", payload), true);
+      }
+      schedule(1500);
+    } catch (error) {
+      errorBox.textContent = error.message;
+      errorBox.hidden = false;
+    } finally {
+      button.disabled = false;
+    }
+  }
+  $("jobs").addEventListener("click", cardAction);
+
+  async function refreshJobs() {
+    try {
+      const { jobs } = await api("/v1/jobs?limit=20");
+      $("jobsError").hidden = true;
+      for (const job of jobs.slice().reverse()) upsertJob(job, true);
+    } catch (error) {
+      if (error.status !== 401) { $("jobsError").textContent = error.message; $("jobsError").hidden = false; }
+    }
+  }
+
+  let timer = null;
+  function schedule(delay) {
+    clearTimeout(timer);
+    const active = [...state.jobs.values()].some((job) => ACTIVE.includes(job.status));
+    timer = setTimeout(async () => { await refreshJobs(); schedule(); }, delay ?? (active ? 3000 : 15000));
+  }
+
+  // ---------------------------------------------------------------- start
+
+  $("aspect").innerHTML = FALLBACK_ASPECTS.map((a) => `<option ${a === "16:9" ? "selected" : ""}>${esc(a)}</option>`).join("");
+  applyMode();
+  updateDuration();
+  updateDims();
+  checkHealth();
+  setInterval(checkHealth, 30000);
+  if (PREFIX || token) {
+    loadOptions();
+    refreshJobs().then(() => schedule());
+  } else {
+    showTokenBar();
+    $("loras").innerHTML = `<p class="small muted">Enter the API token to load LoRAs.</p>`;
+    schedule();
+  }
+})();
+</script>
+</body>
+</html>

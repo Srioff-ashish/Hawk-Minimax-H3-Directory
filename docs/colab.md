@@ -113,6 +113,18 @@ Add the same Secrets as below (`ATLAS_API_KEY`, and ideally `HAWK_API_TOKEN`).
 
 The **first render of a session** is slower. Sol attention's Triton kernels compile for each new resolution and length, and with nothing persisted every session pays that again. Later renders at the same size are fast.
 
+## Use the Studio web page
+
+The start cell also prints a **Studio** link: `https://….trycloudflare.com/t/<token>/studio`. Open it in any browser, including a phone:
+
+1. **References:** drop images (or audio/video). For each one choose *Picture* (who, what, where) or *Pose* (body pose only), and click its tag, e.g. `<Picture 1>`, to put it in the prompt.
+2. **Prompt:** *Direct prompt* renders what you write. *AI planner* writes a multi-segment plan from your idea: *Write plan* lets you edit it first, *Plan & render* does both.
+3. **Video:** duration (per segment in planner mode), segment count, aspect ratio and resolution. Preview 0.4 MP is fastest; Native 0.98 MP is H3's normal size.
+4. **LoRAs:** tick any LoRA from the server's `models/loras` and set its strength. The turbo LoRA is on by default.
+5. **Generate.** The right side shows progress by segment and sampling step, then the video player and download links.
+
+Like the connector, the link changes every session, and uploads are limited to 100 MB (use the URL box for bigger files).
+
 ## Connect Claude or Grok each session
 
 The quick-tunnel URL is new every session, so the connector has to be updated every time.

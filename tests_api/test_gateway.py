@@ -246,6 +246,10 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         async with httpx.AsyncClient(base_url=self.base) as anonymous:
             self.assertEqual((await anonymous.get("/healthz")).json()["loras"], "ok")
             self.assertEqual((await anonymous.get("/openapi.json")).status_code, 200)
+            for studio in ("/studio", f"/t/{TOKEN}/studio"):
+                page = await anonymous.get(studio)
+                self.assertEqual(page.status_code, 200, studio)
+                self.assertIn("Hawk H3 Studio", page.text)
             self.assertEqual((await anonymous.get("/v1/options")).status_code, 401)
             self.assertEqual((await anonymous.get("/v1/jobs")).status_code, 401)
             self.assertEqual((await anonymous.get("/v1/jobs", headers={"Authorization": "Bearer wrong"})).status_code, 401)

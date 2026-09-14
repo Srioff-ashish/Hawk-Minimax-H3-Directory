@@ -21,11 +21,13 @@ from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
 from .schemas import PlanRequest, UrlAssetRequest, VideoRequest
 
-#: No token needed: health, and the API schema/docs page (they contain no data).
-PUBLIC_PATHS = {"/healthz", "/docs", "/openapi.json", "/docs/oauth2-redirect"}
+#: No token needed: health, the API schema/docs page and the Studio page itself
+#: (they contain no data; every API call the Studio makes still needs the token).
+PUBLIC_PATHS = {"/healthz", "/docs", "/openapi.json", "/docs/oauth2-redirect", "/studio"}
 #: Paths a signed link (?exp=&sig=) may open without the token.
 SIGNABLE = re.compile(r"^/(upload|v1/jobs/[^/]+/video|v1/jobs/[^/]+/segments/\d+)$")
 UPLOAD_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "upload.html")
+STUDIO_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "studio.html")
 
 
 class AuthMiddleware:
@@ -149,6 +151,11 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/assets", tags=["assets"])
     async def list_assets(limit: int = 100):
         return {"assets": service.list_assets(limit)}
+
+    @app.get("/studio", include_in_schema=False)
+    async def studio_page():
+        with open(STUDIO_PAGE, "r", encoding="utf-8") as handle:
+            return HTMLResponse(handle.read(), headers={"cache-control": "no-store"})
 
     @app.get("/upload", include_in_schema=False)
     async def upload_page():
