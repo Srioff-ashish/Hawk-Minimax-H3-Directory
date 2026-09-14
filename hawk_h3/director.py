@@ -163,6 +163,24 @@ def _add_continuity(cond, latent, tail: dict, job: Job, pipe: dict, carry_audio:
     ).args[0]
 
 
+def _announce_segment(done: int, total: int, title: str, cached: bool) -> None:
+    """Tell websocket listeners (the Hawk H3 API) how many segments are finished.
+
+    The sampler's per-step progress bar reports under the Director node too, so the
+    Director's own ProgressBar alone cannot be told apart from sampling steps."""
+    try:
+        from server import PromptServer
+
+        server = PromptServer.instance
+        server.send_sync(
+            "hawk_h3.segment",
+            {"prompt_id": server.last_prompt_id, "done": done, "total": total, "title": title, "cached": cached},
+            server.client_id,
+        )
+    except Exception:  # no server (tests, scripts) -- progress is optional
+        pass
+
+
 def _interpolate(frames: torch.Tensor, target_fps: float) -> torch.Tensor:
     rife = nodes.NODE_CLASS_MAPPINGS["RIFEInterpolation"]
     out = rife().interpolate(frames, float(FPS), float(target_fps), 1.0)[0].cpu()
@@ -361,6 +379,7 @@ class HawkH3Director(io.ComfyNode):
         sampler = comfy.samplers.sampler_object(sampler_name)
         sigmas = comfy.samplers.calculate_sigmas(model.get_model_object("model_sampling"), scheduler, steps).cpu()
         progress = comfy.utils.ProgressBar(len(jobs))
+        _announce_segment(0, len(jobs), jobs[0].title, False)
 
         accumulated: torch.Tensor | None = None
         sample_rate: int | None = None
@@ -459,6 +478,8 @@ class HawkH3Director(io.ComfyNode):
                     "file": segment_paths["video"],
                 }
             )
+            # Announced before the bar moves, so listeners can recognise the bar's event as ours.
+            _announce_segment(job.index + 1, len(jobs), job.title, hit)
             progress.update(1)
 
         # ---- assemble -----------------------------------------------------------

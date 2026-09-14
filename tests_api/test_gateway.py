@@ -126,8 +126,11 @@ class FakeComfy:
             run_name = node["inputs"]["run_name"]
             total = len(parse_script(text).segments)
             delay = 0.4 if "SLOW" in text else 0.02
+            await self.send(client, "hawk_h3.segment", {"prompt_id": pid, "done": 0, "total": total, "title": "", "cached": False})
             for number in range(1, total + 1):
-                await asyncio.sleep(delay)
+                for step in range(1, 6):  # the sampler's step bar reports under the Director node
+                    await asyncio.sleep(delay / 5)
+                    await self.send(client, "progress", {"value": step, "max": 5, "prompt_id": pid, "node": node_id})
                 if pid in self.cancelled:
                     data = {"prompt_id": pid, "node_id": node_id, "node_type": "HawkH3Director"}
                     messages.append(["execution_interrupted", data])
@@ -139,6 +142,7 @@ class FakeComfy:
                     await self.send(client, "execution_error", data)
                     return await finish("error")
                 self.outputs[f"hawk_h3/{run_name}/segment_{number:03d}.mp4"] = f"segment {number}".encode()
+                await self.send(client, "hawk_h3.segment", {"prompt_id": pid, "done": number, "total": total, "title": f"seg {number}", "cached": False})
                 await self.send(client, "progress", {"value": number, "max": total, "prompt_id": pid, "node": node_id})
             final = f"{run_name}_final.mp4"
             self.outputs[f"hawk_h3/{run_name}/{final}"] = b"FINAL VIDEO BYTES"
@@ -275,7 +279,9 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
 
         render = await self.wait(render["id"])
         self.assertEqual(render["status"], "done", render)
-        self.assertEqual(render["progress"], {"segments_done": 2, "segments_total": 2})
+        progress = render["progress"]
+        self.assertEqual((progress["segments_done"], progress["segments_total"]), (2, 2), progress)
+        self.assertEqual(progress["steps_total"], 5, "sampler steps are reported separately from segments")
         self.assertEqual(render["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": REALISM, "strength": 0.7}])
         self.assertEqual(render["warnings"], [])
 
@@ -332,7 +338,8 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CUDA out of memory", failed["error"])
 
         slow = (await self.http.post("/v1/videos", json={"script": "SLOW one\n---\nSLOW two\n---\nSLOW three"})).json()
-        await self.wait(slow["id"], statuses=("rendering",), check=lambda j: j["progress"]["segments_done"] >= 1)
+        mid = await self.wait(slow["id"], statuses=("rendering",), check=lambda j: j["progress"]["segments_done"] >= 1)
+        self.assertEqual(mid["progress"]["segments_total"], 3, "step progress must not overwrite the segment count")
         self.fake.restart()
         lost = await self.wait(slow["id"], timeout=5)
         self.assertEqual((lost["status"], lost["resumable"]), ("failed", True), lost)

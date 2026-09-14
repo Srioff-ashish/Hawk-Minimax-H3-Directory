@@ -346,6 +346,9 @@ class HawkService:
             "script": None,
             "segments_total": None,
             "segments_done": 0,
+            "current_segment": None,
+            "steps_done": 0,
+            "steps_total": None,
             "outputs": {},
             "loras": [],
             "loras_applied_by_node": {},
@@ -528,9 +531,20 @@ class HawkService:
         if job is None or job["status"] in FINISHED:
             return
         kind = event.get("type")
-        if kind == "progress" and str(data.get("node")) == job["nodes"].get("director"):
-            job["segments_done"] = int(data.get("value") or 0)
-            job["segments_total"] = int(data.get("max") or job.get("segments_total") or 0)
+        if kind == "hawk_h3.segment":
+            job["segments_done"] = int(data.get("done") or 0)
+            job["segments_total"] = int(data.get("total") or job.get("segments_total") or 0)
+            job["current_segment"] = data.get("title") or None
+            job["steps_done"] = 0
+            job["status"] = "rendering"
+            self.store.save_job(job)
+        elif kind == "progress" and str(data.get("node")) == job["nodes"].get("director"):
+            # The sampler's per-step bar reports under the Director node. The Director's own
+            # segment bar arrives right after its hawk_h3.segment event and is skipped here.
+            value, maximum = int(data.get("value") or 0), int(data.get("max") or 0)
+            if maximum == job.get("segments_total") and value == job.get("segments_done"):
+                return
+            job["steps_done"], job["steps_total"] = value, maximum
             job["status"] = "rendering"
             self.store.save_job(job)
         elif kind == "executed":
@@ -665,7 +679,13 @@ class HawkService:
             "status": job["status"],
             "created_at": job["created_at"],
             "updated_at": job["updated_at"],
-            "progress": {"segments_done": job.get("segments_done", 0), "segments_total": job.get("segments_total")},
+            "progress": {
+                "segments_done": job.get("segments_done", 0),
+                "segments_total": job.get("segments_total"),
+                "current_segment": job.get("current_segment"),
+                "steps_done": job.get("steps_done", 0),
+                "steps_total": job.get("steps_total"),
+            },
             "script": job.get("script"),
             "error": job.get("error"),
             "resumable": job.get("resumable", False),

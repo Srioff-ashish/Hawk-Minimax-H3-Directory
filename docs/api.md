@@ -314,7 +314,9 @@ The server's instructions teach the assistant the flow, the reference roles and 
 
 **Statuses:** `queued` → `planning` (LLM step, if any) → `rendering` → `done`, or `failed` / `cancelled`.
 
-**Progress** is `segments_done / segments_total`. It updates after each segment finishes, so a 3-segment film shows 0/3 for a while, then 1/3.
+**Progress** has two levels:
+- `segments_done / segments_total` and `current_segment` (its title) update when a segment finishes. A 3-segment film shows 0/3, then 1/3…
+- `steps_done / steps_total` is the sampler inside the current segment (e.g. 5/8), so a long segment still shows movement. It restarts for each segment.
 
 **Resume:** each render keeps one `run_name` and one `seed`. The Director saves every finished segment under `ComfyUI/output/hawk_h3/<run_name>/`. `retry` resubmits the same graph, and the Director reuses finished segments. For one-call jobs whose plan had already arrived, it re-renders that exact plan instead of asking the LLM again.
 
