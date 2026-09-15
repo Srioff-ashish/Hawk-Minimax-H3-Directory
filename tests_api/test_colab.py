@@ -146,6 +146,14 @@ class Runtime(unittest.TestCase):
         self.assertEqual(hawk_colab.find_tunnel_url(log), "https://brave-otter-lane-hills.trycloudflare.com")
         self.assertIsNone(hawk_colab.find_tunnel_url("INF Starting tunnel"))
 
+    def test_api_tunnel_pattern_spares_other_tunnels(self):
+        import re
+
+        api_tunnel = f"/content/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:{hawk_colab.API_PORT}"
+        ui_tunnel = "/usr/local/bin/cloudflared tunnel --url http://localhost:8188 --no-autoupdate"
+        self.assertTrue(re.search(hawk_colab.API_TUNNEL_PATTERN, api_tunnel))
+        self.assertIsNone(re.search(hawk_colab.API_TUNNEL_PATTERN, ui_tunnel))
+
     def test_port_free(self):
         import socket
 

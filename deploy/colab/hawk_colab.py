@@ -57,6 +57,10 @@ TURBO_PREFERENCE = ["4step_v0.1_comfyui_bf16", "4step", "8step"]
 
 COMFY_PORT = 8188
 API_PORT = 8000
+#: `pkill -f` pattern for this launcher's own tunnel only. A notebook may run a second
+#: quick tunnel for the ComfyUI UI (e.g. `cloudflared tunnel --url http://localhost:8188`);
+#: restarting the API must not kill it.
+API_TUNNEL_PATTERN = rf"cloudflared tunnel --no-autoupdate --url http://127\.0\.0\.1:{API_PORT}"
 #: Cloudflare's free proxy rejects request bodies over 100 MB.
 TUNNEL_UPLOAD_MB = 100
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
@@ -624,8 +628,9 @@ def start(
 
     session = Session(comfy_dir, pack_dir, token, env, log_dir)
     _start_comfyui(session)
-    # Tunnels from an earlier run of this cell would keep serving old URLs.
-    subprocess.run(["pkill", "-f", "cloudflared tunnel"], capture_output=True)
+    # API tunnels from an earlier run of this cell would keep serving old URLs.
+    # Only ours: a ComfyUI UI tunnel started by the notebook keeps running.
+    subprocess.run(["pkill", "-f", API_TUNNEL_PATTERN], capture_output=True)
     _start_tunnel(session)
     _start_api(session)
     print(session.summary())
