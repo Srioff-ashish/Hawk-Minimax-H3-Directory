@@ -162,6 +162,14 @@
         </select>
       </div>
       <div class="field"><span class="lbl">Output size</span><div id="dims" class="small">—</div></div>
+      <div class="field" style="grid-column: 1 / -1">
+        <label for="unet">Base model (ref2va)</label>
+        <select id="unet"><option value="">Server default</option></select>
+      </div>
+      <div class="field" style="grid-column: 1 / -1">
+        <label for="clip">Text encoder</label>
+        <select id="clip"><option value="">Server default</option></select>
+      </div>
     </div>
     <details>
       <summary>Advanced</summary>
@@ -474,6 +482,29 @@
   $("aspect").addEventListener("change", updateDims);
   $("resolution").addEventListener("change", updateDims);
 
+  // --------------------------------------------------------------- models
+
+  const shortName = (file) => String(file || "").split(/[\\/]/).pop().replace(/\.(safetensors|pt|ckpt|bin|gguf)$/i, "");
+
+  function modelHint(file) {
+    const name = file.toLowerCase();
+    if (/bf16|fp16|fp32/.test(name)) return "best quality · slowest · most VRAM";
+    if (/nvfp4|fp4/.test(name)) return "fastest";
+    if (/int8|fp8/.test(name)) return "faster";
+    return "";
+  }
+
+  function fillModels(id, files, fallback) {
+    const select = $(id);
+    const current = select.value || fallback;
+    const list = (files || []).slice();
+    if (fallback && !list.includes(fallback)) list.unshift(fallback);
+    select.innerHTML = list.map((file) => {
+      const notes = [file === fallback ? (files || []).includes(file) ? "default" : "default, not found" : "", modelHint(file)].filter(Boolean);
+      return `<option value="${esc(file)}" title="${esc(file)}" ${file === current ? "selected" : ""}>${esc(shortName(file))}${notes.length ? ` — ${esc(notes.join(" · "))}` : ""}</option>`;
+    }).join("") || `<option value="">Server default</option>`;
+  }
+
   // ---------------------------------------------------------------- LoRAs
 
   async function loadOptions() {
@@ -486,6 +517,8 @@
     const aspects = state.options.aspect_ratios?.length ? state.options.aspect_ratios : FALLBACK_ASPECTS;
     const current = $("aspect").value || "16:9";
     $("aspect").innerHTML = aspects.map((a) => `<option ${a === current ? "selected" : ""}>${esc(a)}</option>`).join("");
+    fillModels("unet", state.options.diffusion_models, state.options.default_unet);
+    fillModels("clip", state.options.text_encoders, state.options.default_clip);
     $("preset").innerHTML = `<option value="">No preset</option>` + Object.keys(state.options.lora_presets || {}).map((name) => `<option>${esc(name)}</option>`).join("");
     for (const row of state.options.default_loras || []) {
       if (row.file && !state.lora[row.file]) state.lora[row.file] = { on: true, strength: row.strength };
@@ -561,6 +594,8 @@
     };
     if ($("steps").value.trim()) settings.steps = Number($("steps").value);
     if ($("seed").value.trim()) settings.seed = Number($("seed").value);
+    if ($("unet").value && $("unet").value !== state.options?.default_unet) settings.unet_name = $("unet").value;
+    if ($("clip").value && $("clip").value !== state.options?.default_clip) settings.clip_name = $("clip").value;
     return settings;
   }
 
@@ -632,7 +667,7 @@
 
   function progressHtml(job) {
     const p = job.progress || {};
-    if (job.status === "queued") return `<div class="indet"></div><p class="small muted">Waiting for the GPU…</p>`;
+    if (job.status === "queued") return `<div class="indet"></div><p class="small muted">${job.queue_position ? `#${job.queue_position} in line — ` : ""}Waiting for the GPU…</p>`;
     if (job.status === "planning") return `<div class="indet"></div><p class="small muted">The planner is writing the segments…</p>`;
     if (job.status !== "rendering") return "";
     const total = p.segments_total || 0;
@@ -645,6 +680,7 @@
   function metaHtml(job) {
     const rows = [];
     if (job.kind === "render") {
+      if (job.unet_name) rows.push(`${esc(shortName(job.unet_name))} · ${esc(shortName(job.clip_name))}`);
       if (job.steps) rows.push(`${job.steps} steps${job.steps_reason ? ` — ${esc(job.steps_reason)}` : ""}`);
       const applied = job.status === "done" ? job.loras_applied : job.loras;
       if (applied?.length) rows.push(`LoRAs${job.status === "done" ? " applied" : ""}: ${applied.map((l) => `${esc(l.file)} @ ${l.strength}`).join(", ")}`);

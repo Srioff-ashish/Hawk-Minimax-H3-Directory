@@ -255,6 +255,8 @@ curl -H "$AUTH" -H 'content-type: application/json' "$API/v1/videos" -d '{
 | `audio_crossfade_ms` | 60 | |
 | `loras`, `lora_preset`, `use_default_loras` | | See [LoRAs](#2-choose-loras-lorasjson) |
 | `attention` | server setting | |
+| `unet_name` | server's model (`HAWK_UNET`) | A ref2va file from `/v1/options` → `diffusion_models`, by name or a unique part (`"bf16"`). bf16 = best quality, slowest; int8/fp8 faster. fl2va models are refused |
+| `clip_name` | server's encoder (`HAWK_CLIP`) | A Qwen3-VL file from `text_encoders`, e.g. `"int8"` or `"bf16"` |
 
 Script format and tag rules: [Writing scripts](scripts.md).
 
@@ -268,7 +270,7 @@ Script format and tag rules: [Writing scripts](scripts.md).
 | POST | `/v1/jobs/<id>/retry` | Resume a failed or cancelled job |
 | GET | `/v1/jobs/<id>/video` | Final MP4 |
 | GET | `/v1/jobs/<id>/segments/<n>` | One segment's MP4 |
-| GET | `/v1/options` | LoRA files, defaults, presets, samplers… |
+| GET | `/v1/options` | Base models, text encoders, LoRA files, defaults, presets, samplers… |
 | GET | `/healthz` | No auth: ComfyUI and LoRA status |
 
 A finished render's job:
@@ -282,6 +284,8 @@ A finished render's job:
   "loras": [{"requested": "minimax_h3_ref2v_turbo…", "file": "minimax_h3_ref2v_turbo….safetensors", "strength": 1.0, "turbo": true, "source": "default"}],
   "loras_applied": [{"file": "minimax_h3_ref2v_turbo….safetensors", "strength": 1.0}],
   "seed": 81234567, "run_name": "api_5c0e1b2a3d4f5061",
+  "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+  "queue_position": null,
   "video_url": "https://…/v1/jobs/5c0e…/video?exp=…&sig=…",
   "segment_urls": ["https://…/segments/1?exp=…&sig=…", "…"],
   "warnings": [], "error": null, "resumable": false
@@ -301,7 +305,7 @@ Errors are JSON `{"error": "…", "details": {…}}` with status 401 (token), 40
 | `upload_page_link` | Signed link to the browser upload page |
 | `add_reference_from_url` | Fetch a public file URL onto the pod |
 | `list_references` | Uploaded assets |
-| `list_options` | LoRAs on the pod, defaults, presets, samplers, aspect ratios |
+| `list_options` | Base models, text encoders and LoRAs on the pod, defaults, presets, samplers, aspect ratios |
 | `plan_film` | Start a plan job |
 | `render_film` | Start a render: `script`, `plan_job_id` or `story`, plus `references`, `settings`, `loras`, `lora_preset` |
 | `get_job` | Status, progress, script, video link |
@@ -324,7 +328,11 @@ The server's instructions teach the assistant the flow, the reference roles and 
 
 **Restarts:** ComfyUI keeps its queue in memory. If ComfyUI or the pod restarts mid-render, the gateway notices within about a minute and marks the job `failed` with `resumable: true` and a message saying so. Call `retry` once ComfyUI is back. The job database survives in `DATA_DIR`.
 
-One render runs at a time. ComfyUI queues further jobs, and they show `rendering` with 0 progress until their turn.
+One render runs at a time. Further jobs wait in ComfyUI's queue with status `queued` and `queue_position` (1 = next after the current render), and switch to `planning` or `rendering` when ComfyUI starts them.
+
+**Out of GPU memory:** the Director retries a step once after unloading every cached model, which covers ComfyUI underestimating what a segment needs. If it runs out again, the job fails with a message naming the step. Lower `megapixels` or the segment length, use fewer LoRAs, or pick a smaller `unet_name`/`clip_name`, then `retry`: finished segments are reused.
+
+**Planner slips:** if the LLM lists a reference number that doesn't exist (for example `poses: [4]` with no poses) and never mentions it in the prompt, the number is dropped and a warning is added to the job instead of failing the plan.
 
 ---
 

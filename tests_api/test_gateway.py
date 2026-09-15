@@ -41,6 +41,11 @@ PLAN_SCRIPT = json.dumps({
     ],
 })
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+UNET_INT8 = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+UNET_BF16 = "h3/minimax_h3_ref2va_pruned_bf16.safetensors"
+UNET_FL2VA = "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
+CLIP_INT8 = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+CLIP_BF16 = "qwen3vl_32b_minimax_h3_bf16.safetensors"
 
 
 def free_port() -> int:
@@ -50,17 +55,24 @@ def free_port() -> int:
 
 
 class FakeComfy:
-    """Just enough of ComfyUI's HTTP + websocket API, with the real message shapes."""
+    """Just enough of ComfyUI's HTTP + websocket API, with the real message shapes.
+    Like ComfyUI, one worker runs prompts one at a time; the rest wait in the queue."""
 
     def __init__(self):
         self.inputs: dict[str, bytes] = {}
         self.outputs: dict[str, bytes] = {}
         self.history: dict[str, dict] = {}
         self.running: dict[str, asyncio.Task] = {}
+        self.pending: list[tuple[int, str, str, dict]] = []
+        self.worker: asyncio.Task | None = None
         self.cancelled: set[str] = set()
         self.sockets: dict[str, web.WebSocketResponse] = {}
         self.prompts: dict[str, dict] = {}
-        self.loras = [TURBO, REALISM]
+        self.model_files = {
+            "loras": [TURBO, REALISM],
+            "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
+            "text_encoders": [CLIP_INT8, CLIP_BF16, "umt5_xxl.safetensors"],
+        }
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
         self.app.add_routes([
             web.post("/upload/image", self.upload),
@@ -92,8 +104,16 @@ class FakeComfy:
         if errors:
             return web.json_response({"error": {"message": "Prompt outputs failed validation"}, "node_errors": errors}, status=400)
         self.prompts[pid] = prompt
-        self.running[pid] = asyncio.create_task(self.run(pid, client, prompt))
+        self.pending.append((len(self.prompts), pid, client, prompt))
+        if self.worker is None or self.worker.done():
+            self.worker = asyncio.create_task(self.work())
         return web.json_response({"prompt_id": pid, "number": len(self.prompts), "node_errors": {}})
+
+    async def work(self):
+        while self.pending:
+            _, pid, client, prompt = self.pending.pop(0)
+            self.running[pid] = asyncio.create_task(self.run(pid, client, prompt))
+            await self.running[pid]
 
     async def send(self, client, kind, data):
         socket_ = self.sockets.get(client)
@@ -156,12 +176,18 @@ class FakeComfy:
         return web.json_response({pid: self.history[pid]} if pid in self.history else {})
 
     async def queue(self, _request):
-        return web.json_response({"queue_running": [[0, pid, {}, {}, []] for pid in self.running], "queue_pending": []})
+        # Reversed on purpose: ComfyUI's pending list is a heap, not in run order.
+        return web.json_response({
+            "queue_running": [[0, pid, {}, {}, []] for pid in self.running],
+            "queue_pending": [[number, pid, {}, {}, []] for number, pid, _, _ in reversed(self.pending)],
+        })
 
     async def cancel(self, request):
         pid = request.match_info["pid"]
+        waiting = [item for item in self.pending if item[1] == pid]
+        self.pending = [item for item in self.pending if item[1] != pid]
         self.cancelled.add(pid)
-        return web.json_response({"cancelled": pid in self.running})
+        return web.json_response({"cancelled": pid in self.running or bool(waiting)})
 
     async def view(self, request):
         key = f"{request.query.get('subfolder', '')}/{request.query['filename']}"
@@ -170,7 +196,7 @@ class FakeComfy:
         return web.Response(body=self.outputs[key], content_type="video/mp4")
 
     async def models(self, request):
-        return web.json_response(self.loras if request.match_info["folder"] == "loras" else [])
+        return web.json_response(self.model_files.get(request.match_info["folder"], []))
 
     async def object_info(self, request):
         node = request.match_info["node"]
@@ -190,10 +216,13 @@ class FakeComfy:
         return socket_
 
     def restart(self):
-        """ComfyUI restart: running prompts and in-memory history are gone, files stay."""
+        """ComfyUI restart: running and queued prompts and in-memory history are gone, files stay."""
+        if self.worker is not None:
+            self.worker.cancel()
         for task in self.running.values():
             task.cancel()
         self.running.clear()
+        self.pending.clear()
         self.history.clear()
 
 
@@ -267,7 +296,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         references = [{"asset_id": asset, "role": "picture", "label": "her face"}]
 
         plan = (await self.http.post("/v1/plans", json={"story": "A walk", "references": references, "segment_count": 2})).json()
-        self.assertEqual(plan["status"], "planning")
+        self.assertIn(plan["status"], ("queued", "planning"))
         plan = await self.wait(plan["id"])
         self.assertEqual(plan["status"], "done", plan)
         self.assertEqual(json.loads(plan["script"])["segments"][0]["title"], "One")
@@ -306,7 +335,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             "references": [{"asset_id": asset, "role": "picture"}],
             "story": {"story": "A walk", "segment_count": 2},
         })).json()
-        self.assertEqual(job["status"], "planning")
+        self.assertIn(job["status"], ("queued", "planning", "rendering"))  # the fake plans instantly
         job = await self.wait(job["id"])
         self.assertEqual((job["status"], job["progress"]["segments_total"]), ("done", 2), job)
         self.assertIn("segments", job["script"])
@@ -326,7 +355,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(both.status_code, 422)
         self.assertEqual(self.fake.prompts, {})
 
-        self.fake.loras = [REALISM]  # turbo LoRA removed from the pod
+        self.fake.model_files["loras"] = [REALISM]  # turbo LoRA removed from the pod
         refused = await self.http.post("/v1/videos", json={"script": "A"})
         self.assertEqual(refused.status_code, 422)
         self.assertIn("Required default LoRA", refused.json()["error"])
@@ -334,6 +363,43 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(health["loras"], "degraded")
         allowed = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"use_default_loras": False}})).json()
         self.assertEqual((allowed["steps"], allowed["loras"]), (30, []))
+
+    async def test_model_choice(self):
+        options = (await self.http.get("/v1/options")).json()
+        self.assertEqual((options["diffusion_models"], options["text_encoders"]), ([UNET_INT8, UNET_BF16], [CLIP_INT8, CLIP_BF16]))
+        self.assertEqual(options["default_unet"], UNET_INT8)
+
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "bf16", "clip_name": "qwen3vl_32b_minimax_h3_bf16"}})).json()
+        self.assertEqual((job["unet_name"], job["clip_name"]), (UNET_BF16, CLIP_BF16), job)
+        loader = next(n for n in self.fake.prompts[job["id"]].values() if n["class_type"] == "HawkH3ModelLoader")
+        self.assertEqual((loader["inputs"]["unet_name"], loader["inputs"]["clip_name"]), (UNET_BF16, CLIP_BF16))
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
+
+        default = (await self.http.post("/v1/videos", json={"script": "A"})).json()
+        self.assertEqual(default["unet_name"], UNET_INT8)
+        fl2va = await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "fl2va_pruned_int8"}})
+        self.assertEqual(fl2va.status_code, 422)
+        self.assertIn("needs a ref2va model", fl2va.json()["error"])
+        encoder = await self.http.post("/v1/videos", json={"script": "A", "settings": {"clip_name": "umt5"}})
+        self.assertEqual(encoder.status_code, 422)
+        self.assertIn("Text encoder 'umt5'", encoder.json()["error"])
+        await self.wait(default["id"])
+
+    async def test_second_job_waits_in_queue(self):
+        first = (await self.http.post("/v1/videos", json={"script": "SLOW one\n---\nSLOW two\n---\nSLOW three"})).json()
+        await self.wait(first["id"], statuses=("rendering",))
+        second = (await self.http.post("/v1/videos", json={"script": "Quick one"})).json()
+        third = (await self.http.post("/v1/videos", json={"script": "Quick two"})).json()
+        self.assertEqual((second["status"], second["queue_position"]), ("queued", 1), second)
+        self.assertEqual((third["status"], third["queue_position"]), ("queued", 2), third)
+        self.assertEqual(second["progress"]["segments_done"], 0)
+
+        first = await self.wait(first["id"])
+        promoted = await self.wait(third["id"], statuses=("queued", "rendering", "done"), check=lambda j: j["queue_position"] != 2)
+        self.assertIn(promoted["queue_position"], (1, None))
+        second, third = await self.wait(second["id"]), await self.wait(third["id"])
+        self.assertEqual([j["status"] for j in (first, second, third)], ["done", "done", "done"])
+        self.assertIsNone(third["queue_position"])
 
     async def test_failure_restart_retry_and_cancel(self):
         failed = (await self.http.post("/v1/videos", json={"script": "FAILRENDER"})).json()

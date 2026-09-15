@@ -33,6 +33,7 @@ from .loras import (
     default_status,
     load_config,
     parse_applied,
+    resolve_name,
     resolve_request,
 )
 from .schemas import PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
@@ -43,6 +44,23 @@ ACTIVE = ("queued", "planning", "rendering")
 FINISHED = ("done", "failed", "cancelled")
 #: A job whose prompt ComfyUI no longer knows is only declared lost after this grace period.
 LOST_AFTER_SECONDS = 20.0
+#: models folder -> (file-name family the Director can use, label for errors)
+MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders": ("qwen3vl", "Text encoder")}
+
+
+def model_family(folder: str, files: list[str]) -> list[str]:
+    family = MODEL_FAMILIES[folder][0]
+    return [name for name in files if family in os.path.basename(name).lower()]
+
+
+def script_warnings(text: str) -> list[str]:
+    """The planner's notes about what it fixed, carried in its JSON script."""
+    try:
+        data = json.loads(text)
+    except (TypeError, ValueError):
+        return []
+    warnings = data.get("warnings") if isinstance(data, dict) else None
+    return [str(item) for item in warnings] if isinstance(warnings, list) else []
 
 
 class RequestError(ValueError):
@@ -165,7 +183,7 @@ class HawkService:
         self.settings = settings
         self.store = store or Store(settings.db_path)
         self.comfy = comfy or ComfyClient(settings.comfy_url)
-        self._lora_cache: tuple[float, list[str]] = (0.0, [])
+        self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
 
     # ------------------------------------------------------------ lifecycle
@@ -188,15 +206,43 @@ class HawkService:
 
     # ----------------------------------------------------------- LoRAs
 
-    async def available_loras(self, refresh: bool = False) -> list[str]:
-        stamp, files = self._lora_cache
+    async def available_models(self, folder: str, refresh: bool = False) -> list[str]:
+        stamp, files = self._model_cache.get(folder, (0.0, []))
         if refresh or time.monotonic() - stamp > self.settings.lora_cache_seconds:
             try:
-                files = await self.comfy.list_models("loras")
+                files = await self.comfy.list_models(folder)
             except ComfyError as exc:
                 raise Unavailable(str(exc)) from exc
-            self._lora_cache = (time.monotonic(), files)
+            self._model_cache[folder] = (time.monotonic(), files)
         return files
+
+    async def available_loras(self, refresh: bool = False) -> list[str]:
+        return await self.available_models("loras", refresh)
+
+    async def choose_model(self, requested: str | None, folder: str, default: str) -> str:
+        """A per-render base model or text encoder, matched like LoRA names."""
+        if not requested or not requested.strip():
+            return default
+        _, label = MODEL_FAMILIES[folder]
+        for refresh in (False, True):  # a file may have been added since the cached listing
+            files = await self.available_models(folder, refresh=refresh)
+            choices = model_family(folder, files)
+            try:
+                return resolve_name(requested, choices, label=label, folder=folder)
+            except LoraError as exc:
+                error = exc
+        if folder == "diffusion_models":
+            try:
+                other = resolve_name(requested, files)
+            except LoraError:
+                other = None
+            if other and "fl2va" in os.path.basename(other).lower():
+                raise RequestError(
+                    f"{other} is an fl2va model (first/last-frame video); the Director needs a ref2va model. "
+                    f"Choices: {', '.join(choices) or 'none found'}.",
+                    {"requested": requested, "choices": choices},
+                )
+        raise RequestError(f"{error} Choices: {', '.join(choices) or 'none found'}.", {**error.details, "choices": choices})
 
     async def resolve_loras(self, settings: RenderSettings) -> tuple[list[ResolvedLora], list[str]]:
         config = load_config(self.settings.loras_path)
@@ -232,6 +278,10 @@ class HawkService:
         config = load_config(self.settings.loras_path)
         director = await self.comfy.object_info("HawkH3Director")
         return {
+            "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
+            "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
+            "default_unet": self.settings.models.unet_name,
+            "default_clip": self.settings.models.clip_name,
             "available_loras": available,
             "default_loras": default_status(config, available),
             "lora_presets": {name: [dataclasses.asdict(spec) for spec in specs] for name, specs in config.presets.items()},
@@ -377,7 +427,7 @@ class HawkService:
             video_has_audio=wiring.video_has_audio,
             seed=seed,
         )
-        return await self._submit(job, "planning")
+        return await self._submit(job)
 
     async def create_video(self, request: VideoRequest) -> dict:
         settings = request.settings
@@ -417,7 +467,13 @@ class HawkService:
             interpolation=settings.interpolation,
             audio_crossfade_ms=settings.audio_crossfade_ms,
         )
-        models = dataclasses.replace(self.settings.models, attention=settings.attention or self.settings.models.attention)
+        defaults = self.settings.models
+        models = dataclasses.replace(
+            defaults,
+            attention=settings.attention or defaults.attention,
+            unet_name=await self.choose_model(settings.unet_name, "diffusion_models", defaults.unet_name),
+            clip_name=await self.choose_model(settings.clip_name, "text_encoders", defaults.clip_name),
+        )
         if request.story is not None:
             planner = self._planner_args(request.story, seed % 2**31)
 
@@ -450,9 +506,10 @@ class HawkService:
             steps_reason=steps_reason,
             warnings=warnings,
         )
-        return await self._submit(job, "planning" if planner else "rendering")
+        return await self._submit(job)
 
-    async def _submit(self, job: dict, status: str) -> dict:
+    async def _submit(self, job: dict) -> dict:
+        """Queue the graph. The job stays `queued` until ComfyUI starts it (execution_start)."""
         # The first attempt reuses the job id; retries need a fresh id because
         # ComfyUI keeps finished prompt ids in its history.
         job["prompt_id"] = job["id"] if job["attempts"] == 0 else str(uuid.uuid4())
@@ -468,12 +525,36 @@ class HawkService:
             job.update(status="failed", error=str(exc), resumable=True)
             self.store.save_job(job)
             raise Unavailable(str(exc)) from None
-        current = self.store.get_job(job["id"]) or job
-        if current["status"] == "queued":
-            current["status"] = status
+        current = self.store.get_job(job["id"]) or job  # events may already have moved it on
         current["attempts"] = job["attempts"] + 1
         self.store.save_job(current)
-        return current
+        await self._refresh_queue()
+        return self.store.get_job(job["id"]) or current
+
+    @staticmethod
+    def _started_status(job: dict) -> str:
+        if job["kind"] == "plan" or (job["nodes"].get("planner") and not job.get("script")):
+            return "planning"
+        return "rendering"
+
+    async def _refresh_queue(self) -> None:
+        """Promote queued jobs ComfyUI has started and number the ones still waiting."""
+        if not self.store.list_jobs(limit=1, statuses=("queued",)):
+            return
+        try:
+            running, pending = await self.comfy.queue_state()
+        except ComfyError:
+            return
+        positions = {prompt_id: number for number, prompt_id in enumerate(pending, 1)}
+        for job in self.store.list_jobs(limit=500, statuses=("queued",)):
+            prompt_id = job.get("prompt_id")
+            if prompt_id in running:
+                job.update(status=self._started_status(job), queue_position=None)
+            elif prompt_id in positions and job.get("queue_position") != positions[prompt_id]:
+                job["queue_position"] = positions[prompt_id]
+            else:
+                continue
+            self.store.save_job(job)
 
     def get_job(self, job_id: str) -> dict:
         job = self.store.get_job(job_id)
@@ -517,8 +598,7 @@ class HawkService:
                 raise RequestError(str(exc)) from None
             job.update(graph=built.prompt, nodes=built.nodes)
         job.update(error=None, resumable=False, outputs={}, loras_applied_by_node={}, loras_applied=[], segments_done=0)
-        status = "planning" if job["nodes"].get("planner") or job["kind"] == "plan" else "rendering"
-        return await self._submit(job, status)
+        return await self._submit(job)
 
     # ---------------------------------------------------------- events
 
@@ -531,7 +611,12 @@ class HawkService:
         if job is None or job["status"] in FINISHED:
             return
         kind = event.get("type")
-        if kind == "hawk_h3.segment":
+        if kind == "execution_start":
+            if job["status"] == "queued":
+                job.update(status=self._started_status(job), queue_position=None)
+                self.store.save_job(job)
+            await self._refresh_queue()
+        elif kind == "hawk_h3.segment":
             job["segments_done"] = int(data.get("done") or 0)
             job["segments_total"] = int(data.get("total") or job.get("segments_total") or 0)
             job["current_segment"] = data.get("title") or None
@@ -552,17 +637,23 @@ class HawkService:
             self.store.save_job(job)
         elif kind == "execution_success":
             await self._finish(job)
+            await self._refresh_queue()
         elif kind == "execution_error":
             message = f"{data.get('node_type', 'node')}: {str(data.get('exception_message', '')).strip()}"
             self._fail(job, message)
+            await self._refresh_queue()
         elif kind == "execution_interrupted":
             job.update(status="cancelled", resumable=job["kind"] == "render")
             self.store.save_job(job)
+            await self._refresh_queue()
 
     def _apply_output(self, job: dict, node: str, output: dict) -> None:
         texts = output.get("text") or []
         if node == job["nodes"].get("plan_preview") and texts:
             job["script"] = texts[0]
+            for warning in script_warnings(texts[0]):
+                if warning not in job["warnings"]:
+                    job["warnings"].append(warning)
             if job["kind"] == "render":
                 settings = RenderSettings(**job["request"]["settings"])
                 try:
@@ -639,6 +730,7 @@ class HawkService:
         active = self.store.list_jobs(limit=500, statuses=ACTIVE)
         if not active:
             return
+        await self._refresh_queue()
         try:
             queued = await self.comfy.queue_ids()
         except ComfyError:
@@ -677,6 +769,7 @@ class HawkService:
             "id": job["id"],
             "kind": job["kind"],
             "status": job["status"],
+            "queue_position": job.get("queue_position") if job["status"] == "queued" else None,
             "created_at": job["created_at"],
             "updated_at": job["updated_at"],
             "progress": {
@@ -699,6 +792,8 @@ class HawkService:
                 loras=job.get("loras", []),
                 loras_applied=job.get("loras_applied", []),
                 run_name=job.get("run_name"),
+                unet_name=(job.get("models") or {}).get("unet_name"),
+                clip_name=(job.get("models") or {}).get("clip_name"),
                 video_url=None,
                 segment_urls=[],
             )

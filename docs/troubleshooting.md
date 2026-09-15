@@ -114,7 +114,7 @@ Usually `json_mode` on a model that doesn't support it, or images sent to a text
 Raise `max_tokens`.
 
 **`The planner's reply is not a usable script: …`**
-The LLM mentioned a reference that isn't connected, or broke the format. The message includes the reply. Try another `seed`, a stronger model, or `json_mode` on. If it keeps inventing references, add `labels` and state in `story` which references exist.
+The LLM mentioned a reference that isn't connected, or broke the format. The message includes the reply. (A number that only appears in a list, like `poses: [4]` with no poses connected, no longer fails: it is removed and shown as a ⚠ warning in the preview.) Try another `seed`, a stronger model, or `json_mode` on. If it keeps inventing references, add `labels` and state in `story` which references exist.
 
 **`Atlas request timed out…`**
 Raise `timeout`; large reference sets with big images take longer. Lowering `image_max_side` also helps.
@@ -144,8 +144,8 @@ Connect a picture or pick a fixed ratio.
 **`Segment N decoded at X Hz but earlier segments at Y Hz…`**
 Old segments in the run folder were made with a different audio VAE. Use a new `run_name`, delete the folder, or queue once with `resume` off.
 
-**Out of memory (CUDA OOM).**
-See [Performance and memory](long-videos.md#performance-and-memory). Finished segments are safe on disk: after changing settings that are *not* in the fingerprint (e.g. `encode_all_first`), queue again to continue where it stopped.
+**Out of memory (CUDA OOM, `Allocation on device 0 would exceed allowed memory`).**
+ComfyUI keeps models cached on the GPU and sometimes underestimates what the next step needs, often at the start of a later segment, whose continuity guide adds tokens. The Director catches that, unloads every cached model and retries the step once; the ComfyUI log shows `Out of GPU memory during sampling (segment 3); unloading cached models and retrying once.` If it fails again the error reads `…even after unloading cached models`: the step really doesn't fit. Lower `megapixels` or segment `duration`, use fewer LoRAs or a smaller model/text encoder. See [Performance and memory](long-videos.md#performance-and-memory). Finished segments are safe on disk: after changing settings that are *not* in the fingerprint (e.g. `encode_all_first`), queue again to continue where it stopped.
 
 **Where are my files?**
 `ComfyUI/output/hawk_h3/<run_name>/`. The `info` output lists every path.

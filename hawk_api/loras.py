@@ -92,9 +92,9 @@ def _stem(path: str) -> str:
     return re.sub(r"\.(safetensors|pt|pth|ckpt|bin)$", "", base, flags=re.IGNORECASE).lower()
 
 
-def resolve_name(name: str, available: list[str]) -> str:
-    """Match a requested LoRA to a real file, in order: exact path, file name
-    (any folder, any case, extension optional), then a unique substring."""
+def resolve_name(name: str, available: list[str], *, label: str = "LoRA", folder: str = "loras") -> str:
+    """Match a requested file (a LoRA by default) to a real one, in order: exact path,
+    file name (any folder, any case, extension optional), then a unique substring."""
     wanted = _normalise(name.strip())
     originals = {_normalise(f): f for f in available}
     if wanted in originals:
@@ -105,7 +105,7 @@ def resolve_name(name: str, available: list[str]) -> str:
         return by_name[0]
     if len(by_name) > 1:
         raise LoraError(
-            f"LoRA {name!r} matches several files: {', '.join(by_name)}. Use the full path.",
+            f"{label} {name!r} matches several files: {', '.join(by_name)}. Use the full path.",
             details={"requested": name, "matches": by_name},
         )
 
@@ -115,7 +115,7 @@ def resolve_name(name: str, available: list[str]) -> str:
         return contains[0]
     if len(contains) > 1:
         raise LoraError(
-            f"LoRA {name!r} matches several files: {', '.join(contains)}. Use a longer name or the full path.",
+            f"{label} {name!r} matches several files: {', '.join(contains)}. Use a longer name or the full path.",
             details={"requested": name, "matches": contains},
         )
 
@@ -123,7 +123,7 @@ def resolve_name(name: str, available: list[str]) -> str:
     close = [stems[s] for s in difflib.get_close_matches(_stem(wanted), list(stems), n=5, cutoff=0.4)]
     hint = f" Closest files: {', '.join(close)}." if close else " No similar files are in the folder."
     raise LoraError(
-        f"LoRA {name!r} is not in ComfyUI's models/loras.{hint}",
+        f"{label} {name!r} is not in ComfyUI's models/{folder}.{hint}",
         details={"requested": name, "suggestions": close, "available_count": len(available)},
     )
 

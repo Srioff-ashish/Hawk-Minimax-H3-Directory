@@ -119,7 +119,7 @@ The start cell also prints a **Studio** link: `https://….trycloudflare.com/t/<
 
 1. **References:** drop images (or audio/video). For each one choose *Picture* (who, what, where) or *Pose* (body pose only), and click its tag, e.g. `<Picture 1>`, to put it in the prompt.
 2. **Prompt:** *Direct prompt* renders what you write. *AI planner* writes a multi-segment plan from your idea: *Write plan* lets you edit it first, *Plan & render* does both.
-3. **Video:** duration (per segment in planner mode), segment count, aspect ratio and resolution. Preview 0.4 MP is fastest; Native 0.98 MP is H3's normal size.
+3. **Video:** duration (per segment in planner mode), segment count, aspect ratio and resolution. Preview 0.4 MP is fastest; Native 0.98 MP is H3's normal size. **Base model** and **Text encoder** list the ref2va and Qwen3-VL files in your ComfyUI: int8 for quick previews, bf16 for the best quality (slowest, most VRAM).
 4. **LoRAs:** tick any LoRA from the server's `models/loras` and set its strength. The turbo LoRA is on by default.
 5. **Generate.** The right side shows progress by segment and sampling step, then the video player and download links.
 
@@ -153,7 +153,7 @@ Then work in the chat as described in [API → Using it from a chat](api.md#5-us
 | **Uploads through the tunnel ≤ 100 MB** | Cloudflare's free proxy limit | Big reference videos: put them online (Drive share link, Hugging Face…) and use `add_reference_from_url`; that download happens inside Colab, not through the tunnel |
 | **Nothing survives the session** | Chosen setup: no Drive | Download finished videos before stopping (the `video_url` links die with the runtime). Unfinished renders can't be resumed in a new session |
 | **Session time limits** | Colab idle and maximum runtime limits | Keep cell 5 running and the tab open during long renders; plan long films as several shorter jobs |
-| **One render at a time** | One GPU | Jobs queue; `get_job` shows 0 progress while waiting |
+| **One render at a time** | One GPU | Jobs queue: they show `queued` with their place in line (`#1` = next) until ComfyUI starts them |
 | **Quick tunnels are for testing** | Cloudflare's terms: no uptime guarantee, 200 concurrent requests | Fine for personal use from your chats; not for sharing publicly |
 
 ## Settings
@@ -184,4 +184,5 @@ The turbo LoRA is always downloaded and is required by default ([loras.json](api
 | Claude says the connector can't connect | The URL is from an old session. Copy the current one from cell 4 (or from cell 5's output after a tunnel restart) |
 | Chat reports `422 Required default LoRA … missing` | Cell 3 didn't finish; rerun it, then retry |
 | Planning fails with an Atlas error | Add the `ATLAS_API_KEY` secret with notebook access, then rerun cell 4 |
+| `HawkH3Director: Allocation on device 0 would exceed allowed memory` | Update the pack and restart ComfyUI: the Director now unloads cached models and retries the step once. If the error says `even after unloading cached models`, lower megapixels or duration, or choose an int8 model/text encoder. Retry the job: finished segments are reused |
 | Colab disconnected mid-render | The session and all files are gone; start a new session and render again (use a lower `megapixels` preview first) |

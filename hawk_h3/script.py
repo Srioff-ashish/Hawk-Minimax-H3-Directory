@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 
 FPS = 24
 #: 362 frames -- the top of H3's trained range.
@@ -73,12 +73,11 @@ class Script:
     segments: list[Segment]
     style: str = ""
 
-    def to_json(self) -> str:
-        return json.dumps(
-            {"style": self.style, "segments": [asdict(s) for s in self.segments]},
-            indent=2,
-            ensure_ascii=False,
-        )
+    def to_json(self, warnings: list[str] | None = None) -> str:
+        data: dict = {"style": self.style, "segments": [asdict(s) for s in self.segments]}
+        if warnings:
+            data["warnings"] = list(warnings)  # informational; parse_script ignores it
+        return json.dumps(data, indent=2, ensure_ascii=False)
 
 
 @dataclass
@@ -369,6 +368,45 @@ def remap_tags(
         return "<%s %d>" % target
 
     return _TAG.sub(replace, text)
+
+
+_LIST_FIELDS = (("pictures", "Picture"), ("poses", "Pose"), ("videos", "Video"), ("audios", "Audio"))
+
+
+def reference_counts_line(available: dict[str, int]) -> str:
+    """One line for an LLM: how many of each reference kind exist."""
+    counts = ", ".join(f"{available.get(kind, 0)} {kind.lower()}(s)" for _, kind in _LIST_FIELDS)
+    return (
+        f"Connected references: {counts}. Reference lists may only use numbers up to these counts; "
+        f"use [] for a kind with 0."
+    )
+
+
+def drop_unavailable_references(script: Script, available: dict[str, int]) -> tuple[Script, list[str]]:
+    """Remove list numbers that point past the connected references -- a common LLM slip,
+    such as ``poses: [4]`` with no poses connected. A number whose tag the segment (or the
+    style) actually mentions is kept, so a real mistake still fails in build_jobs."""
+    warnings: list[str] = []
+    style_tags = set(find_tags(script.style))
+    segments = []
+    for index, segment in enumerate(script.segments):
+        mentioned = style_tags | set(find_tags(segment.prompt))
+        changes: dict[str, list[int]] = {}
+        for name, kind in _LIST_FIELDS:
+            chosen = getattr(segment, name)
+            if chosen is None:
+                continue
+            count = available.get(kind, 0)
+            dropped = [n for n in chosen if n > count and (kind, n) not in mentioned]
+            if dropped:
+                changes[name] = [n for n in chosen if n not in dropped]
+                where = f"Segment {index + 1}" + (f" ({segment.title})" if segment.title else "")
+                warnings.append(
+                    f"{where}: removed {kind.lower()} {dropped} from its {name} list; "
+                    f"only {count} {kind.lower()}(s) are connected."
+                )
+        segments.append(replace(segment, **changes) if changes else segment)
+    return Script(segments, script.style), warnings
 
 
 def _join_tags(tags: list[str]) -> str:

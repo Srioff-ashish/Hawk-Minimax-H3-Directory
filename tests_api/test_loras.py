@@ -52,6 +52,13 @@ class ResolveName(unittest.TestCase):
         with self.assertRaises(LoraError) as ctx:
             resolve_name("realism-peple", AVAILABLE)
         self.assertIn(AVAILABLE[1], ctx.exception.details["suggestions"])
+        self.assertIn("LoRA 'realism-peple' is not in ComfyUI's models/loras", str(ctx.exception))
+
+    def test_other_folders(self):
+        models = ["minimax_h3_ref2va_pruned_int8_convrot.safetensors", "minimax_h3_ref2va_pruned_bf16.safetensors"]
+        self.assertEqual(resolve_name("bf16", models, label="Base model", folder="diffusion_models"), models[1])
+        with self.assertRaisesRegex(LoraError, "Base model 'fp8' is not in ComfyUI's models/diffusion_models"):
+            resolve_name("fp8", models, label="Base model", folder="diffusion_models")
 
 
 class ResolveRequest(unittest.TestCase):

@@ -652,7 +652,10 @@ def status_line(session: Session) -> str:
     for job in jobs:
         progress = job.get("progress") or {}
         done, total = progress.get("segments_done"), progress.get("segments_total")
-        parts.append(f"{job['kind']} {job['id'][:8]} {job['status']}" + (f" {done}/{total}" if total else ""))
+        detail = f" {done}/{total}" if total else ""
+        if job["status"] == "queued" and job.get("queue_position"):
+            detail = f" #{job['queue_position']}"
+        parts.append(f"{job['kind']} {job['id'][:8]} {job['status']}{detail}")
     return " | ".join(parts)
 
 

@@ -25,7 +25,14 @@ from .atlas import (
 )
 from .common import ASPECT_RATIOS, CATEGORY, H3Refs
 from .references import RefBundle
-from .script import FPS, ScriptError, build_jobs, parse_script
+from .script import (
+    FPS,
+    ScriptError,
+    build_jobs,
+    drop_unavailable_references,
+    parse_script,
+    reference_counts_line,
+)
 
 logger = logging.getLogger("HawkH3")
 
@@ -104,6 +111,7 @@ def build_request(
             f"- Write {count}.",
             f"- Target about {segment_seconds:g} seconds per segment (each 5-15s).",
             f"- Frame: {aspect_ratio}.",
+            f"- {reference_counts_line(refs.available())}",
             "- Return only the JSON object described in your instructions.",
         ]
     )
@@ -215,7 +223,7 @@ class HawkH3StoryPlanner(io.ComfyNode):
         reply = extract_message_text(response)
 
         try:
-            script = parse_script(reply)
+            script, fixes = drop_unavailable_references(parse_script(reply), bundle.available())
             jobs = build_jobs(
                 script,
                 available=bundle.available(),
@@ -231,9 +239,11 @@ class HawkH3StoryPlanner(io.ComfyNode):
                 f"Try again with a new seed, a stronger model, or json_mode toggled.\n\nReply:\n{reply[:2000]}"
             ) from None
 
-        script_json = script.to_json()
+        for fix in fixes:
+            logger.warning("HawkH3 planner: %s", fix)
+        script_json = script.to_json(warnings=fixes)
         total = sum(job.seconds for job in jobs)
-        warnings = [w for job in jobs for w in job.warnings]
+        warnings = fixes + [w for job in jobs for w in job.warnings]
         preview = f"{len(jobs)} segments, ~{total:.0f}s\n\n" + "\n\n".join(
             f"[{job.index + 1}] {script.segments[job.index].title or 'untitled'} ({job.seconds:.1f}s)\n"
             f"{script.segments[job.index].prompt}"

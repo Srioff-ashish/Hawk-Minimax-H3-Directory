@@ -62,6 +62,15 @@ class RenderSettings(BaseModel):
     lora_preset: str | None = Field(None, description="A preset name from the server's loras.json.")
     use_default_loras: bool = Field(True, description="false skips the server's default LoRAs (including the turbo LoRA).")
     attention: Attention | None = Field(None, description="Override the server's attention backend.")
+    unet_name: str | None = Field(
+        None,
+        description="ref2va base model from list_options.diffusion_models: a file name or a unique part such as 'bf16'. "
+        "Default: the server's model. bf16 is best quality but slowest; int8 / fp8 are faster.",
+    )
+    clip_name: str | None = Field(
+        None,
+        description="Qwen3-VL MiniMax text encoder from list_options.text_encoders (file name or unique part). Default: the server's.",
+    )
 
 
 class VideoRequest(BaseModel):

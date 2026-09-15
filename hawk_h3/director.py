@@ -40,6 +40,7 @@ from comfy_extras.nodes_minimax_h3 import MiniMaxH3AddGuide, MiniMaxH3ReferenceT
 
 from . import media
 from .common import ASPECT_RATIOS, CATEGORY, H3Pipe, H3Refs
+from .memory import run_with_oom_retry
 from .references import RefBundle
 from .script import CONTINUITY_MODES, FPS, MAX_TAIL_FRAMES, Job, build_jobs, job_key, parse_script
 
@@ -92,6 +93,23 @@ def _is_cached(paths: dict[str, str], key: str) -> bool:
         return False
 
 
+def _recover_memory() -> None:
+    """Drop every model ComfyUI keeps cached on the GPU; the next step reloads what it needs."""
+    comfy.model_management.unload_all_models()
+    comfy.model_management.soft_empty_cache(force=True)
+
+
+def _gpu_step(label: str, fn):
+    """Run one GPU-heavy step; on out-of-memory, unload cached models and try once more."""
+    return run_with_oom_retry(
+        fn,
+        label=label,
+        is_oom=comfy.model_management.is_oom,
+        recover=_recover_memory,
+        log=lambda message: logger.warning("HawkH3: %s", message),
+    )
+
+
 def _encode(pipe: dict, bundle: RefBundle, job: Job, width: int, height: int, ref_image_size: str):
     """MiniMaxH3ReferenceToVideo for one job, memoised across runs in this process."""
     cache_key = (
@@ -123,20 +141,23 @@ def _encode(pipe: dict, bundle: RefBundle, job: Job, width: int, height: int, re
             ref_video_audios[f"ref_video_audio_{slot}"] = video["audio"]
     ref_audios = {f"ref_audio_{slot}": bundle.audios[n - 1] for slot, n in enumerate(job.audios)}
 
-    cond, latent = MiniMaxH3ReferenceToVideo.execute(
-        clip=pipe["clip"],
-        prompt=job.prompt,
-        width=width,
-        height=height,
-        length=job.frames,
-        ref_image_size=ref_image_size,
-        vae=pipe["vae"],
-        audio_vae=pipe["audio_vae"],
-        ref_images=ref_images or None,
-        ref_videos=ref_videos or None,
-        ref_video_audios=ref_video_audios or None,
-        ref_audios=ref_audios or None,
-    ).args
+    cond, latent = _gpu_step(
+        f"text + reference encoding (segment {job.index + 1})",
+        lambda: MiniMaxH3ReferenceToVideo.execute(
+            clip=pipe["clip"],
+            prompt=job.prompt,
+            width=width,
+            height=height,
+            length=job.frames,
+            ref_image_size=ref_image_size,
+            vae=pipe["vae"],
+            audio_vae=pipe["audio_vae"],
+            ref_images=ref_images or None,
+            ref_videos=ref_videos or None,
+            ref_video_audios=ref_video_audios or None,
+            ref_audios=ref_audios or None,
+        ).args,
+    )
 
     _ENCODE_CACHE[cache_key] = (cond, latent)
     while len(_ENCODE_CACHE) > _ENCODE_CACHE_MAX:
@@ -152,15 +173,18 @@ def _add_continuity(cond, latent, tail: dict, job: Job, pipe: dict, carry_audio:
         sample_rate = int(tail["sample_rate"])
         samples = media.audio_samples(job.tail_frames, sample_rate)
         audio = {"waveform": tail["waveform"][..., -samples:], "sample_rate": sample_rate}
-    return MiniMaxH3AddGuide.execute(
-        positive=cond,
-        latent=latent,
-        frame_idx=0,
-        vae=pipe["vae"],
-        audio_vae=pipe["audio_vae"] if audio is not None else None,
-        image=frames,
-        audio=audio,
-    ).args[0]
+    return _gpu_step(
+        f"continuity guide (segment {job.index + 1})",
+        lambda: MiniMaxH3AddGuide.execute(
+            positive=cond,
+            latent=latent,
+            frame_idx=0,
+            vae=pipe["vae"],
+            audio_vae=pipe["audio_vae"] if audio is not None else None,
+            image=frames,
+            audio=audio,
+        ).args[0],
+    )
 
 
 def _announce_segment(done: int, total: int, title: str, cached: bool) -> None:
@@ -402,15 +426,23 @@ class HawkH3Director(io.ComfyNode):
                     cond = _add_continuity(cond, latent, tail, job, pipe, carry_audio)
                     trim = job.tail_frames
 
-                guider = Guider_Basic(model)
-                guider.set_conds(cond)
-                sampled = SamplerCustomAdvanced.execute(
-                    Noise_RandomNoise(job.seed), guider, sampler, sigmas, latent
-                ).args[0]
-                del cond, latent, guider
+                def sample(cond=cond, latent=latent, seed=job.seed):
+                    # Guider and noise are rebuilt on every attempt, so a retry samples identically.
+                    guider = Guider_Basic(model)
+                    guider.set_conds(cond)
+                    return SamplerCustomAdvanced.execute(
+                        Noise_RandomNoise(seed), guider, sampler, sigmas, latent
+                    ).args[0]
 
-                frames = media.fit_frames(nodes.VAEDecode().decode(vae, sampled)[0].cpu(), job.frames)
-                audio = vae_decode_audio(audio_vae, sampled)
+                label = f"segment {job.index + 1}"
+                sampled = _gpu_step(f"sampling ({label})", sample)
+                del cond, latent, sample
+
+                frames = media.fit_frames(
+                    _gpu_step(f"video decode ({label})", lambda: nodes.VAEDecode().decode(vae, sampled)[0].cpu()),
+                    job.frames,
+                )
+                audio = _gpu_step(f"audio decode ({label})", lambda: vae_decode_audio(audio_vae, sampled))
                 del sampled
                 segment_rate = int(audio["sample_rate"])
                 waveform = media.fit_waveform(
@@ -427,7 +459,9 @@ class HawkH3Director(io.ComfyNode):
                 body = frames[trim:]
                 del frames
                 if out_fps != FPS:
-                    body = _interpolate(body, out_fps)
+                    frames_in = body
+                    body = _gpu_step(f"frame interpolation ({label})", lambda: _interpolate(frames_in, out_fps))
+                    del frames_in
                 _save_segment(
                     segment_paths["video"],
                     body,

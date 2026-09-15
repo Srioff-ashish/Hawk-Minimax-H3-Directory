@@ -81,3 +81,4 @@ Return ONLY a JSON object, no commentary, exactly in this shape:
 - `duration` is seconds, 5–15 unless the request says otherwise.
 - `continuity` is one of "inherit", "off", "last_frame", "tail_5", "tail_22", "tail_39" ("inherit" uses the renderer's setting; the first segment's value is ignored).
 - Use `[]` for a reference kind a segment does not use. `poses` lists the poses mentioned in that segment's prompt.
+- Lists only contain numbers that exist in the REFERENCES list for that kind (the request states how many of each are connected). Never put a picture's number in `poses`, or a pose's number in `pictures`.

@@ -93,15 +93,21 @@ class ComfyClient:
             raise ComfyError(f"ComfyUI /history failed ({response.status_code})")
         return response.json().get(prompt_id)
 
-    async def queue_ids(self) -> set[str]:
+    async def queue_state(self) -> tuple[set[str], list[str]]:
+        """(prompt ids running now, pending prompt ids in the order they will run)."""
         response = await self._request("GET", "/queue")
+        if response.status_code != 200:
+            raise ComfyError(f"ComfyUI /queue failed ({response.status_code})")
         data = response.json()
-        return {
-            str(item[1])
-            for key in ("queue_running", "queue_pending")
-            for item in data.get(key, [])
-            if isinstance(item, list) and len(item) > 1
-        }
+        items = lambda key: [item for item in data.get(key, []) if isinstance(item, list) and len(item) > 1]
+        running = {str(item[1]) for item in items("queue_running")}
+        # ComfyUI keeps pending prompts in a heap; the queue number is the run order.
+        pending = [str(item[1]) for item in sorted(items("queue_pending"), key=lambda item: item[0])]
+        return running, pending
+
+    async def queue_ids(self) -> set[str]:
+        running, pending = await self.queue_state()
+        return running | set(pending)
 
     async def cancel(self, prompt_id: str) -> bool:
         response = await self._request("POST", f"/api/jobs/{prompt_id}/cancel")

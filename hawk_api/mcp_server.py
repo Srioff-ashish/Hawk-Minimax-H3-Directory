@@ -22,12 +22,13 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
 2. Plan (optional but recommended for films): plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it.
 3. Render: render_film with the approved script (or plan_job_id, or story to plan and render in one job). Start with settings.megapixels=0.4 for a cheap preview.
-4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. When done, give the user video_url (a signed download link).
+4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
 
 Reference roles: picture (identity, outfit, place -> <Picture N>), pose (body pose only -> <Pose N>), video (motion or camera -> <Video N>), audio (voice, music -> <Audio N>), video_soundtrack (audio of video for_video).
 Script rules: segments separated by a line '---'; optional headers title:, duration: (1-15 s), pictures: 1,2, poses:, videos:, audios:, continuity: (off, last_frame, tail_5, tail_22, tail_39), seed:; a 'style:' block is prepended to every segment. Number tags by the order references were listed. Write each prompt as a director's brief: reference roles, action in order, one camera move, quoted dialogue, sounds, 'Music N/A' if no score.
 LoRAs: the server adds its default LoRAs (usually the turbo LoRA) automatically; list_options shows the files available on the pod and the presets.
+Models: list_options shows diffusion_models (ref2va base models), text_encoders and the defaults. settings.unet_name / settings.clip_name pick others for one render, by file name or a unique part such as "bf16". bf16 gives the best quality but is slowest; int8 / fp8 / nvfp4 are faster. Omit them to use the defaults.
 Renders take many minutes. Never wait inside a tool call; poll get_job instead.
 """
 
@@ -68,7 +69,7 @@ def build_mcp(service: HawkService) -> MCPServer:
     async def list_references(limit: int = 30) -> dict:
         return {"assets": service.list_assets(limit)}
 
-    @mcp.tool(description="Show what the pod can use: LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, samplers, schedulers, aspect ratios and continuity modes.")
+    @mcp.tool(description="Show what the pod can use: ref2va base models and text encoders (with the defaults), LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, samplers, schedulers, aspect ratios and continuity modes.")
     async def list_options() -> dict:
         return await run(service.options())
 
@@ -127,7 +128,7 @@ def build_mcp(service: HawkService) -> MCPServer:
             raise ToolError(str(exc)) from None
         return service.job_view(await run(service.create_video(request)))
 
-    @mcp.tool(description="Status of a plan or render job: progress (segments_done / segments_total), script, LoRAs applied, errors, and the signed video_url when done.")
+    @mcp.tool(description="Status of a plan or render job: status (queued with queue_position, planning, rendering, done, failed, cancelled), progress (segments_done / segments_total), script, models and LoRAs applied, warnings, errors, and the signed video_url when done.")
     async def get_job(job_id: str) -> dict:
         try:
             return service.job_view(service.get_job(job_id))

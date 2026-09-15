@@ -39,6 +39,17 @@ def jobs_for(text, available=REFS, video_has_audio=(False,), **overrides):
     )
 
 
+import json  # noqa: E402
+
+from hawk_h3.script import (  # noqa: E402
+    ScriptError,
+    build_jobs,
+    drop_unavailable_references,
+    parse_script,
+    reference_counts_line,
+)
+
+
 class FrameGrid(unittest.TestCase):
     def test_snaps_to_17k_plus_5(self):
         self.assertEqual(frames_for_seconds(5), 124)
@@ -224,6 +235,42 @@ class Jobs(unittest.TestCase):
         # Segment B is identical, but its predecessor changed, so it must re-render.
         self.assertNotEqual(job_key(b1, {"x": 1}, key_a1), job_key(b2, {"x": 1}, key_a2))
         self.assertEqual(job_key(b1, {"x": 1}, key_a1), job_key(b1, {"x": 1}, key_a1))
+
+
+class PlannerTolerance(unittest.TestCase):
+    AVAILABLE = {"Picture": 4, "Pose": 0, "Video": 0, "Audio": 0}
+
+    def build(self, script):
+        return build_jobs(script, available=self.AVAILABLE, video_has_audio=[], default_seconds=5,
+                          continuity="tail_22", base_seed=0)
+
+    def test_drops_numbers_the_prompt_never_mentions(self):
+        # The live failure: the LLM copied picture 4 into poses with no poses connected.
+        script = parse_script(json.dumps({"segments": [
+            {"title": "Pose", "prompt": "<Picture 1> ends in the pose from <Picture 4>.", "pictures": [1, 4], "poses": [4]},
+            {"prompt": "She waves.", "pictures": [1], "poses": []},
+        ]}))
+        fixed, warnings = drop_unavailable_references(script, self.AVAILABLE)
+        self.assertEqual((fixed.segments[0].pictures, fixed.segments[0].poses), ([1, 4], []))
+        self.assertIs(fixed.segments[1], script.segments[1])
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Segment 1 (Pose): removed pose [4] from its poses list; only 0 pose(s)", warnings[0])
+        self.assertEqual(self.build(fixed)[0].pictures, [1, 4])
+
+    def test_mentioned_numbers_are_kept_and_still_fail(self):
+        script = parse_script('{"segments": [{"prompt": "She ends in <Pose 2>.", "poses": [2]}]}')
+        fixed, warnings = drop_unavailable_references(script, self.AVAILABLE)
+        self.assertEqual((fixed.segments[0].poses, warnings), ([2], []))
+        with self.assertRaisesRegex(ScriptError, "only 0 pose"):
+            self.build(fixed)
+
+    def test_warnings_round_trip_and_counts_line(self):
+        script = parse_script('{"segments": [{"prompt": "x"}]}')
+        text = script.to_json(warnings=["fixed something"])
+        self.assertEqual(json.loads(text)["warnings"], ["fixed something"])
+        self.assertEqual(parse_script(text).segments[0].prompt, "x")
+        self.assertNotIn("warnings", json.loads(script.to_json()))
+        self.assertIn("3 picture(s), 0 pose(s), 0 video(s), 0 audio(s)", reference_counts_line({"Picture": 3}))
 
 
 class LoraStack(unittest.TestCase):
