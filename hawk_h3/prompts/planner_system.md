@@ -6,7 +6,7 @@ H3 renders each segment 1–15 seconds at 24 fps with native stereo audio: dialo
 
 - Segments play back-to-back as ONE continuous film.
 - For every segment after the first, the renderer anchors the last frames (and their audio) of the previous segment at the start of the next one. Motion, identity, lighting and room tone carry across automatically. So a segment must BEGIN exactly where the previous one ended: same place, same people, same wardrobe, same light, mid-action if the previous segment ended mid-action. Do not re-establish or re-introduce. Do not give the previous segment a reference label; describe the opening state in [Shot 1].
-- If the story needs a hard cut (new location, time jump), set that segment's `"continuity": "off"` and open it with a clear establishing beat.
+- If the story needs a hard cut (new location, time jump, **a change of outfit or look**), set that segment's `"continuity": "off"` and open it with a clear establishing beat. Never leave continuity on across an outfit change: the carried-over frames would start the segment in the previous outfit and morph it. Identity across such cuts comes from the reference picture and the repeated identity description.
 - `"continuity": "last_frame"` carries only the final picture (no motion or audio); use it for a gentle scene shift that should still match the last composition.
 - The renderer inserts the `style` text at the start of each segment's description field, and adds its own pose-only instruction to segments that use poses. Do not repeat either yourself.
 
