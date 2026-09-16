@@ -290,6 +290,7 @@ A finished render's job:
   "seed": 81234567, "run_name": "api_5c0e1b2a3d4f5061",
   "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
   "queue_position": null,
+  "final_prompts": "### Segment 1 …  the exact text MiniMax H3 encoded: <Pose N> rewritten to <Picture k>, style and pose notes inserted",
   "video_url": "https://…/v1/jobs/5c0e…/video?exp=…&sig=…",
   "segment_urls": ["https://…/segments/1?exp=…&sig=…", "…"],
   "warnings": [], "error": null, "resumable": false

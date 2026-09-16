@@ -118,6 +118,12 @@ class Schema(unittest.TestCase):
         self.assertNotIn("refs", built.prompt[built.nodes["director"]]["inputs"])
         self.assertEqual(wiring.available["Picture"], 0)
 
+    def test_final_prompts_are_previewed(self):
+        built, _ = render_graph([], ModelSettings(), [], params(), script="A")
+        director = built.nodes["director"]
+        preview = built.prompt[built.nodes["prompt_preview"]]
+        self.assertEqual((preview["class_type"], preview["inputs"]["source"]), ("PreviewAny", [director, 3]))
+
     def test_music_bed_loads_audio_into_the_director(self):
         with_music = RenderParams(run_name="api_test", seed=1, steps=8, music_path="hawk_api/m/track.mp3",
                                   music_volume_db=-9.0, mute_generated_music=False)

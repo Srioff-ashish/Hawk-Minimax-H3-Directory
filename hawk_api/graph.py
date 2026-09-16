@@ -321,4 +321,6 @@ def render_graph(
     else:
         script_value = script
     nodes["director"] = add_director(g, pipe, wiring.node, script_value, params)
+    # The exact per-segment text H3 encodes (<Pose N> already rewritten to <Picture k>).
+    nodes["prompt_preview"] = g.add("PreviewAny", {"source": link(nodes["director"], 3)}, "Prompts sent to H3")
     return BuiltGraph(g.nodes, nodes), wiring

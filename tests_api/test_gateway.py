@@ -133,7 +133,10 @@ class FakeComfy:
         script = None
         for node_id, node in by_class("HawkH3StoryPlanner"):
             script = PLAN_SCRIPT
+        directors = {node_id for node_id, _ in by_class("HawkH3Director")}
         for node_id, node in by_class("PreviewAny"):
+            if node["inputs"]["source"][0] in directors:
+                continue  # the Director's prompts output is reported after it runs
             outputs[node_id] = {"text": [script]}
             await self.send(client, "executed", {"node": node_id, "output": outputs[node_id], "prompt_id": pid})
         for node_id, node in by_class("HawkH3LoraStack"):
@@ -164,6 +167,10 @@ class FakeComfy:
                 self.outputs[f"hawk_h3/{run_name}/segment_{number:03d}.mp4"] = f"segment {number}".encode()
                 await self.send(client, "hawk_h3.segment", {"prompt_id": pid, "done": number, "total": total, "title": f"seg {number}", "cached": False})
                 await self.send(client, "progress", {"value": number, "max": total, "prompt_id": pid, "node": node_id})
+            for preview_id, preview in by_class("PreviewAny"):
+                if preview["inputs"]["source"][0] == node_id:
+                    outputs[preview_id] = {"text": ["### Segment 1\n" + text.replace("<Pose 1>", "<Picture 2>")]}
+                    await self.send(client, "executed", {"node": preview_id, "output": outputs[preview_id], "prompt_id": pid})
             final = f"{run_name}_final.mp4"
             self.outputs[f"hawk_h3/{run_name}/{final}"] = b"FINAL VIDEO BYTES"
             outputs[node_id] = {"images": [{"filename": final, "subfolder": f"hawk_h3/{run_name}", "type": "output"}], "animated": [True]}
@@ -473,6 +480,8 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             done = await self.wait(job["id"])
             self.assertEqual(done["status"], "done")
             polled = await call("get_job", {"job_id": job["id"]})
+            self.assertIn("<Picture", polled["final_prompts"])
+            self.assertNotIn("<Pose", polled["final_prompts"])
             self.assertTrue(polled["video_url"].startswith(self.base))
 
             bad = await client.call_tool("render_film", {"script": "<Picture 3>"})

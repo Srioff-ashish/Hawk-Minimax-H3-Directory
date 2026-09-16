@@ -683,6 +683,8 @@ class HawkService:
                 except ScriptError as exc:
                     job["warnings"].append(f"Could not read the plan: {exc}")
                 job["status"] = "rendering"
+        elif node == job["nodes"].get("prompt_preview") and texts:
+            job["final_prompts"] = texts[0]
         elif node in job["nodes"].get("lora_stacks", []) and texts:
             job["loras_applied_by_node"][node] = parse_applied(texts[0])
         elif node == job["nodes"].get("director"):
@@ -808,6 +810,7 @@ class HawkService:
                 unet_name=(job.get("models") or {}).get("unet_name"),
                 clip_name=(job.get("models") or {}).get("clip_name"),
                 music_asset_id=((job.get("request") or {}).get("settings") or {}).get("music_asset_id"),
+                final_prompts=job.get("final_prompts"),
                 video_url=None,
                 segment_urls=[],
             )

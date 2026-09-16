@@ -389,7 +389,7 @@
                 <button class="btn" id="urlAdd" type="button">Add URL</button>
               </div>
               <div id="refs" class="refs"></div>
-              <p class="hint" style="margin:10px 0 0">Click a tag to insert it at the cursor. <b>Picture</b> = identity, outfit, place · <b>Pose</b> = body pose only.</p>
+              <p class="hint" style="margin:10px 0 0">Click a tag to insert it at the cursor. <b>Picture</b> = identity, outfit, place · <b>Pose</b> = body pose only. MiniMax H3 only knows &lt;Picture&gt;, &lt;Video&gt; and &lt;Audio&gt;, so each &lt;Pose N&gt; is sent to it as an extra &lt;Picture&gt; automatically.</p>
             </div>
           </section>
 
@@ -1586,6 +1586,9 @@
         <div class="row" style="margin-top:10px"><button class="btn btn-primary" type="button" data-act="render-plan">Render this plan</button><span class="hint">Uses the video, LoRA and music settings on the Create page.</span></div></div>`);
     } else if (job.script) {
       sections.push(`<div><p class="section-title">Script</p><div class="code">${esc(job.kind === "render" ? planToText(job.script) : job.script)}</div></div>`);
+    }
+    if (job.final_prompts) {
+      sections.push(`<details class="advanced" open><summary>Sent to MiniMax H3</summary><p class="hint" style="margin:8px 0">The exact text encoded for each segment: pose tags rewritten to &lt;Picture&gt;, style and pose notes inserted, music muted when a music bed is used.</p><div class="code">${esc(job.final_prompts)}</div></details>`);
     }
     body.innerHTML = sections.join("");
     const editor = body.querySelector("#planEditor");
