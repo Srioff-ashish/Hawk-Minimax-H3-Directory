@@ -239,7 +239,7 @@ def story_planner(g: Graph, pos, *, story, segment_count, segment_seconds, aspec
             "control_after_generate": "fixed",
             "system_prompt": "",
             "temperature": 0.7,
-            "max_tokens": 8192,
+            "max_tokens": 16384,
             "json_mode": True,
             "image_max_side": 1024,
             "api_url": "https://api.atlascloud.ai/v1",

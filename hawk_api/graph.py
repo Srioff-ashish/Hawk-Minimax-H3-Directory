@@ -220,7 +220,7 @@ def add_planner(
     model: str,
     seed: int,
     temperature: float = 0.7,
-    max_tokens: int = 8192,
+    max_tokens: int = 16384,
 ) -> str:
     inputs = {
         "story": story,

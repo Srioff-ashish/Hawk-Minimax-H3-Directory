@@ -273,6 +273,51 @@ class PlannerTolerance(unittest.TestCase):
         self.assertIn("3 picture(s), 0 pose(s), 0 video(s), 0 audio(s)", reference_counts_line({"Picture": 3}))
 
 
+class StructuredPrompts(unittest.TestCase):
+    """H3's native section format: style and the pose note must not break the layout."""
+
+    R2V = (
+        "subject_definitions:\n<Subject 1> is the woman whose face comes from <Picture 1>.\n\n"
+        "summary:\nreference generation <Subject 1> walks to the window.\n\n"
+        "retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - face and hair.\n\n"
+        "detailed_description:\n[Shot 1] She walks to the window and ends in the pose from <Pose 1>.\n\n"
+        "overall_soundscape: Wordless footsteps on wood. No speech, no voices.\n\n"
+        "non_diegetic_music: N/A"
+    )
+
+    def build(self, script, available):
+        return build_jobs(script, available=available, video_has_audio=[], default_seconds=5,
+                          continuity="tail_22", base_seed=0)
+
+    def test_style_goes_inside_the_description_and_pose_note_before_sound(self):
+        script = parse_script(json.dumps({"style": "Cinematic live-action, 35mm.", "segments": [{"prompt": self.R2V}]}))
+        prompt = self.build(script, {"Picture": 1, "Pose": 1})[0].prompt
+        self.assertTrue(prompt.startswith("subject_definitions:\n<Subject 1>"))
+        self.assertIn("detailed_description:\nCinematic live-action, 35mm. [Shot 1] She walks", prompt)
+        body, sound = prompt.split("overall_soundscape:")
+        self.assertIn("ends in the pose from <Picture 2>. Pose reference <Picture 2>: take only the body pose", body)
+        self.assertTrue(sound.strip().startswith("Wordless footsteps"))
+        self.assertTrue(prompt.rstrip().endswith("non_diegetic_music: N/A"))
+
+    def test_t2va_single_line_field(self):
+        text = "integrated_multimodal_description: [Shot 1] Rain on a window.\n\noverall_soundscape: Rain only.\n\nnon_diegetic_music: N/A"
+        script = parse_script(json.dumps({"style": "Moody night.", "segments": [{"prompt": text}]}))
+        prompt = self.build(script, {})[0].prompt
+        self.assertTrue(prompt.startswith("integrated_multimodal_description: Moody night. [Shot 1] Rain"))
+
+    def test_plain_prompts_unchanged(self):
+        script = parse_script("style: Warm light.\n---\n<Picture 1> smiles at <Pose 1>.")
+        prompt = self.build(script, {"Picture": 1, "Pose": 1})[0].prompt
+        self.assertTrue(prompt.startswith("Warm light.\n\n<Picture 1> smiles at <Picture 2>."))
+        self.assertIn("\n\nPose reference <Picture 2>:", prompt)
+
+    def test_planner_prompt_teaches_the_h3_format(self):
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hawk_h3", "prompts", "planner_system.md")
+        text = open(path, encoding="utf-8").read()
+        for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[English]", "Anti-filler checklist"):
+            self.assertIn(needle, text)
+
+
 class LoraStack(unittest.TestCase):
     def test_lines(self):
         entries = parse_lora_stack(

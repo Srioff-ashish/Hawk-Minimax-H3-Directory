@@ -200,7 +200,7 @@ What the LLM receives:
 | `seed` | 0 | ComfyUI reuses the last plan while inputs are unchanged. Change the seed (or set it to randomize) for a new plan. Also sent to Atlas when above 0. |
 | `system_prompt` *(advanced)* | blank | Blank uses the built-in H3 planning guide in `hawk_h3/prompts/planner_system.md`. Paste your own to override it, but keep the JSON output format. |
 | `temperature` *(advanced)* | 0.7 | Lower is more literal; higher is more inventive. |
-| `max_tokens` *(advanced)* | 8192 | Raise it for many long segments if replies get cut off. |
+| `max_tokens` *(advanced)* | 16384 | Raise it for many long segments if replies get cut off. |
 | `json_mode` *(advanced)* | on | Asks Atlas for strict JSON. Turn it off if a model rejects `response_format`. |
 | `image_max_side` *(advanced)* | 1024 | Pictures are downscaled to this before upload. |
 | `api_url` *(advanced)* | `https://api.atlascloud.ai/v1` | Change only for a proxy. |

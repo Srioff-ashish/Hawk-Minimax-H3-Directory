@@ -409,6 +409,33 @@ def drop_unavailable_references(script: Script, available: dict[str, int]) -> tu
     return Script(segments, script.style), warnings
 
 
+#: H3's native structured prompts keep their visual body and sound in named fields.
+_BODY_FIELD = re.compile(r"^(detailed_description|integrated_multimodal_description)[ \t]*:[ \t]*", re.MULTILINE)
+_SOUND_FIELD = re.compile(r"^overall_soundscape[ \t]*:", re.MULTILINE)
+
+
+def _with_style(style: str, prompt: str) -> str:
+    """Prepend the style -- inside the description field of a structured H3 prompt, so the
+    section layout (subject_definitions first) stays intact."""
+    if not style:
+        return prompt
+    body = _BODY_FIELD.search(prompt)
+    if body is None:
+        return f"{style}\n\n{prompt}"
+    head, rest = prompt[: body.end()], prompt[body.end() :]
+    if rest.startswith("\n"):
+        return f"{head}\n{style} {rest[1:]}"
+    return f"{head}{style} {rest}"
+
+
+def _add_note(prompt: str, note: str) -> str:
+    """Append a note to the visual body: before overall_soundscape in a structured prompt."""
+    sound = _SOUND_FIELD.search(prompt)
+    if sound is None:
+        return f"{prompt}\n\n{note}"
+    return f"{prompt[: sound.start()].rstrip()} {note}\n\n{prompt[sound.start() :]}"
+
+
 def _join_tags(tags: list[str]) -> str:
     return tags[0] if len(tags) == 1 else ", ".join(tags[:-1]) + " and " + tags[-1]
 
@@ -437,7 +464,7 @@ def build_jobs(
         warnings: list[str] = []
 
         style = script.style.strip()
-        text = f"{style}\n\n{segment.prompt.strip()}" if style else segment.prompt.strip()
+        text = _with_style(style, segment.prompt.strip())
 
         selected: dict[str, list[int]] = {}
         for kind, chosen in (
@@ -486,7 +513,7 @@ def build_jobs(
         prompt = remap_tags(text, mapping, available, where)
         if selected["Pose"] and pose_instruction.strip():
             tags = [f"<Picture {mapping['Pose'][n][1]}>" for n in selected["Pose"]]
-            prompt = f"{prompt}\n\n{pose_instruction.strip().replace('{tags}', _join_tags(tags))}"
+            prompt = _add_note(prompt, pose_instruction.strip().replace('{tags}', _join_tags(tags)))
 
         seconds = segment.duration if segment.duration is not None else float(default_seconds)
         if seconds > MAX_SECONDS:
