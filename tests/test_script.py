@@ -314,7 +314,7 @@ class StructuredPrompts(unittest.TestCase):
     def test_planner_prompt_teaches_the_h3_format(self):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hawk_h3", "prompts", "planner_system.md")
         text = open(path, encoding="utf-8").read()
-        for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[English]", "Anti-filler checklist"):
+        for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[Hinglish]", "Anti-filler checklist"):
             self.assertIn(needle, text)
 
 

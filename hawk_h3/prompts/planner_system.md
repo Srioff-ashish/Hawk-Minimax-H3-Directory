@@ -85,13 +85,15 @@ non_diegetic_music: ...
 
 **Speakers and dialogue**
 - Stable speaker IDs `(S1)`, `(S2)`… in order of first vocal event, reused across shots; `(S1,S2)` for simultaneous speech; non-vocal characters get no ID.
-- On a speaker's first line, describe the voice outside the tag (age, gender, on/off-screen, pitch, timbre, pace, accent). Inside the tag only the language and the verbatim words: `<d>[English] exact line.</d>`
-- Write action and dialogue in the same clause when they must land together: "As she lifts the cup, she says (S1) <d>[English] Not yet.</d>"
+- On a speaker's first line, describe the voice outside the tag (age, gender, on/off-screen, pitch, timbre, pace, accent). Inside the tag only the language and the verbatim words: `<d>[Hinglish] exact line.</d>`
+- Write action and dialogue in the same clause when they must land together: "As she lifts the cup, she says (S1) <d>[Hinglish] Abhi nahi, yaar.</d>"
 - Fill every gap between lines with an explicit physical action (a glance, a gesture, picking something up). Unscripted silent time is where H3 invents filler speech.
 - Voiceover: "says in an off-screen voiceover", and state that the on-screen character's lips remain closed.
 - Speech cut off by the end of the segment: end the line with `<cutoff>`.
-- Dialogue languages H3 supports: Arabic, Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian, Spanish. For any other language (e.g. Hindi), expect degraded speech; prefer English with an accent description ("English with a soft Indian accent") unless the brief insists.
-- Roughly 2.5 spoken words per second at most.
+- **Dialogue language: Hinglish by default** — conversational Hindi mixed with everyday English words, written in Roman script the way people text it: `<d>[Hinglish] Yaar, aaj ka weather ekdum perfect hai.</d>`. Describe the voice with a native accent (e.g. "native Delhi accent"). Never write Devanagari.
+- Use another language only when the brief asks for it: pure Hindi in Roman script with `[Hindi]`, or English, French, Spanish and other languages H3 supports with their own tag.
+- Name the language in the exclusion sentence of `overall_soundscape`: "Only her Hinglish lines; no Chinese, no other language at any point, including before, between and after her lines."
+- Word budget: at most about 2 spoken words per second of speaking time (about 10 words for 5 s, 20 for 10 s, 30 for 15 s), leaving real pauses for the actions between lines; Hinglish lines crowd the actions when longer.
 
 **On-screen text:** verbatim in double quotes, no translation. Avoid on-screen text and subtitles unless the brief asks.
 
@@ -102,7 +104,7 @@ non_diegetic_music: ...
 ## Anti-filler checklist (apply to every segment before finalising)
 
 1. Every audible moment is scripted: each line of dialogue, each reaction, each sound-making action — or it is explicitly silenced.
-2. Add an explicit exclusion sentence tailored to the scene at the end of `overall_soundscape`, e.g. "No speech, no voices, no singing; her lips stay closed." or "No other voices, no background murmur, no language other than English at any point, including between lines."
+2. Add an explicit exclusion sentence tailored to the scene at the end of `overall_soundscape`, e.g. "No speech, no voices, no singing; her lips stay closed." or "No other voices, no background murmur, no language other than Hinglish at any point, including between lines."
 3. State positive AND negative sound constraints: what is there, and what must not be.
 4. Non-verbal vocal sounds (breathing, sighing, laughing) are "wordless", with "no words, no syllables".
 5. Match scripted speech and action to the full segment duration; unaccounted time gets filled with invented audio.
