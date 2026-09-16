@@ -495,12 +495,12 @@
       },
       "widgets_values": [
         "Picture 1: the dancer's face, hair and black leotard\nPose 1: standing, both arms stretched overhead\nPose 2: deep lunge, one arm reaching forward\nPose 3: a low bow, one hand on the chest",
-        "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
+        "Pose reference {tags}: a body-pose guide only, never a frame to reproduce. Take only the body pose, limb and hand positions and head angle. Do not take identity, face, hair, clothing, colours, lighting, style, background or camera framing from any pose reference, and never show the pose image itself in any frame; the scene, people and framing stay as described.",
         24.0
       ],
       "widgets_values_named": {
         "labels": "Picture 1: the dancer's face, hair and black leotard\nPose 1: standing, both arms stretched overhead\nPose 2: deep lunge, one arm reaching forward\nPose 3: a low bow, one hand on the chest",
-        "pose_instruction": "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.",
+        "pose_instruction": "Pose reference {tags}: a body-pose guide only, never a frame to reproduce. Take only the body pose, limb and hand positions and head angle. Do not take identity, face, hair, clothing, colours, lighting, style, background or camera framing from any pose reference, and never show the pose image itself in any frame; the scene, people and framing stay as described.",
         "video_fps": 24.0
       }
     },

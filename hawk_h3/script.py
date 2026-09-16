@@ -23,9 +23,10 @@ MAX_IMAGES = 9
 
 #: Appended to a segment that sends pose references; {tags} becomes their picture tags.
 DEFAULT_POSE_INSTRUCTION = (
-    "Pose reference {tags}: take only the body pose, limb and hand positions, head angle and "
-    "framing. Do not take identity, face, hair, clothing, colours, lighting, style or background "
-    "from any pose reference."
+    "Pose reference {tags}: a body-pose guide only, never a frame to reproduce. Take only the body "
+    "pose, limb and hand positions and head angle. Do not take identity, face, hair, clothing, colours, "
+    "lighting, style, background or camera framing from any pose reference, and never show the pose "
+    "image itself in any frame; the scene, people and framing stay as described."
 )
 
 #: continuity mode -> trailing frames of the previous segment re-anchored at frame 0.

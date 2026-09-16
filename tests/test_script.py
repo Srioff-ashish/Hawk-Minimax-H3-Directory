@@ -295,7 +295,7 @@ class StructuredPrompts(unittest.TestCase):
         self.assertTrue(prompt.startswith("subject_definitions:\n<Subject 1>"))
         self.assertIn("detailed_description:\nCinematic live-action, 35mm. [Shot 1] She walks", prompt)
         body, sound = prompt.split("overall_soundscape:")
-        self.assertIn("ends in the pose from <Picture 2>. Pose reference <Picture 2>: take only the body pose", body)
+        self.assertIn("ends in the pose from <Picture 2>. Pose reference <Picture 2>: a body-pose guide only, never a frame", body)
         self.assertTrue(sound.strip().startswith("Wordless footsteps"))
         self.assertTrue(prompt.rstrip().endswith("non_diegetic_music: N/A"))
 

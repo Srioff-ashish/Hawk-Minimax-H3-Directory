@@ -140,10 +140,10 @@ Audio 1: her voice
 H3 has no pose ControlNet for reference-to-video, so a pose image travels as an extra reference picture with an explicit "pose only" role. The pack handles that for you:
 
 1. Connect pose images to **`poses`**. Their tags are `<Pose 1>`, `<Pose 2>`…
-2. In the script, say **when** the pose happens: `…and she ends in the pose from <Pose 2>.`
+2. In the script, say **when** the pose happens, as the body doing it: `At 00:05, she raises both arms into the pose shown in <Pose 2>, then lowers her chin slightly.`
 3. A segment sends **only the poses its prompt mentions**. To choose explicitly, add `poses: 1, 2` to the segment.
 4. The Director sends those poses as pictures after the segment's regular pictures, rewrites `<Pose N>` to the matching `<Picture k>`, and appends `pose_instruction`:
-   > Pose reference `<Picture 3>`: take only the body pose, limb and hand positions, head angle and framing. Do not take identity, face, hair, clothing, colours, lighting, style or background from any pose reference.
+   > Pose reference `<Picture 3>`: a body-pose guide only, never a frame to reproduce. Take only the body pose, limb and hand positions and head angle. Do not take identity, face, hair, clothing, colours, lighting, style, background or camera framing from any pose reference, and never show the pose image itself in any frame; the scene, people and framing stay as described.
 
 What makes a good pose image:
 - **Skeleton renders** (from an OpenPose / DWPose preprocessor) carry no face or clothing, so they can't leak identity. They're the safest choice.
@@ -151,7 +151,7 @@ What makes a good pose image:
 - Match the output's framing. A full-body pose for a close-up shot won't be followed.
 - Pictures and poses together are limited to **9 images per segment**.
 
-Land poses at the **end** of a segment where you can. With continuity on, the next segment then starts exactly in that pose.
+**Don't make a pose the last frame.** Wording like "ends in the pose" or "the video ends on <Pose 1>" turns the pose image into a keyframe, and H3 may copy the whole picture (person, background, framing) into the final frames. Place the pose in the middle or late part of the segment and script a little motion after it. With continuity on, the next segment still starts from that body position.
 
 ### Soundtrack or standalone audio?
 

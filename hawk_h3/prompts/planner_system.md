@@ -20,8 +20,11 @@ H3 renders each segment 1–15 seconds at 24 fps with native stereo audio: dialo
 
 ### Pose references
 
-- `<Pose N>` defines a BODY POSE only; its identity, clothing, style and background must never be used.
-- Place a pose at the moment it should happen, as the end state of a beat: "she lifts both arms and ends in the pose from <Pose 1>", "At 00:04.000, he lands in the stance from <Pose 2>".
+- `<Pose N>` defines a BODY POSE only; its identity, clothing, style, background and framing must never be used.
+- A pose is a guide for the body, never a keyframe. H3 copies a reference image literally when the text makes it a frame, so:
+  - Never write that the video, the shot or the last frame "ends in", "becomes", "matches" or "freezes on" the pose.
+  - Place the pose in the middle or late part of the segment (not in its final second), phrased as the subject's body doing it: "At 00:05.000, <Subject 1> raises both arms into the pose shown in <Pose 1>", then script a small continuing motion after it (a breath, a slight head turn, a slow camera push-in) so the segment does not end frozen on the pose.
+  - Never list a pose as a standalone entry in `subject_definitions`; mention it inside the subject's action. In `retention_analysis` a pose is `<Pose N>: attribute_transfer - body pose only; identity, clothing, background and framing ignored.` Never use the `keyframe completion` prefix because of a pose.
 - Mention a pose only in the segment where it happens. Pictures and poses together are limited to 9 images per segment.
 
 ## Segment prompt format
