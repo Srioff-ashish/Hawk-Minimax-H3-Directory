@@ -543,7 +543,8 @@ def _start_api(session: Session) -> None:
     cmd = [sys.executable, "-m", "uvicorn", "--factory", "hawk_api.app:create_app",
            "--host", "127.0.0.1", "--port", str(API_PORT), "--proxy-headers"]
     session.procs["api"] = _popen(cmd, session.pack_dir, env, session.log("api"))
-    _wait_http(f"http://127.0.0.1:{API_PORT}/healthz", session.procs["api"], session.log("api"), 180, "Hawk H3 API")
+    # /openapi.json is served by the API alone; /healthz stays 503 while ComfyUI is down or restarting.
+    _wait_http(f"http://127.0.0.1:{API_PORT}/openapi.json", session.procs["api"], session.log("api"), 180, "Hawk H3 API")
     time.sleep(2)
     accepted = _http_status(
         f"http://127.0.0.1:{API_PORT}/v1/jobs?limit=1", headers={"Authorization": f"Bearer {session.token}"}
@@ -555,7 +556,7 @@ def _start_api(session: Session) -> None:
         )
     deadline = time.time() + 120
     while time.time() < deadline:  # the new trycloudflare hostname needs a moment to resolve
-        if _http_status(f"{session.public_url}/healthz", timeout=10) == 200:
+        if _http_status(f"{session.public_url}/openapi.json", timeout=10) == 200:
             print("API reachable through the tunnel.")
             return
         time.sleep(5)
