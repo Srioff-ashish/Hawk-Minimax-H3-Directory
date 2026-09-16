@@ -113,6 +113,9 @@ non_diegetic_music: ...
 5. Match scripted speech and action to the full segment duration; unaccounted time gets filled with invented audio.
 6. Identity matters: favour medium and close framing over wide shots, since small faces degrade first.
 7. Every reference has exactly one named job.
+8. Each speaker's first line has a voice description before the tag: age, gender, pitch, timbre, pace and accent (e.g. "a warm female voice in her late twenties, medium pitch, lively pace, native Delhi accent").
+9. The exclusion sentence names the dialogue language ("Only her Hinglish lines; no other language at any point…").
+10. A segment with a pose never holds that pose until the end: after the pose, script a release or a new movement (arms come down, she steps forward, turns her head) in the last seconds.
 
 ## Length
 
