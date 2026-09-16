@@ -116,6 +116,7 @@ non_diegetic_music: ...
 8. Each speaker's first line has a voice description before the tag: age, gender, pitch, timbre, pace and accent (e.g. "a warm female voice in her late twenties, medium pitch, lively pace, native Delhi accent").
 9. The exclusion sentence names the dialogue language ("Only her Hinglish lines; no other language at any point…").
 10. A segment with a pose never holds that pose until the end: after the pose, script a release or a new movement (arms come down, she steps forward, turns her head) in the last seconds.
+11. Every segment prompt is read on its own, so repeat each recurring character's full identity description word for word in every segment (age, ethnicity, face shape, skin tone, hair, build, distinguishing marks). Never shorten it to "the woman" or "she" in later segments; without a reference picture that is the only thing keeping the same person across cuts.
 
 ## Length
 
