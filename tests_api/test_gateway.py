@@ -385,6 +385,25 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Text encoder 'umt5'", encoder.json()["error"])
         await self.wait(default["id"])
 
+    async def test_music_bed(self):
+        uploaded = await self.http.post("/v1/assets", files={"files": ("beat.mp3", b"ID3" + b"0" * 64, "audio/mpeg")})
+        music = uploaded.json()["assets"][0]["id"]
+        picture = await self.upload_picture()
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"music_asset_id": music, "music_volume_db": -8}})).json()
+        self.assertEqual(job["music_asset_id"], music, job)
+        graph = self.fake.prompts[job["id"]]
+        director = next(n for n in graph.values() if n["class_type"] == "HawkH3Director")
+        loader = graph[director["inputs"]["music"][0]]
+        self.assertEqual((loader["class_type"], director["inputs"]["music_volume_db"]), ("LoadAudio", -8))
+        self.assertTrue(loader["inputs"]["audio"].endswith("beat.mp3"))
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
+
+        wrong = await self.http.post("/v1/videos", json={"script": "A", "settings": {"music_asset_id": picture}})
+        self.assertEqual(wrong.status_code, 422)
+        self.assertIn("must be an audio file", wrong.json()["error"])
+        missing = await self.http.post("/v1/videos", json={"script": "A", "settings": {"music_asset_id": "nope"}})
+        self.assertEqual(missing.status_code, 422)
+
     async def test_second_job_waits_in_queue(self):
         first = (await self.http.post("/v1/videos", json={"script": "SLOW one\n---\nSLOW two\n---\nSLOW three"})).json()
         await self.wait(first["id"], statuses=("rendering",))

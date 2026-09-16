@@ -452,6 +452,14 @@ class HawkService:
         steps, steps_reason = choose_steps(loras, settings.steps)
         seed = settings.seed if settings.seed is not None else random.randrange(1, 2**48)
         job_id = str(uuid.uuid4())
+        music_path = None
+        if settings.music_asset_id:
+            music = self.store.get_asset(settings.music_asset_id)
+            if music is None:
+                raise RequestError(f"Unknown music_asset_id {settings.music_asset_id!r}. Upload the track first.")
+            if music["kind"] != "audio":
+                raise RequestError(f"music_asset_id must be an audio file (mp3, wav, m4a...); {music['filename']} is {music['kind']}.")
+            music_path = music["path"]
         params = graphs.RenderParams(
             run_name=f"api_{job_id.replace('-', '')[:16]}",
             seed=seed,
@@ -466,6 +474,11 @@ class HawkService:
             ref_image_size=settings.ref_image_size,
             interpolation=settings.interpolation,
             audio_crossfade_ms=settings.audio_crossfade_ms,
+            music_path=music_path,
+            music_volume_db=settings.music_volume_db,
+            scene_volume_db=settings.scene_volume_db,
+            music_fade_seconds=settings.music_fade_seconds,
+            mute_generated_music=settings.mute_generated_music,
         )
         defaults = self.settings.models
         models = dataclasses.replace(
@@ -794,6 +807,7 @@ class HawkService:
                 run_name=job.get("run_name"),
                 unet_name=(job.get("models") or {}).get("unet_name"),
                 clip_name=(job.get("models") or {}).get("clip_name"),
+                music_asset_id=((job.get("request") or {}).get("settings") or {}).get("music_asset_id"),
                 video_url=None,
                 segment_urls=[],
             )

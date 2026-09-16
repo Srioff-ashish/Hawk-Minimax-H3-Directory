@@ -253,6 +253,10 @@ curl -H "$AUTH" -H 'content-type: application/json' "$API/v1/videos" -d '{
 | `ref_image_size` | `match` | `max` for stronger identity (slower) |
 | `interpolation` | `off` | `48 fps (RIFE)`, `60 fps (RIFE)`; needs ComfyUI-VFI |
 | `audio_crossfade_ms` | 60 | |
+| `music_asset_id` | none | **Music bed**: an uploaded audio asset mixed under the whole film (looped or trimmed, faded out). One continuous track instead of H3 composing new music per segment. Don't also list it in `references` |
+| `music_volume_db`, `scene_volume_db` | -3, 0 | Levels of the music bed and of the rendered sound |
+| `music_fade_seconds` | 2 | Fade-out at the end |
+| `mute_generated_music` | true | Sets every segment's music to N/A so only the music bed plays |
 | `loras`, `lora_preset`, `use_default_loras` | | See [LoRAs](#2-choose-loras-lorasjson) |
 | `attention` | server setting | |
 | `unet_name` | server's model (`HAWK_UNET`) | A ref2va file from `/v1/options` → `diffusion_models`, by name or a unique part (`"bf16"`). bf16 = best quality, slowest; int8/fp8 faster. fl2va models are refused |

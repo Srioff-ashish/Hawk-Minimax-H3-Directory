@@ -100,6 +100,56 @@ def stitch_audio(
     return torch.cat([accumulated[..., :-fade], blended, body[..., fade:]], dim=-1)
 
 
+def db_to_gain(db: float) -> float:
+    return 10.0 ** (float(db) / 20.0)
+
+
+def resample(waveform: torch.Tensor, source_rate: int, target_rate: int) -> torch.Tensor:
+    if int(source_rate) == int(target_rate):
+        return waveform
+    try:
+        import torchaudio.functional as audio_functional
+
+        return audio_functional.resample(waveform, int(source_rate), int(target_rate))
+    except ImportError:  # linear fallback; ComfyUI normally ships torchaudio
+        length = max(1, round(waveform.shape[-1] * int(target_rate) / int(source_rate)))
+        return torch.nn.functional.interpolate(waveform, size=length, mode="linear", align_corners=False)
+
+
+def mix_music_bed(
+    scene: torch.Tensor,
+    sample_rate: int,
+    music: torch.Tensor,
+    music_rate: int,
+    *,
+    music_db: float = -3.0,
+    scene_db: float = 0.0,
+    fade_seconds: float = 2.0,
+) -> torch.Tensor:
+    """Lay one music track under the film's ``[B, C, L]`` sound: resampled, looped or trimmed
+    to the film's length, a short fade-in, ``fade_seconds`` fade-out, and a peak limit."""
+    length = scene.shape[-1]
+    track = resample(music.float(), music_rate, sample_rate)[:1]
+    track = match_channels(track, scene.shape[1])
+    if track.shape[-1] == 0:
+        return scene
+    if track.shape[-1] < length:
+        track = track.repeat(1, 1, math.ceil(length / track.shape[-1]))
+    track = track[..., :length].to(scene)
+
+    envelope = torch.ones(length, dtype=scene.dtype, device=scene.device)
+    fade_in = min(length, int(sample_rate * 0.02))
+    fade_out = min(length, int(sample_rate * max(0.0, float(fade_seconds))))
+    if fade_in:
+        envelope[:fade_in] = torch.linspace(0.0, 1.0, fade_in, dtype=scene.dtype, device=scene.device)
+    if fade_out:
+        envelope[-fade_out:] *= torch.linspace(1.0, 0.0, fade_out, dtype=scene.dtype, device=scene.device)
+
+    mixed = scene * db_to_gain(scene_db) + track * envelope * db_to_gain(music_db)
+    peak = float(mixed.abs().max()) if mixed.numel() else 0.0
+    return mixed * (0.99 / peak) if peak > 0.99 else mixed
+
+
 def to_uint8(frames: torch.Tensor) -> torch.Tensor:
     return (frames.clamp(0.0, 1.0) * 255.0).round().to(torch.uint8).cpu()
 

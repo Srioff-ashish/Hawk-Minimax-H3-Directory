@@ -72,6 +72,12 @@ class RenderParams:
     ref_image_size: str = "match"
     interpolation: str = "off"
     audio_crossfade_ms: int = 60
+    #: Music bed: an audio file in ComfyUI's input folder, mixed under the whole film.
+    music_path: str | None = None
+    music_volume_db: float = -3.0
+    scene_volume_db: float = 0.0
+    music_fade_seconds: float = 2.0
+    mute_generated_music: bool = True
 
 
 @dataclass
@@ -266,9 +272,15 @@ def add_director(g: PromptGraph, pipe: list, refs_node: str | None, script, para
         "interpolation": params.interpolation,
         "encode_all_first": True,
         "output_frames": False,
+        "music_volume_db": params.music_volume_db,
+        "scene_volume_db": params.scene_volume_db,
+        "music_fade_seconds": params.music_fade_seconds,
+        "mute_generated_music": params.mute_generated_music,
     }
     if refs_node:
         inputs["refs"] = link(refs_node)
+    if params.music_path:
+        inputs["music"] = link(g.add("LoadAudio", {"audio": params.music_path}, "Music bed"))
     return g.add("HawkH3Director", inputs, "Director")
 
 

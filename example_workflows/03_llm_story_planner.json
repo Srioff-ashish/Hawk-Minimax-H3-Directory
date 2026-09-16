@@ -770,7 +770,11 @@
         60,
         "off",
         true,
-        false
+        false,
+        -3.0,
+        0.0,
+        2.0,
+        true
       ],
       "widgets_values_named": {
         "script": "",
@@ -791,7 +795,11 @@
         "audio_crossfade_ms": 60,
         "interpolation": "off",
         "encode_all_first": true,
-        "output_frames": false
+        "output_frames": false,
+        "music_volume_db": -3.0,
+        "scene_volume_db": 0.0,
+        "music_fade_seconds": 2.0,
+        "mute_generated_music": true
       }
     },
     {

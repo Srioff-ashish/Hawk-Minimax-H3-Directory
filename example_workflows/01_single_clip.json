@@ -439,7 +439,11 @@
         60,
         "off",
         true,
-        false
+        false,
+        -3.0,
+        0.0,
+        2.0,
+        true
       ],
       "widgets_values_named": {
         "script": "duration: 6\n<Picture 1> defines the person's face and hair. They stand by a tall window in soft morning light, turn from the view toward camera and give a small, warm smile. Slow push-in from a medium shot to a close-up.\nSound: quiet room tone, distant birdsong, fabric rustle as they turn. Music N/A.",
@@ -460,7 +464,11 @@
         "audio_crossfade_ms": 60,
         "interpolation": "off",
         "encode_all_first": true,
-        "output_frames": false
+        "output_frames": false,
+        "music_volume_db": -3.0,
+        "scene_volume_db": 0.0,
+        "music_fade_seconds": 2.0,
+        "mute_generated_music": true
       }
     },
     {

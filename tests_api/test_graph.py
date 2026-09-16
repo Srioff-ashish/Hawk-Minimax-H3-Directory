@@ -21,7 +21,7 @@ SOCKETS = {
     "HawkH3LoraStack": {"pipe"},
     "HawkH3References": {"refs_in"},
     "HawkH3StoryPlanner": {"refs"},
-    "HawkH3Director": {"pipe", "refs"},
+    "HawkH3Director": {"pipe", "refs", "music"},
 }
 AUTOGROW = re.compile(r"^(pictures\.picture_[0-8]|poses\.pose_[0-8]|videos\.video_[0-2]|video_soundtracks\.video_soundtrack_[0-2]|audios\.audio_[0-2])$")
 CORE_INPUTS = {"LoadImage": {"image"}, "LoadAudio": {"audio"}, "LoadVideo": {"file"}, "GetVideoComponents": {"video"}, "PreviewAny": {"source"}}
@@ -117,6 +117,20 @@ class Schema(unittest.TestCase):
         built, wiring = render_graph([], ModelSettings(), [], params(), script="x")
         self.assertNotIn("refs", built.prompt[built.nodes["director"]]["inputs"])
         self.assertEqual(wiring.available["Picture"], 0)
+
+    def test_music_bed_loads_audio_into_the_director(self):
+        with_music = RenderParams(run_name="api_test", seed=1, steps=8, music_path="hawk_api/m/track.mp3",
+                                  music_volume_db=-9.0, mute_generated_music=False)
+        built, _ = render_graph([], ModelSettings(), [], with_music, script="A")
+        self.assert_valid(built.prompt)
+        ((director_id, director),) = by_class(built.prompt, "HawkH3Director")
+        ((music_id, music),) = by_class(built.prompt, "LoadAudio")
+        self.assertEqual(director["inputs"]["music"], [music_id, 0])
+        self.assertEqual(music["inputs"]["audio"], "hawk_api/m/track.mp3")
+        self.assertEqual((director["inputs"]["music_volume_db"], director["inputs"]["mute_generated_music"]), (-9.0, False))
+        plain, _ = render_graph([], ModelSettings(), [], params(), script="A")
+        ((_, director),) = by_class(plain.prompt, "HawkH3Director")
+        self.assertNotIn("music", director["inputs"])
 
     def test_errors(self):
         with self.assertRaisesRegex(GraphError, "needs image"):

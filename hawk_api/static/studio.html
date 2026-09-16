@@ -192,6 +192,18 @@
     <input id="loraSearch" placeholder="Filter LoRAs…" style="margin-top:8px">
     <div id="loras" class="loras"><p class="small muted">Loading…</p></div>
 
+    <h2>5 · Music bed <span class="small muted" style="text-transform:none;letter-spacing:0">(optional)</span></h2>
+    <label class="drop" id="musicDrop">
+      <input type="file" id="musicInput" accept="audio/*">
+      <strong>Add a music track</strong> <span class="muted">— one track under the whole film, faded out at the end</span>
+    </label>
+    <div id="musicInfo" class="small" style="margin-top:6px" hidden></div>
+    <div id="musicControls" class="grid2" style="margin-top:8px" hidden>
+      <div class="field"><label for="musicVol">Music volume</label><div class="range"><input type="range" id="musicVol" min="-30" max="6" step="1" value="-3"><output id="musicVolOut">-3 dB</output></div></div>
+      <div class="field"><label for="sceneVol">Scene sound</label><div class="range"><input type="range" id="sceneVol" min="-40" max="6" step="1" value="0"><output id="sceneVolOut">0 dB</output></div></div>
+      <label class="check" style="grid-column: 1 / -1"><input type="checkbox" id="muteGen" checked> Turn off H3's own music in every segment</label>
+    </div>
+
     <div class="actions">
       <button id="generate" class="primary">Generate video</button>
       <button id="planBtn" hidden>Write plan</button>
@@ -582,6 +594,40 @@
     return payload;
   }
 
+  // ------------------------------------------------------------ music bed
+
+  state.music = null;
+
+  function renderMusic() {
+    const music = state.music;
+    $("musicControls").hidden = !(music && music.status === "ready");
+    $("musicInfo").hidden = !music;
+    if (!music) return;
+    const status = music.status === "uploading" ? `uploading ${Math.round(music.progress * 100)}%` : music.status === "error" ? `<span class="error">${esc(music.error)}</span>` : "ready";
+    $("musicInfo").innerHTML = `♪ ${esc(music.filename)} — ${status} <button class="small" type="button" id="musicRemove">Remove</button>`;
+    $("musicRemove").onclick = () => { state.music = null; renderMusic(); };
+  }
+
+  function addMusic(file) {
+    if (!file) return;
+    clearError();
+    if (!(file.type || "").startsWith("audio/")) return showError(`${file.name} is not an audio file.`);
+    if (file.size > MAX_TUNNEL_BYTES) return showError(`${file.name} is over 100 MB, which the tunnel refuses.`);
+    const music = { filename: file.name, status: "uploading", progress: 0, asset: null, error: "" };
+    state.music = music;
+    renderMusic();
+    uploadFile(file, (fraction) => { music.progress = fraction; if (state.music === music) renderMusic(); })
+      .then((asset) => { music.asset = asset.id; music.status = "ready"; if (state.music === music) renderMusic(); })
+      .catch((error) => { music.status = "error"; music.error = error.message; if (state.music === music) renderMusic(); });
+  }
+
+  $("musicInput").addEventListener("change", (event) => { addMusic(event.target.files[0]); event.target.value = ""; });
+  $("musicDrop").addEventListener("dragover", (event) => { event.preventDefault(); $("musicDrop").classList.add("over"); });
+  $("musicDrop").addEventListener("dragleave", () => $("musicDrop").classList.remove("over"));
+  $("musicDrop").addEventListener("drop", (event) => { event.preventDefault(); $("musicDrop").classList.remove("over"); addMusic(event.dataTransfer.files[0]); });
+  $("musicVol").addEventListener("input", () => { $("musicVolOut").textContent = `${$("musicVol").value} dB`; });
+  $("sceneVol").addEventListener("input", () => { $("sceneVolOut").textContent = `${$("sceneVol").value} dB`; });
+
   function settingsPayload() {
     const settings = {
       aspect_ratio: $("aspect").value || "16:9",
@@ -595,6 +641,12 @@
     if ($("steps").value.trim()) settings.steps = Number($("steps").value);
     if ($("seed").value.trim()) settings.seed = Number($("seed").value);
     if ($("unet").value && $("unet").value !== state.options?.default_unet) settings.unet_name = $("unet").value;
+    if (state.music?.status === "ready") {
+      settings.music_asset_id = state.music.asset;
+      settings.music_volume_db = Number($("musicVol").value);
+      settings.scene_volume_db = Number($("sceneVol").value);
+      settings.mute_generated_music = $("muteGen").checked;
+    }
     if ($("clip").value && $("clip").value !== state.options?.default_clip) settings.clip_name = $("clip").value;
     return settings;
   }
@@ -617,7 +669,7 @@
     clearError();
     const prompt = $("prompt").value;
     if (!prompt.trim()) return showError("Write a prompt first.");
-    if (state.refs.some((ref) => ref.status === "uploading")) return showError("Wait until the uploads finish.");
+    if (state.refs.some((ref) => ref.status === "uploading") || state.music?.status === "uploading") return showError("Wait until the uploads finish.");
     const references = referencesPayload();
     const seconds = Number($("duration").value);
     const planner = { story: prompt, segment_count: Number($("segments").value), segment_seconds: seconds, aspect_ratio: $("aspect").value || "16:9" };
@@ -681,6 +733,7 @@
     const rows = [];
     if (job.kind === "render") {
       if (job.unet_name) rows.push(`${esc(shortName(job.unet_name))} · ${esc(shortName(job.clip_name))}`);
+      if (job.music_asset_id) rows.push("♪ music bed");
       if (job.steps) rows.push(`${job.steps} steps${job.steps_reason ? ` — ${esc(job.steps_reason)}` : ""}`);
       const applied = job.status === "done" ? job.loras_applied : job.loras;
       if (applied?.length) rows.push(`LoRAs${job.status === "done" ? " applied" : ""}: ${applied.map((l) => `${esc(l.file)} @ ${l.strength}`).join(", ")}`);

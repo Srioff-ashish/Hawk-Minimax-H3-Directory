@@ -234,6 +234,7 @@ Renders the script. For each segment it runs exactly what the stock template run
 | `pipe` | — | From Hawk H3 Model Loader. |
 | `script` | an example | The segments to render. Plain text or JSON; see [Writing scripts](scripts.md). Can be typed or connected from the Planner. |
 | `refs` *(optional)* | — | From Hawk H3 References. |
+| `music` *(optional)* | — | **Music bed**: one AUDIO track (e.g. from Load Audio) mixed under the whole finished film: resampled, looped or trimmed to length, faded out. H3 composes new music in every segment, so this is how a multi-segment film keeps one continuous track. Mixing happens after rendering, so changing the track or its levels never re-renders segments. |
 | `aspect_ratio` | 16:9 | `16:9`, `9:16`, `1:1`, `4:3`, `3:4`, `21:9`, `9:21`, or `match first picture` (uses `<Picture 1>`'s shape). |
 | `megapixels` | 0.98 | Output size. 0.98 at 16:9 is H3's native 1344×768. See the [size table](#output-sizes). |
 | `default_seconds` | 10 | Length of segments that don't set `duration:`. |
@@ -250,6 +251,10 @@ Renders the script. For each segment it runs exactly what the stock template run
 | `audio_crossfade_ms` *(advanced)* | 60 | Crossfade length at each continuity join. Hard cuts (`continuity: off`) are never faded. |
 | `interpolation` *(advanced)* | `off` | `48 fps (RIFE)` or `60 fps (RIFE)`. Applied per segment. Needs ComfyUI-VFI. |
 | `encode_all_first` *(advanced)* | on | Encode every segment's text and references before sampling, so the text encoder and the video model each load once. Turn it off only if RAM is too tight to hold all conditionings at once. |
+| `music_volume_db` *(advanced)* | -3 | Music bed level in dB. |
+| `scene_volume_db` *(advanced)* | 0 | Level of the rendered sound (voices, ambience, effects) under the music bed. |
+| `music_fade_seconds` *(advanced)* | 2 | Music fade-out at the end of the film. |
+| `mute_generated_music` *(advanced)* | on | With a music bed connected, every segment's `non_diegetic_music` becomes `N/A` (plain prompts get "Music N/A") so H3 composes no music of its own. It changes the prompts, so turning it on or off re-renders the segments. |
 | `output_frames` *(advanced)* | off | On: `frames` returns every frame of the whole film. Off: only the last rendered segment's frames. A few minutes of film at full size can need tens of GB of RAM, so leave it off unless the next node really needs all frames. |
 
 ### Outputs

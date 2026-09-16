@@ -253,6 +253,15 @@ class HawkH3Director(io.ComfyNode):
                     ),
                 ),
                 H3Refs.Input("refs", optional=True, tooltip="From Hawk H3 References."),
+                io.Audio.Input(
+                    "music",
+                    optional=True,
+                    tooltip=(
+                        "Music bed: one track mixed under the whole film after rendering (looped or trimmed, "
+                        "faded out). H3 composes new music per segment, so this is how a film keeps one "
+                        "continuous track. Changing it never re-renders segments."
+                    ),
+                ),
                 io.Combo.Input("aspect_ratio", options=ASPECT_RATIOS, default="16:9"),
                 io.Float.Input("megapixels", default=0.98, min=0.1, max=2.2, step=0.01,
                                tooltip="0.98 at 16:9 is H3's native 1344x768. Sizes snap to 32."),
@@ -298,6 +307,14 @@ class HawkH3Director(io.ComfyNode):
                                  tooltip="Encode every segment's text + references before sampling, so the text encoder and DiT swap once."),
                 io.Boolean.Input("output_frames", default=False, optional=True, advanced=True,
                                  tooltip="Return every frame of the full film on `frames`. Off returns the last segment only -- a long film at full size can need tens of GB of RAM."),
+                io.Float.Input("music_volume_db", default=-3.0, min=-40.0, max=12.0, step=0.5, optional=True, advanced=True,
+                               tooltip="Music bed level in dB (0 = as recorded)."),
+                io.Float.Input("scene_volume_db", default=0.0, min=-60.0, max=12.0, step=0.5, optional=True, advanced=True,
+                               tooltip="Level of the rendered sound (voices, ambience, effects) under a music bed."),
+                io.Float.Input("music_fade_seconds", default=2.0, min=0.0, max=15.0, step=0.5, optional=True, advanced=True,
+                               tooltip="Fade-out at the end of the film."),
+                io.Boolean.Input("mute_generated_music", default=True, optional=True, advanced=True,
+                                 tooltip="With a music bed connected, set every segment's non_diegetic_music to N/A so H3 renders no music of its own. Changes the prompts, so segments re-render."),
             ],
             outputs=[
                 io.Video.Output("video", tooltip="The whole film with audio. Connect to Save Video."),
@@ -331,6 +348,11 @@ class HawkH3Director(io.ComfyNode):
         interpolation: str = "off",
         encode_all_first: bool = True,
         output_frames: bool = False,
+        music: dict | None = None,
+        music_volume_db: float = -3.0,
+        scene_volume_db: float = 0.0,
+        music_fade_seconds: float = 2.0,
+        mute_generated_music: bool = True,
     ) -> io.NodeOutput:
         started = time.monotonic()
         bundle = refs if refs is not None else RefBundle()
@@ -345,6 +367,7 @@ class HawkH3Director(io.ComfyNode):
             base_seed=seed,
             seed_mode="same" if seed_mode == SEED_MODES[1] else "increment",
             pose_instruction=bundle.pose_instruction,
+            mute_music=music is not None and bool(mute_generated_music),
         )
         width, height = media.resolve_resolution(
             aspect_ratio, megapixels, bundle.pictures[0] if bundle.pictures else None
@@ -518,7 +541,18 @@ class HawkH3Director(io.ComfyNode):
 
         # ---- assemble -----------------------------------------------------------
         final_path = os.path.join(run_dir, f"{_slug(run_name)}_final.mp4")
-        complete_audio = {"waveform": accumulated, "sample_rate": sample_rate}
+        waveform = accumulated
+        if music is not None:
+            waveform = media.mix_music_bed(
+                accumulated,
+                sample_rate,
+                music["waveform"],
+                int(music["sample_rate"]),
+                music_db=music_volume_db,
+                scene_db=scene_volume_db,
+                fade_seconds=music_fade_seconds,
+            )
+        complete_audio = {"waveform": waveform, "sample_rate": sample_rate}
         InputImpl.VideoFromList(
             [InputImpl.VideoFromFile(p["video"]) for p in paths],
             complete_audio=complete_audio,
@@ -544,6 +578,10 @@ class HawkH3Director(io.ComfyNode):
                 "total_seconds": round(accumulated.shape[-1] / sample_rate, 2),
                 "segments": report,
                 "warnings": warnings,
+                "music_bed": None if music is None else {
+                    "music_db": music_volume_db, "scene_db": scene_volume_db, "fade_seconds": music_fade_seconds,
+                    "generated_music_muted": bool(mute_generated_music),
+                },
                 "final": final_path,
                 "elapsed_seconds": round(time.monotonic() - started, 1),
             },

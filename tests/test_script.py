@@ -318,6 +318,32 @@ class StructuredPrompts(unittest.TestCase):
             self.assertIn(needle, text)
 
 
+class MusicBed(unittest.TestCase):
+    STRUCTURED = (
+        "integrated_multimodal_description: [Shot 1] She walks.\n\n"
+        "overall_soundscape: Footsteps only.\n\n"
+        "non_diegetic_music: Driving electronic track at 128 BPM,\nwith pulsing bass."
+    )
+
+    def build(self, text, mute):
+        return build_jobs(parse_script(json.dumps({"segments": [{"prompt": text}]})), available={}, video_has_audio=[],
+                          default_seconds=5, continuity="off", base_seed=0, mute_music=mute)[0].prompt
+
+    def test_structured_music_field_becomes_na(self):
+        prompt = self.build(self.STRUCTURED, True)
+        self.assertTrue(prompt.endswith("non_diegetic_music: N/A"))
+        self.assertIn("overall_soundscape: Footsteps only.", prompt)
+        self.assertNotIn("128 BPM", prompt)
+        self.assertIn("128 BPM", self.build(self.STRUCTURED, False))
+
+    def test_music_field_in_the_middle_keeps_what_follows(self):
+        text = "non_diegetic_music: Piano.\n\noverall_soundscape: Rain."
+        self.assertEqual(self.build(text, True), "non_diegetic_music: N/A\n\noverall_soundscape: Rain.")
+
+    def test_plain_prompt_gets_a_music_line(self):
+        self.assertTrue(self.build("She walks.", True).endswith("Music N/A: no background music or score of any kind."))
+
+
 class LoraStack(unittest.TestCase):
     def test_lines(self):
         entries = parse_lora_stack(

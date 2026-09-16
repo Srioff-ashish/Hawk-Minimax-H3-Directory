@@ -567,7 +567,11 @@
         60,
         "off",
         true,
-        false
+        false,
+        -3.0,
+        0.0,
+        2.0,
+        true
       ],
       "widgets_values_named": {
         "script": "style: Natural handheld documentary look, daylight. Native audio. No subtitles.\n---\ntitle: Motion\nduration: 8\npictures: 1\nvideos: 1\naudios: none\n<Picture 1> defines the person's face and hair. <Video 1> supplies ONLY the body movement, its timing and the camera move; do not take the person, clothes or location from it.\nThey perform that movement on a sunny rooftop terrace with plants and a city skyline behind them, wearing a plain white t-shirt.\nSound: light wind, footsteps on wooden decking, distant traffic. Music N/A.\n---\ntitle: Talk\nduration: 8\npictures: 1\nvideos: none\naudios: 1\n<Picture 1> defines their face. <Audio 1> is their voice: take its timbre, accent and pace.\nThey finish the movement, catch their breath, look into the lens and say: \"Okay. Your turn.\"\nMedium close-up, handheld. Sound: breathing, wind, their voice close and clear.",
@@ -588,7 +592,11 @@
         "audio_crossfade_ms": 60,
         "interpolation": "off",
         "encode_all_first": true,
-        "output_frames": false
+        "output_frames": false,
+        "music_volume_db": -3.0,
+        "scene_volume_db": 0.0,
+        "music_fade_seconds": 2.0,
+        "mute_generated_music": true
       }
     },
     {

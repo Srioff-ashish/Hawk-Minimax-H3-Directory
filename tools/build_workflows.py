@@ -278,6 +278,10 @@ def director(g: Graph, pos, *, script, run_name, link_script=False, megapixels=0
             "interpolation": "off",
             "encode_all_first": True,
             "output_frames": False,
+            "music_volume_db": -3.0,
+            "scene_volume_db": 0.0,
+            "music_fade_seconds": 2.0,
+            "mute_generated_music": True,
         },
     )
 

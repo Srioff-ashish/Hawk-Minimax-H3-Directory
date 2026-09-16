@@ -640,7 +640,11 @@
         60,
         "off",
         true,
-        false
+        false,
+        -3.0,
+        0.0,
+        2.0,
+        true
       ],
       "widgets_values_named": {
         "script": "style: Cinematic live-action, soft overcast light, 35mm lens feel, light film grain. Native audio. No subtitles, no on-screen text.\n---\ntitle: Arrival\nduration: 8\npictures: 1, 2, 3\n<Picture 1> defines her face and hair. <Picture 2> defines her coat: take its colour, fabric and cut, not the person wearing it. <Picture 3> defines the station platform.\nShe steps off a tram onto the rain-wet platform, adjusts her coat collar and looks up at the station clock. Slow push-in from a medium-wide shot.\nSound: tram brakes hiss, distant announcements, light rain on the canopy. Music N/A.\n---\ntitle: The call\nduration: 10\npictures: 1, 2\naudios: 1\n<Picture 1> defines her face. <Picture 2> defines her coat. <Audio 1> is her voice: its timbre and calm pace.\nShe turns toward camera, takes out her phone and answers: \"I'm here. Where are you?\" The camera tracks backwards at walking pace in a medium close-up.\nSound: footsteps on wet tiles, her voice close and clear, rain continues.\n---\ntitle: The wave\nduration: 8\npictures: 1\nShe lowers the phone, spots someone off-screen left and waves, breaking into a wide smile, and ends in the pose from <Pose 1>. The camera pans left to follow her gaze, then settles.\nSound: rain, a distant voice calling her name.\n---\ntitle: Cafe (hard cut)\nduration: 10\ncontinuity: off\npictures: 1, 2\naudios: 1\nHard cut. <Picture 1> defines her face and hair. <Picture 2> defines her coat, now hanging on the chair behind her. <Audio 1> is her voice.\nA warm cafe interior at night, rain streaking the window. She sits across from camera, wraps both hands around a cup and laughs: \"You haven't changed at all.\"\nStatic medium shot, then a slow push-in. Sound: cafe murmur, cups clinking, rain on the glass.",
@@ -661,7 +665,11 @@
         "audio_crossfade_ms": 60,
         "interpolation": "off",
         "encode_all_first": true,
-        "output_frames": false
+        "output_frames": false,
+        "music_volume_db": -3.0,
+        "scene_volume_db": 0.0,
+        "music_fade_seconds": 2.0,
+        "mute_generated_music": true
       }
     },
     {

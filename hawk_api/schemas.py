@@ -67,6 +67,15 @@ class RenderSettings(BaseModel):
         description="ref2va base model from list_options.diffusion_models: a file name or a unique part such as 'bf16'. "
         "Default: the server's model. bf16 is best quality but slowest; int8 / fp8 are faster.",
     )
+    music_asset_id: str | None = Field(
+        None,
+        description="Music bed: an uploaded audio asset mixed under the whole film (looped or trimmed, faded out). "
+        "Use it for one continuous track across segments; do not also list it in references.",
+    )
+    music_volume_db: float = Field(-3.0, ge=-40, le=12, description="Music bed level in dB.")
+    scene_volume_db: float = Field(0.0, ge=-60, le=12, description="Level of the rendered voices / ambience / effects under the music bed.")
+    music_fade_seconds: float = Field(2.0, ge=0, le=15, description="Music fade-out at the end of the film.")
+    mute_generated_music: bool = Field(True, description="With a music bed, stop H3 from composing its own music in each segment.")
     clip_name: str | None = Field(
         None,
         description="Qwen3-VL MiniMax text encoder from list_options.text_encoders (file name or unique part). Default: the server's.",

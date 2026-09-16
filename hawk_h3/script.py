@@ -413,6 +413,7 @@ def drop_unavailable_references(script: Script, available: dict[str, int]) -> tu
 #: H3's native structured prompts keep their visual body and sound in named fields.
 _BODY_FIELD = re.compile(r"^(detailed_description|integrated_multimodal_description)[ \t]*:[ \t]*", re.MULTILINE)
 _SOUND_FIELD = re.compile(r"^overall_soundscape[ \t]*:", re.MULTILINE)
+_MUSIC_FIELD = re.compile(r"^non_diegetic_music[ \t]*:", re.MULTILINE)
 
 
 def _with_style(style: str, prompt: str) -> str:
@@ -437,6 +438,16 @@ def _add_note(prompt: str, note: str) -> str:
     return f"{prompt[: sound.start()].rstrip()} {note}\n\n{prompt[sound.start() :]}"
 
 
+def without_music(prompt: str) -> str:
+    """Switch off generated music: a music bed is mixed under the whole film instead.
+    Structured prompts get ``non_diegetic_music: N/A``; plain prompts a closing line."""
+    field = _MUSIC_FIELD.search(prompt)
+    if field is None:
+        return f"{prompt}\n\nMusic N/A: no background music or score of any kind."
+    end = prompt.find("\n\n", field.end())
+    return f"{prompt[: field.end()]} N/A{'' if end < 0 else prompt[end:]}"
+
+
 def _join_tags(tags: list[str]) -> str:
     return tags[0] if len(tags) == 1 else ", ".join(tags[:-1]) + " and " + tags[-1]
 
@@ -454,6 +465,7 @@ def build_jobs(
     base_seed: int,
     seed_mode: str = "increment",
     pose_instruction: str = DEFAULT_POSE_INSTRUCTION,
+    mute_music: bool = False,
 ) -> list[Job]:
     """Validate the whole script up front, so a long run never dies at segment 7."""
     if continuity not in CONTINUITY_FRAMES:
@@ -515,6 +527,8 @@ def build_jobs(
         if selected["Pose"] and pose_instruction.strip():
             tags = [f"<Picture {mapping['Pose'][n][1]}>" for n in selected["Pose"]]
             prompt = _add_note(prompt, pose_instruction.strip().replace('{tags}', _join_tags(tags)))
+        if mute_music:
+            prompt = without_music(prompt)
 
         seconds = segment.duration if segment.duration is not None else float(default_seconds)
         if seconds > MAX_SECONDS:

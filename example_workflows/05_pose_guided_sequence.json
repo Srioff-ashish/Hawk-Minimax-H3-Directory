@@ -594,7 +594,11 @@
         60,
         "off",
         true,
-        false
+        false,
+        -3.0,
+        0.0,
+        2.0,
+        true
       ],
       "widgets_values_named": {
         "script": "style: Contemporary dance film, empty white studio, soft top light, slow elegant camera. Native audio. Music: sparse solo piano. No subtitles.\n---\ntitle: Rise\nduration: 6\n<Picture 1> defines the dancer's face, hair and black leotard.\nShe stands still in the centre of the studio, then slowly lifts both arms and ends in the pose from <Pose 1>. Slow push-in from a full shot.\nSound: soft footfalls, fabric movement, piano.\n---\ntitle: Lunge\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe flows down out of the stretch into the pose from <Pose 2> and holds it for a beat. The camera arcs slowly to her side.\nSound: a slow breath, bare feet sliding on the floor, piano.\n---\ntitle: Bow\nduration: 6\n<Picture 1> defines the dancer's face and leotard.\nShe rises out of the lunge, steps back and finishes in the bow from <Pose 3>. The camera settles into a static wide shot.\nSound: the piano holds a final chord, then silence.",
@@ -615,7 +619,11 @@
         "audio_crossfade_ms": 60,
         "interpolation": "off",
         "encode_all_first": true,
-        "output_frames": false
+        "output_frames": false,
+        "music_volume_db": -3.0,
+        "scene_volume_db": 0.0,
+        "music_fade_seconds": 2.0,
+        "mute_generated_music": true
       }
     },
     {
