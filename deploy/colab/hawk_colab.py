@@ -619,6 +619,7 @@ def start(
         "DATA_DIR": data_dir,
         "MAX_UPLOAD_MB": str(TUNNEL_UPLOAD_MB),
         "COMFY_INPUT_DIR": os.path.join(comfy_dir, "input"),
+        "COMFY_OUTPUT_DIR": os.path.join(comfy_dir, "output"),
         "HAWK_DRIVE_ROOT": "/content/drive/MyDrive",
         "HAWK_UNET": models["unet_name"],
         "HAWK_CLIP": models["clip_name"],

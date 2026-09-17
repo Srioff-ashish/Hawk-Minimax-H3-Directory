@@ -22,7 +22,7 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
 2. Plan (optional but recommended for films): plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it.
 3. Render: render_film with the approved script (or plan_job_id, or story to plan and render in one job). Start with settings.megapixels=0.4 for a cheap preview.
-4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link).
+4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
 
 Reference roles: picture (identity, outfit, place -> <Picture N>), pose (body pose only -> <Pose N>), video (motion or camera -> <Video N>), audio (voice, music -> <Audio N>), video_soundtrack (audio of video for_video).

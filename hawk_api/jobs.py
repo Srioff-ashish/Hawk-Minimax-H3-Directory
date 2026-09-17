@@ -87,6 +87,50 @@ def _hash_file(fileobj) -> str | None:
         return None
 
 
+def job_title(job: dict) -> str:
+    """A short human title: the plan's title, the first segment title(s), or the first prompt line."""
+    script = job.get("script") or ""
+    try:
+        data = json.loads(script)
+    except (TypeError, ValueError):
+        data = None
+    if isinstance(data, dict):
+        segments = data.get("segments") or []
+        if data.get("title"):
+            return str(data["title"])[:80]
+        if segments and isinstance(segments[0], dict) and segments[0].get("title"):
+            first = str(segments[0]["title"])
+            return f"{first} +{len(segments) - 1}" if len(segments) > 1 else first
+    titles = re.findall(r"^\s*title\s*:\s*(.+)$", script, re.IGNORECASE | re.MULTILINE)
+    if titles:
+        return f"{titles[0].strip()} +{len(titles) - 1}" if len(titles) > 1 else titles[0].strip()
+    for line in script.splitlines():
+        line = line.strip()
+        if line and not re.match(r"^(-{3,}|(title|duration|seconds|pictures|images|videos|audios|poses|seed|continuity|style)\s*:)", line, re.I):
+            return line[:77] + "..." if len(line) > 80 else line
+    return "Plan" if job.get("kind") == "plan" else "Video"
+
+
+def _read_bytes(path: str) -> bytes:
+    with open(path, "rb") as handle:
+        return handle.read()
+
+
+def drive_links(drive: dict | None) -> dict | None:
+    if not drive:
+        return None
+    links = dict(drive)
+    file_id = drive.get("file_id")
+    if file_id:
+        links.update(
+            preview_url=f"https://drive.google.com/file/d/{file_id}/preview",
+            view_url=f"https://drive.google.com/file/d/{file_id}/view",
+            download_url=f"https://drive.google.com/uc?id={file_id}&export=download",
+            thumb_url=f"https://drive.google.com/thumbnail?id={file_id}&sz=w640",
+        )
+    return links
+
+
 def _image_type(data: bytes) -> tuple[str, str]:
     if data.startswith(b"\x89PNG"):
         return "png", "image/png"
@@ -239,6 +283,8 @@ class HawkService:
         self.comfy = comfy or ComfyClient(settings.comfy_url)
         self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
         self.prompts = PromptStore(settings.data_dir)
+        #: Called with the job id when a render finishes (e.g. the Google Drive exporter).
+        self.render_done_hooks: list = []
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
 
@@ -553,17 +599,22 @@ class HawkService:
             from PIL import Image
         except ImportError:  # no Pillow: send the original
             return data, mime
-        try:
-            image = Image.open(io.BytesIO(data))
-            image.thumbnail((width, width * 4))
-            buffer = io.BytesIO()
-            image.convert("RGB").save(buffer, format="JPEG", quality=82)
-        except Exception:
-            return data, mime
-        os.makedirs(os.path.dirname(cache), exist_ok=True)
-        with open(cache, "wb") as handle:
-            handle.write(buffer.getvalue())
-        return buffer.getvalue(), "image/jpeg"
+
+        def make() -> bytes | None:
+            try:
+                image = Image.open(io.BytesIO(data))
+                image.thumbnail((width, width * 4))
+                buffer = io.BytesIO()
+                image.convert("RGB").save(buffer, format="JPEG", quality=82)
+            except Exception:
+                return None
+            os.makedirs(os.path.dirname(cache), exist_ok=True)
+            with open(cache, "wb") as handle:
+                handle.write(buffer.getvalue())
+            return buffer.getvalue()
+
+        thumb = await asyncio.to_thread(make)
+        return (thumb, "image/jpeg") if thumb else (data, mime)
 
     async def _video_thumb(self, asset: dict, width: int) -> bytes:
         width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
@@ -1043,6 +1094,12 @@ class HawkService:
                 job["segments_done"] = job["segments_total"]
         job["status"] = "done"
         self.store.save_job(job)
+        if job["kind"] == "render":
+            for hook in self.render_done_hooks:
+                try:
+                    hook(job["id"])
+                except Exception:
+                    log.exception("hawk_api: render-done hook failed")
 
     async def reconcile(self) -> None:
         """Catch up on anything the websocket missed, and flag jobs ComfyUI forgot
@@ -1083,6 +1140,17 @@ class HawkService:
 
     # ---------------------------------------------------------- views
 
+    def job_summary(self, job: dict) -> dict:
+        """The job list's light view: no scripts, prompts or segment links (open the job for those)."""
+        view = self.job_view(job)
+        for key in ("script", "final_prompts", "segment_urls", "steps_reason"):
+            view.pop(key, None)
+        if view.get("error") and len(view["error"]) > 400:
+            view["error"] = view["error"][:400] + "..."
+        view["title"] = job_title(job)
+        view["segments_available"] = job.get("segments_done") or 0
+        return view
+
     def job_view(self, job: dict) -> dict:
         base, token, ttl = self.settings.public_base_url, self.settings.token, self.settings.link_ttl_seconds
         view = {
@@ -1103,6 +1171,7 @@ class HawkService:
             "error": job.get("error"),
             "resumable": job.get("resumable", False),
             "warnings": job.get("warnings", []),
+            "title": job_title(job),
         }
         if job["kind"] == "render":
             view.update(
@@ -1121,24 +1190,82 @@ class HawkService:
             )
             if job["status"] == "done" and job["outputs"].get("video"):
                 view["video_url"] = base + sign_path(token, f"/v1/jobs/{job['id']}/video", ttl)
+                view["download_url"] = view["video_url"] + "&download=1"
+                view["thumb_url"] = base + sign_path(token, f"/v1/jobs/{job['id']}/thumb", ttl) + "&w=640"
+            view["drive"] = drive_links(job.get("drive"))
             done = job.get("segments_done") or 0
             view["segment_urls"] = [
                 base + sign_path(token, f"/v1/jobs/{job['id']}/segments/{number}", ttl) for number in range(1, done + 1)
             ]
         return view
 
-    async def open_video(self, job_id: str):
+    def video_location(self, job_id: str) -> tuple[str, str, str]:
+        """(filename, subfolder, type) of a finished render's video."""
         job = self.get_job(job_id)
         video = job["outputs"].get("video")
         if job["kind"] != "render" or job["status"] != "done" or not video:
             raise NotFound(f"Job {job_id} has no finished video yet.")
-        return await self._view(video["filename"], video["subfolder"], video.get("type", "output"))
+        return video["filename"], video["subfolder"], video.get("type", "output")
 
-    async def open_segment(self, job_id: str, number: int):
+    def segment_location(self, job_id: str, number: int) -> tuple[str, str, str]:
         job = self.get_job(job_id)
         if job["kind"] != "render" or number < 1:
             raise NotFound("No such segment.")
-        return await self._view(f"segment_{number:03d}.mp4", f"hawk_h3/{job['run_name']}")
+        return f"segment_{number:03d}.mp4", f"hawk_h3/{job['run_name']}", "output"
+
+    def local_output(self, filename: str, subfolder: str, type_: str = "output") -> str | None:
+        """The file on this machine when ComfyUI's output folder is local (served with byte ranges)."""
+        root = self.settings.comfy_output_dir if type_ == "output" else self.settings.comfy_input_dir
+        if not root:
+            return None
+        path = os.path.realpath(os.path.join(root, subfolder, filename))
+        return path if path.startswith(os.path.realpath(root) + os.sep) and os.path.isfile(path) else None
+
+    async def open_remote(self, filename: str, subfolder: str, type_: str, range_header: str | None) -> dict:
+        try:
+            return await self.comfy.view_range(filename, subfolder, type_, range_header)
+        except ComfyNotFound as exc:
+            raise NotFound(str(exc)) from None
+        except ComfyError as exc:
+            raise Unavailable(str(exc)) from None
+
+    async def open_video(self, job_id: str):
+        return await self._view(*self.video_location(job_id))
+
+    async def open_segment(self, job_id: str, number: int):
+        return await self._view(*self.segment_location(job_id, number))
+
+    async def job_thumb(self, job_id: str, width: int = 640) -> bytes:
+        """A JPEG frame from a finished render (1 s in), cached."""
+        width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
+        cache = os.path.join(self.settings.data_dir, "thumbs", f"job_{job_id}_{width}.jpg")
+        if os.path.isfile(cache):
+            return await asyncio.to_thread(_read_bytes, cache)
+        if not shutil.which("ffmpeg"):
+            raise NotFound("No thumbnail: ffmpeg is not installed on the server.")
+        filename, subfolder, type_ = self.video_location(job_id)
+        source, temp = self.local_output(filename, subfolder, type_), None
+        if source is None:
+            _, _, body = await self._view(filename, subfolder, type_)
+            temp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+            async for chunk in body:
+                temp.write(chunk)
+            temp.close()
+            source = temp.name
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        try:
+            for seek in ("1", "0"):
+                process = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", seek, "-i", source, "-frames:v", "1",
+                    "-vf", f"scale={width}:-2", cache, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await process.wait()
+                if process.returncode == 0 and os.path.isfile(cache):
+                    return await asyncio.to_thread(_read_bytes, cache)
+        finally:
+            if temp is not None:
+                os.remove(temp.name)
+        raise NotFound("Could not make a thumbnail for this video.")
 
     async def _view(self, filename: str, subfolder: str, type_: str = "output"):
         try:

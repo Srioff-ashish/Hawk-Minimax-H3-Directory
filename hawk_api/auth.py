@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import math
 import time
 from urllib.parse import urlencode
 
@@ -41,6 +42,9 @@ def _signature(secret: str, path: str, expires: int) -> str:
 
 def sign_path(secret: str, path: str, ttl_seconds: int, now: float | None = None) -> str:
     expires = int((time.time() if now is None else now) + ttl_seconds)
+    if ttl_seconds >= 86400:
+        # Round up to a whole UTC day so a file keeps one URL all day: browsers and CDNs can cache it.
+        expires = int(math.ceil(expires / 86400) * 86400)
     return f"{path}?{urlencode({'exp': expires, 'sig': _signature(secret, path, expires)})}"
 
 

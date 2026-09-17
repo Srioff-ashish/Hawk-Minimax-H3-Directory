@@ -270,11 +270,14 @@ Script format and tag rules: [Writing scripts](scripts.md).
 | Method | Path | |
 |---|---|---|
 | GET | `/v1/jobs/<id>` | Status, progress, script, LoRAs, links |
-| GET | `/v1/jobs` | Recent jobs |
+| GET | `/v1/jobs?view=summary&since=<server_time>` | Recent jobs. `view=summary` drops scripts, prompts and segment links; `since` returns only jobs changed after the `server_time` of your previous call |
 | POST | `/v1/jobs/<id>/cancel` | Stop a queued or running job |
 | POST | `/v1/jobs/<id>/retry` | Resume a failed or cancelled job |
-| GET | `/v1/jobs/<id>/video` | Final MP4 |
-| GET | `/v1/jobs/<id>/segments/<n>` | One segment's MP4 |
+| GET | `/v1/jobs/<id>/video` | Final MP4, streamed inline with byte ranges (seekable). `?download=1` saves it as a file |
+| GET | `/v1/jobs/<id>/segments/<n>` | One segment's MP4 (same options) |
+| GET | `/v1/jobs/<id>/thumb?w=640` | JPEG poster frame of a finished render |
+| POST | `/v1/jobs/<id>/drive` | Copy a finished render to Google Drive (again) |
+| GET / PUT | `/v1/drive/export` | Drive copy settings: `{"enabled": true, "folder": "Hawk H3/Videos", "segments": false}` plus `mounted` |
 | GET | `/v1/options` | Base models, text encoders, LoRA files, defaults, presets, samplers… |
 | GET | `/healthz` | No auth: ComfyUI and LoRA status |
 
@@ -292,13 +295,23 @@ A finished render's job:
   "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors", "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
   "queue_position": null,
   "final_prompts": "### Segment 1 …  the exact text MiniMax H3 encoded: <Pose N> rewritten to <Picture k>, style and pose notes inserted",
+  "title": "Chai ad on a Mumbai rooftop",
   "video_url": "https://…/v1/jobs/5c0e…/video?exp=…&sig=…",
+  "download_url": "https://…/v1/jobs/5c0e…/video?exp=…&sig=…&download=1",
+  "thumb_url": "https://…/v1/jobs/5c0e…/thumb?exp=…&sig=…&w=640",
+  "drive": {"status": "ready", "path": "Hawk H3/Videos/2026-09-17/Chai_ad_on_a_Mumbai_rooftop_5c0e1b2a.mp4", "file_id": "1AbC…",
+            "preview_url": "https://drive.google.com/file/d/1AbC…/preview", "view_url": "…/view",
+            "download_url": "https://drive.google.com/uc?id=1AbC…&export=download", "thumb_url": "…"},
   "segment_urls": ["https://…/segments/1?exp=…&sig=…", "…"],
   "warnings": [], "error": null, "resumable": false
 }
 ```
 
-`video_url` and `segment_urls` are **signed links**: they open in any browser without the token and expire after 7 days (`LINK_TTL_SECONDS`). Fetch the job again for fresh ones.
+`video_url` and `segment_urls` are **signed links**: they open in any browser without the token and expire after 7 days (`LINK_TTL_SECONDS`). Fetch the job again for fresh ones. Links lasting a day or more expire at a whole UTC day, so a file keeps the same URL all day and browsers cache it (`Cache-Control: private, max-age=86400`).
+
+**Fast delivery.** When `COMFY_OUTPUT_DIR` points at ComfyUI's output folder on the same machine, videos are served straight from disk; otherwise they're proxied from ComfyUI with the `Range` header forwarded. JSON responses over 1 KB are gzipped; media never is.
+
+**Google Drive copy.** With Google Drive mounted (`HAWK_DRIVE_ROOT`, default `/content/drive/MyDrive`) and export enabled (the default), every finished render is copied to `<folder>/<date>/<title>_<id>.mp4`. `drive.status` goes `copying` → `syncing` → `ready` once Drive reports the file id (read from the mount's `user.drive.id` attribute), or `copied` if the mount doesn't expose the id, or `failed` with `error`. Drive's `preview_url` and `download_url` stream from Google's servers, not the tunnel, but only for a Google account that can see the file: the Drive owner, or anyone if you share the folder.
 
 Errors are JSON `{"error": "…", "details": {…}}` with status 401 (token), 404 (unknown job), 409 (wrong state, e.g. cancelling a finished job), 422 (bad request: script, references, LoRAs) or 503 (ComfyUI unreachable).
 

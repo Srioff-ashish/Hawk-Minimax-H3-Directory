@@ -8,8 +8,10 @@ size limit. Imports run in the background and report progress.
 from __future__ import annotations
 
 import asyncio
+import json
 import mimetypes
 import os
+import shutil
 import time
 import uuid
 
@@ -189,3 +191,149 @@ class ImportManager:
         for task in list(self._tasks.values()):
             task.cancel()
         await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+
+
+# --------------------------------------------------------------------------- export
+
+#: Colab's Drive mount exposes each file's Drive id as an extended attribute.
+DRIVE_ID_ATTRS = ("user.drive.id", "user.drive.item_id", "user.drive.file_id")
+DRIVE_ID_WAIT_SECONDS = 180.0
+DRIVE_ID_POLL_SECONDS = 5.0
+EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False}
+
+
+def drive_file_id(path: str) -> str | None:
+    """The Drive file id of a file in the mounted Drive, once Drive has synced it."""
+    getxattr = getattr(os, "getxattr", None)
+    if getxattr is None:  # not Linux
+        return None
+    names = list(DRIVE_ID_ATTRS)
+    try:
+        names += [name for name in os.listxattr(path) if "id" in name.lower() and name not in names]
+    except OSError:
+        pass
+    for name in names:
+        try:
+            value = getxattr(path, name).decode("utf-8", "ignore").strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return None
+
+
+def _slug(text: str) -> str:
+    import re
+
+    return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:50] or "video"
+
+
+class DriveExporter:
+    """Copies finished renders into the mounted Google Drive so they play and download from
+    Google's servers instead of through the tunnel."""
+
+    def __init__(self, service: HawkService, browser: DriveBrowser):
+        self.service = service
+        self.browser = browser
+        self.path = os.path.join(service.settings.data_dir, "drive_export.json")
+        self._lock = asyncio.Lock()
+        self._tasks: set[asyncio.Task] = set()
+
+    def settings(self) -> dict:
+        data = dict(EXPORT_DEFAULTS)
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+            data.update({k: stored[k] for k in EXPORT_DEFAULTS if k in stored})
+        except (OSError, ValueError):
+            pass
+        return {**data, "mounted": self.browser.available, "root": self.browser.root}
+
+    def save_settings(self, *, enabled: bool | None = None, folder: str | None = None, segments: bool | None = None) -> dict:
+        current = {k: v for k, v in self.settings().items() if k in EXPORT_DEFAULTS}
+        if enabled is not None:
+            current["enabled"] = bool(enabled)
+        if folder is not None:
+            clean = "/".join(part for part in folder.replace("\\", "/").split("/") if part and part not in (".", ".."))
+            if not clean:
+                raise RequestError("Give a Drive folder, e.g. Hawk H3/Videos.")
+            current["folder"] = clean
+        if segments is not None:
+            current["segments"] = bool(segments)
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        with open(self.path, "w", encoding="utf-8") as handle:
+            json.dump(current, handle, indent=2)
+        return self.settings()
+
+    def schedule(self, job_id: str, force: bool = False) -> bool:
+        config = self.settings()
+        if not force and not config["enabled"]:
+            return False
+        if not self.browser.available:
+            if force:
+                raise RequestError("Google Drive is not mounted on the server. Run drive.mount('/content/drive') in the notebook.")
+            return False
+        task = asyncio.create_task(self.export(job_id))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return True
+
+    def _set(self, job_id: str, **fields) -> None:
+        job = self.service.store.get_job(job_id)
+        if job is None:
+            return
+        drive = dict(job.get("drive") or {})
+        drive.update(fields, updated_at=time.time())
+        job["drive"] = drive
+        self.service.store.save_job(job)
+
+    async def export(self, job_id: str) -> None:
+        async with self._lock:
+            try:
+                job = self.service.get_job(job_id)
+                filename, subfolder, type_ = self.service.video_location(job_id)
+                config = self.settings()
+                from .jobs import job_title
+
+                day = time.strftime("%Y-%m-%d", time.localtime(job["created_at"]))
+                folder = f"{config['folder']}/{day}"
+                name = f"{_slug(job_title(job))}_{job_id[:8]}.mp4"
+                target_dir = os.path.join(self.browser.root, folder)
+                os.makedirs(target_dir, exist_ok=True)
+                target = os.path.join(target_dir, name)
+                self._set(job_id, status="copying", path=f"{folder}/{name}", folder=folder, file_id=None, error=None)
+                await self._copy(filename, subfolder, type_, target)
+                if config["segments"]:
+                    segments_dir = os.path.join(target_dir, f"{name[:-4]}_segments")
+                    os.makedirs(segments_dir, exist_ok=True)
+                    for number in range(1, (job.get("segments_done") or 0) + 1):
+                        seg_name, seg_folder, seg_type = self.service.segment_location(job_id, number)
+                        await self._copy(seg_name, seg_folder, seg_type, os.path.join(segments_dir, seg_name))
+                self._set(job_id, status="syncing")
+                deadline = time.monotonic() + DRIVE_ID_WAIT_SECONDS
+                while time.monotonic() < deadline:
+                    file_id = await asyncio.to_thread(drive_file_id, target)
+                    if file_id:
+                        self._set(job_id, status="ready", file_id=file_id)
+                        return
+                    await asyncio.sleep(DRIVE_ID_POLL_SECONDS)
+                self._set(job_id, status="copied")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._set(job_id, status="failed", error=str(exc)[:300])
+
+    async def _copy(self, filename: str, subfolder: str, type_: str, target: str) -> None:
+        local = self.service.local_output(filename, subfolder, type_)
+        if local:
+            await asyncio.to_thread(shutil.copyfile, local, target)
+            return
+        _, _, body = await self.service._view(filename, subfolder, type_)
+        with open(target, "wb") as handle:
+            async for chunk in body:
+                await asyncio.to_thread(handle.write, chunk)
+
+    async def stop(self) -> None:
+        for task in list(self._tasks):
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)

@@ -132,6 +132,12 @@ class DriveImportIn(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class DriveExportSettings(BaseModel):
+    enabled: bool | None = Field(None, description="Copy every finished render into Google Drive.")
+    folder: str | None = Field(None, description="Folder inside My Drive, e.g. Hawk H3/Videos (a dated subfolder is added).")
+    segments: bool | None = Field(None, description="Also copy each segment file.")
+
+
 class PromptIn(BaseModel):
     text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
 

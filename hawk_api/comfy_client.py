@@ -146,6 +146,30 @@ class ComfyClient:
 
         return response.headers.get("content-type", "application/octet-stream"), response.headers.get("content-length"), body()
 
+    async def view_range(self, filename: str, subfolder: str, type_: str = "output", range_header: str | None = None) -> dict:
+        """Like view, but forwards a Range header and reports the status and range headers."""
+        headers = {"Range": range_header} if range_header else {}
+        request = self.http.build_request(
+            "GET", "/view", params={"filename": filename, "subfolder": subfolder, "type": type_}, headers=headers
+        )
+        try:
+            response = await self.http.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            raise ComfyError(f"ComfyUI is unreachable at {self.base_url}: {exc}") from exc
+        if response.status_code not in (200, 206):
+            await response.aclose()
+            raise ComfyNotFound(f"{subfolder}/{filename} is not available ({response.status_code}).")
+
+        async def body() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in response.aiter_bytes(1 << 20):
+                    yield chunk
+            finally:
+                await response.aclose()
+
+        keep = ("content-type", "content-length", "content-range", "accept-ranges")
+        return {"status": response.status_code, "headers": {k: v for k, v in response.headers.items() if k.lower() in keep}, "body": body()}
+
     async def listen(self, handler: Callable[[dict], Awaitable[None]]) -> None:
         """Forward ComfyUI websocket events forever, reconnecting with backoff.
         Progress and "executed" events only reach the client_id that queued the prompt."""

@@ -68,6 +68,8 @@ class FakeComfy:
         self.cancelled: set[str] = set()
         self.sockets: dict[str, web.WebSocketResponse] = {}
         self.prompts: dict[str, dict] = {}
+        self.output_dir: str | None = None  # also write outputs to disk, like real ComfyUI
+        self.final_bytes = b"FINAL VIDEO BYTES"
         self.model_files = {
             "loras": [TURBO, REALISM],
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
@@ -164,7 +166,7 @@ class FakeComfy:
                     messages.append(["execution_error", data])
                     await self.send(client, "execution_error", data)
                     return await finish("error")
-                self.outputs[f"hawk_h3/{run_name}/segment_{number:03d}.mp4"] = f"segment {number}".encode()
+                self.save_output(f"hawk_h3/{run_name}/segment_{number:03d}.mp4", f"segment {number}".encode())
                 await self.send(client, "hawk_h3.segment", {"prompt_id": pid, "done": number, "total": total, "title": f"seg {number}", "cached": False})
                 await self.send(client, "progress", {"value": number, "max": total, "prompt_id": pid, "node": node_id})
             for preview_id, preview in by_class("PreviewAny"):
@@ -172,11 +174,19 @@ class FakeComfy:
                     outputs[preview_id] = {"text": ["### Segment 1\n" + text.replace("<Pose 1>", "<Picture 2>")]}
                     await self.send(client, "executed", {"node": preview_id, "output": outputs[preview_id], "prompt_id": pid})
             final = f"{run_name}_final.mp4"
-            self.outputs[f"hawk_h3/{run_name}/{final}"] = b"FINAL VIDEO BYTES"
+            self.save_output(f"hawk_h3/{run_name}/{final}", self.final_bytes)
             outputs[node_id] = {"images": [{"filename": final, "subfolder": f"hawk_h3/{run_name}", "type": "output"}], "animated": [True]}
             await self.send(client, "executed", {"node": node_id, "output": outputs[node_id], "prompt_id": pid})
         await finish("success")
         await self.send(client, "execution_success", {"prompt_id": pid})
+
+    def save_output(self, key: str, data: bytes) -> None:
+        self.outputs[key] = data
+        if self.output_dir:
+            path = os.path.join(self.output_dir, key)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(data)
 
     async def get_history(self, request):
         pid = request.match_info["pid"]

@@ -8,22 +8,24 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
+from starlette.middleware.gzip import GZipMiddleware
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent import AgentService
-from .library import DriveBrowser, ImportManager
+from .library import DriveBrowser, DriveExporter, ImportManager
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
-    AgentMessageIn, AgentSessionIn, AssetBulk, AssetUpdate, DriveImportIn, ImageRequest, PlanRequest, PromptIn,
+    AgentMessageIn, AgentSessionIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageRequest, PlanRequest, PromptIn,
     UrlAssetRequest, VideoRequest,
 )
 
@@ -31,7 +33,11 @@ from .schemas import (
 #: (they contain no data; every API call the Studio makes still needs the token).
 PUBLIC_PATHS = {"/healthz", "/docs", "/openapi.json", "/docs/oauth2-redirect", "/studio"}
 #: Paths a signed link (?exp=&sig=) may open without the token.
-SIGNABLE = re.compile(r"^/(upload|v1/jobs/[^/]+/video|v1/jobs/[^/]+/segments/\d+|v1/assets/[^/]+/file)$")
+SIGNABLE = re.compile(r"^/(upload|v1/jobs/[^/]+/(video|thumb)|v1/jobs/[^/]+/segments/\d+|v1/assets/[^/]+/file)$")
+#: Media is never gzipped (it is already compressed, and ranges must stay intact).
+NO_GZIP = ("video/mp4", "video/quicktime", "video/webm", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/mp4", "audio/ogg",
+           "image/jpeg", "image/png", "image/webp", "application/octet-stream", "text/event-stream")
+CACHE = {"cache-control": "private, max-age=86400"}
 UPLOAD_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "upload.html")
 STUDIO_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "studio.html")
 
@@ -86,6 +92,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     service = service or HawkService(settings)
     drive = DriveBrowser(settings.drive_root)
     imports = ImportManager(service, drive)
+    exporter = DriveExporter(service, drive)
+    service.render_done_hooks.append(exporter.schedule)
     mcp = build_mcp(service, drive=drive, imports=imports)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
@@ -104,6 +112,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         async with mcp.session_manager.run():
             yield
         await imports.stop()
+        await exporter.stop()
         await agent.stop()
         await service.stop()
 
@@ -230,7 +239,14 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
     async def asset_file(asset_id: str, w: int = 0):
-        """The asset itself, or a JPEG thumbnail at most ``w`` pixels wide for images."""
+        """The asset itself (byte ranges when stored locally), or a JPEG thumbnail at most ``w`` pixels wide."""
+        asset = service.store.get_asset(asset_id)
+        local = service.local_asset_path(asset) if asset and w <= 0 else None
+        if local:
+            import mimetypes
+
+            return FileResponse(local, media_type=mimetypes.guess_type(asset["filename"])[0] or "application/octet-stream",
+                                filename=asset["filename"], content_disposition_type="inline", headers=CACHE)
         content, media_type = await service.asset_file(asset_id, w)
         return Response(content, media_type=media_type, headers={"cache-control": "private, max-age=86400"})
 
@@ -264,8 +280,14 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         return service.job_view(await service.create_video(body))
 
     @app.get("/v1/jobs", tags=["jobs"])
-    async def list_jobs(limit: int = 50):
-        return {"jobs": [service.job_view(job) for job in service.list_jobs(limit)]}
+    async def list_jobs(limit: int = 50, view: str = "full", since: float | None = None):
+        """view=summary drops scripts, prompts and segment links; since returns only jobs changed after that time."""
+        now = time.time()
+        jobs = service.list_jobs(min(limit, 500))
+        if since is not None:
+            jobs = [job for job in jobs if job["updated_at"] > since]
+        render = service.job_summary if view == "summary" else service.job_view
+        return {"jobs": [render(job) for job in jobs], "server_time": now}
 
     @app.get("/v1/jobs/{job_id}", tags=["jobs"])
     async def get_job(job_id: str):
@@ -279,20 +301,43 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def retry_job(job_id: str):
         return service.job_view(await service.retry(job_id))
 
-    def _stream(opened, filename: str) -> StreamingResponse:
-        content_type, length, body = opened
-        headers = {"content-disposition": f'attachment; filename="{filename}"'}
-        if length:
-            headers["content-length"] = length
-        return StreamingResponse(body, media_type=content_type, headers=headers)
+    async def _media(request: Request, location: tuple[str, str, str], name: str, download: bool):
+        """Serve a video: from disk with byte ranges when ComfyUI's output folder is local,
+        otherwise proxied from ComfyUI with the Range header forwarded."""
+        disposition = "attachment" if download else "inline"
+        local = service.local_output(*location)
+        if local:
+            return FileResponse(local, media_type="video/mp4", filename=name, content_disposition_type=disposition, headers=CACHE)
+        opened = await service.open_remote(*location, request.headers.get("range"))
+        headers = {**opened["headers"], **CACHE, "content-disposition": f'{disposition}; filename="{name}"'}
+        return StreamingResponse(opened["body"], status_code=opened["status"], headers=headers,
+                                 media_type=headers.get("content-type", "video/mp4"))
 
     @app.get("/v1/jobs/{job_id}/video", tags=["downloads"])
-    async def download_video(job_id: str):
-        return _stream(await service.open_video(job_id), f"hawk_h3_{job_id[:8]}.mp4")
+    async def download_video(request: Request, job_id: str, download: int = 0):
+        return await _media(request, service.video_location(job_id), f"hawk_h3_{job_id[:8]}.mp4", bool(download))
 
     @app.get("/v1/jobs/{job_id}/segments/{number}", tags=["downloads"])
-    async def download_segment(job_id: str, number: int):
-        return _stream(await service.open_segment(job_id, number), f"hawk_h3_{job_id[:8]}_segment_{number:03d}.mp4")
+    async def download_segment(request: Request, job_id: str, number: int, download: int = 0):
+        return await _media(request, service.segment_location(job_id, number), f"hawk_h3_{job_id[:8]}_segment_{number:03d}.mp4", bool(download))
+
+    @app.get("/v1/jobs/{job_id}/thumb", tags=["downloads"])
+    async def job_thumb(job_id: str, w: int = 640):
+        return Response(await service.job_thumb(job_id, w), media_type="image/jpeg", headers=CACHE)
+
+    @app.post("/v1/jobs/{job_id}/drive", tags=["downloads"], status_code=202)
+    async def export_to_drive(job_id: str):
+        service.video_location(job_id)
+        exporter.schedule(job_id, force=True)
+        return service.job_view(service.get_job(job_id))
+
+    @app.get("/v1/drive/export", tags=["downloads"])
+    async def drive_export_settings():
+        return exporter.settings()
+
+    @app.put("/v1/drive/export", tags=["downloads"])
+    async def drive_export_update(body: DriveExportSettings):
+        return exporter.save_settings(enabled=body.enabled, folder=body.folder, segments=body.segments)
 
     # ------------------------------------------------------------ prompts
 
@@ -358,5 +403,6 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         return {"deleted": session_id}
 
     app.mount("/", mcp_app)  # serves /mcp; mounted last so the routes above win
+    app.add_middleware(GZipMiddleware, minimum_size=1024, exclude_content_types=NO_GZIP)
     app.add_middleware(AuthMiddleware, token=settings.token)
     return app

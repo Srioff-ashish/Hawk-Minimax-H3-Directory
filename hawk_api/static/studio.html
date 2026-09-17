@@ -241,6 +241,15 @@
   .job-media video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
   .job-media .placeholder { display: grid; place-items: center; gap: 10px; padding: 16px; text-align: center; font-size: 13px; width: 100%; }
   .job-media .placeholder .progress { width: 70%; background: rgba(255,255,255,.12); }
+  .job-media iframe { width: 100%; height: 100%; border: 0; display: block; background: #000; }
+  .poster { all: unset; position: absolute; inset: 0; cursor: pointer; display: grid; place-items: center; }
+  .poster img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .poster .play { position: relative; width: 52px; height: 52px; border-radius: 50%; background: rgba(10,12,18,.62); color: #fff; display: grid; place-items: center; transition: transform .15s, background .15s; }
+  .poster .play svg { width: 22px; height: 22px; margin-left: 3px; }
+  .poster:hover .play { transform: scale(1.08); background: var(--brand); }
+  .poster:focus-visible .play { outline: 2px solid #fff; outline-offset: 2px; }
+  .drawer-media { border-radius: var(--r); overflow: hidden; flex-shrink: 0; }
+  .drawer-media video { max-height: none; border-radius: 0; }
   .job-body { display: grid; gap: 8px; padding: 12px 14px 14px; }
   .job-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .job-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -439,6 +448,8 @@
   <symbol id="i-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12m0 0-4-4m4 4 4-4"/><path d="M4 20h16"/></symbol>
   <symbol id="i-sparkle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6"/></symbol>
   <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.8v14.4L19 12z"/></symbol>
+  <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
   <symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
 </svg>
 
@@ -828,6 +839,19 @@
               <span class="hint"><span class="kbd">⌘/Ctrl ↵</span> generate · <span class="kbd">Esc</span> close panels · <span class="kbd">/</span> search library</span></div>
           </div>
         </section>
+        <section class="card">
+          <div class="card-head"><h2>Video delivery</h2><span class="chip" id="driveMountChip">Checking Drive…</span></div>
+          <div class="card-body" style="display:grid;gap:14px">
+            <div class="field"><label class="label" for="playbackSource">Play and download from</label>
+              <select class="select" id="playbackSource"><option value="drive">Google Drive when available (fastest)</option><option value="server">This server, through the tunnel</option></select>
+              <span class="hint">Drive playback streams from Google's servers, not the tunnel. It works in browsers signed in to the Google account that owns the Drive, or for anyone if you share the folder.</span></div>
+            <label class="check"><input type="checkbox" id="driveExportEnabled"> Copy every finished video to Google Drive</label>
+            <div class="field"><label class="label" for="driveExportFolder">Drive folder</label>
+              <input class="input" id="driveExportFolder" placeholder="Hawk H3/Videos"><span class="hint">Inside My Drive. Videos go into a dated subfolder.</span></div>
+            <label class="check"><input type="checkbox" id="driveExportSegments"> Also copy segment files</label>
+            <div class="row"><button class="btn btn-sm btn-primary" id="driveExportSave" type="button">Save</button><span class="hint" id="driveExportHint"></span></div>
+          </div>
+        </section>
       </div>
     </main>
   </div>
@@ -917,7 +941,7 @@
   };
   const DRAFT_KEY = "hawkH3Draft";
 
-  const state = { refs: [], options: null, lora: {}, jobs: new Map(), cards: new Map(), music: null, filter: "all", query: "", drawerJob: null, assets: [], pendingOpen: null };
+  const state = { refs: [], options: null, lora: {}, jobs: new Map(), cards: new Map(), music: null, filter: "all", query: "", drawerJob: null, assets: [], pendingOpen: null, details: new Map(), loadingDetails: new Set(), lastSync: 0, lastFull: 0 };
 
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const shortName = (file) => String(file || "").split(/[\\/]/).pop().replace(/\.(safetensors|pt|ckpt|bin|gguf)$/i, "");
@@ -1635,6 +1659,7 @@
   }
 
   function jobTitle(job) {
+    if (job.title) return job.title;
     try {
       const data = JSON.parse(job.script || "");
       const segs = data.segments || [];
@@ -1669,6 +1694,7 @@
       const loras = (job.status === "done" ? job.loras_applied : job.loras) || [];
       if (loras.length > 1 || (loras.length === 1 && !/turbo/i.test(loras[0].file))) chips.push(`<span class="chip" title="${esc(loras.map((l) => `${l.file} @ ${l.strength}`).join("\n"))}">${loras.length} LoRAs</span>`);
       if (job.music_asset_id) chips.push(`<span class="chip">♪ music bed</span>`);
+      if (job.drive) chips.push(driveChip(job.drive));
     }
     if ((job.warnings || []).length) chips.push(`<span class="chip warn" title="${esc(job.warnings.join("\n"))}">${job.warnings.length} warning${job.warnings.length > 1 ? "s" : ""}</span>`);
     return chips.join("");
@@ -1676,15 +1702,56 @@
 
   function actionsHtml(job) {
     const parts = [`<button class="btn btn-sm" type="button" data-act="open">Details</button>`];
-    if (job.video_url) parts.push(`<a class="btn btn-sm" href="${esc(job.video_url)}" download>${icon("download")}Download</a>`);
+    if (job.video_url) parts.push(downloadLink(job, "btn btn-sm"));
     if (ACTIVE.includes(job.status)) parts.push(`<button class="btn btn-sm btn-danger" type="button" data-act="cancel">Cancel</button>`);
     if (["failed", "cancelled"].includes(job.status) && job.resumable) parts.push(`<button class="btn btn-sm" type="button" data-act="retry">Retry</button>`);
     if (job.kind === "plan" && job.status === "done") parts.push(`<button class="btn btn-sm btn-primary" type="button" data-act="open">Review plan</button>`);
     return parts.join("");
   }
 
+  // Videos: a poster until clicked (nothing downloads in the background), then Google Drive's
+  // player when the render has been copied to Drive, else the server stream (byte ranges).
+  const DRIVE_STATUS = { copying: ["Saving to Drive", ""], syncing: ["Syncing to Drive", ""], ready: ["In Drive", "ok"], copied: ["Saved to Drive", ""], failed: ["Drive copy failed", "bad"] };
+  const playbackSource = () => storage.get("hawkH3Playback") || "drive";
+  const useDrive = (job) => Boolean(job.drive?.file_id) && playbackSource() === "drive";
+  function driveChip(drive) {
+    const [label, tone] = DRIVE_STATUS[drive.status] || [drive.status, ""];
+    return `<span class="chip ${tone}" title="${esc(drive.error || drive.path || "")}">${esc(label)}</span>`;
+  }
+  function downloadLink(job, cls) {
+    return useDrive(job)
+      ? `<a class="${cls}" href="${esc(job.drive.download_url)}" target="_blank" rel="noopener" title="Download from Google Drive">${icon("download")}Download</a>`
+      : `<a class="${cls}" href="${esc(job.download_url || job.video_url)}" download>${icon("download")}Download</a>`;
+  }
+  function posterHtml(job) {
+    const thumbs = [useDrive(job) ? job.drive.thumb_url : "", job.thumb_url || ""].filter(Boolean);
+    const img = thumbs.length ? `<img alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer" src="${esc(thumbs[0])}" data-fallback="${esc(thumbs[1] || "")}">` : "";
+    return `<button class="poster" type="button" data-play="${esc(job.id)}" aria-label="Play ${esc(jobTitle(job))}">${img}<span class="play">${icon("play")}</span></button>`;
+  }
+  function playerHtml(job, source) {
+    if (source !== "server" && useDrive(job)) {
+      return `<iframe src="${esc(job.drive.preview_url)}" allow="autoplay; fullscreen" allowfullscreen referrerpolicy="no-referrer" title="${esc(jobTitle(job))}"></iframe>`;
+    }
+    return `<video controls autoplay playsinline preload="auto" src="${esc(job.video_url)}"></video>`;
+  }
+  document.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-play]");
+    if (!button) return;
+    const job = state.jobs.get(button.dataset.play);
+    const box = button.closest(".job-media") || $("drawerBody").querySelector(".drawer-media");
+    if (!job?.video_url || !box) return;
+    document.querySelectorAll("video").forEach((video) => { if (!box.contains(video)) video.pause(); });
+    box.classList.add("playing");
+    box.innerHTML = playerHtml(job, button.dataset.source);
+  });
+  document.addEventListener("error", (event) => {  // Drive thumbnail not available yet (or not signed in): use the server's
+    const img = event.target;
+    if (img.tagName !== "IMG" || img.dataset.fallback === undefined) return;
+    if (img.dataset.fallback) { img.src = img.dataset.fallback; img.dataset.fallback = ""; } else img.remove();
+  }, true);
+
   function mediaHtml(job) {
-    if (job.video_url) return `<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>`;
+    if (job.video_url) return posterHtml(job);
     const text = { done: job.kind === "plan" ? "Plan ready" : "No video", failed: "Failed", cancelled: "Cancelled" }[job.status];
     return `<div class="placeholder">${ACTIVE.includes(job.status) ? `<svg width="28" height="28"><use href="#i-film"/></svg>${progressHtml(job, true)}` : `<svg width="28" height="28"><use href="#i-film"/></svg><span>${esc(text || STATUS[job.status] || "")}</span>`}</div>`;
   }
@@ -1696,7 +1763,7 @@
     if (f === "failed" && !["failed", "cancelled"].includes(job.status)) return false;
     if (f === "plan" && job.kind !== "plan") return false;
     const q = state.query.trim().toLowerCase();
-    if (q && !`${job.id} ${jobTitle(job)} ${job.script || ""}`.toLowerCase().includes(q)) return false;
+    if (q && !`${job.id} ${jobTitle(job)} ${state.details.get(job.id)?.script || ""}`.toLowerCase().includes(q)) return false;
     return true;
   }
 
@@ -1712,9 +1779,10 @@
       state.cards.set(job.id, entry);
     }
     const { el } = entry;
-    const mediaKey = job.video_url ? "video" : `${job.status}:${JSON.stringify(job.progress)}:${job.queue_position}`;
-    if (mediaKey !== entry.mediaKey && !(entry.mediaKey === "video" && job.video_url)) {
-      el.querySelector(".job-media").innerHTML = mediaHtml(job);
+    const mediaKey = job.video_url ? `video:${useDrive(job)}` : `${job.status}:${JSON.stringify(job.progress)}:${job.queue_position}`;
+    const box = el.querySelector(".job-media");
+    if (mediaKey !== entry.mediaKey && !box.classList.contains("playing")) {
+      box.innerHTML = mediaHtml(job);
       entry.mediaKey = mediaKey;
     }
     const badge = el.querySelector(".badge");
@@ -1775,7 +1843,7 @@
     renderLibrary();
     renderRecent();
     renderCounts();
-    if (state.drawerJob && state.jobs.has(state.drawerJob)) renderDrawer(state.jobs.get(state.drawerJob));
+    if (state.drawerJob && state.jobs.has(state.drawerJob)) renderDrawer(drawerView(state.drawerJob));
     updateAgentJobCards();
   }
 
@@ -1787,7 +1855,7 @@
   });
 
   async function jobAction(act, id, button) {
-    const job = state.jobs.get(id);
+    const job = state.jobs.has(id) && state.details.has(id) ? drawerView(id) : state.jobs.get(id);
     if (!job) return;
     if (act === "open") return openDrawer(id);
     if (act === "copy-link" && job.video_url) return copy(job.video_url, "Download link copied");
@@ -1798,6 +1866,7 @@
     try {
       if (act === "cancel") { state.jobs.set(id, await post(`/v1/jobs/${id}/cancel`, {})); toast("Job cancelled", "", "warn"); }
       else if (act === "retry") { state.jobs.set(id, await post(`/v1/jobs/${id}/retry`, {})); toast("Retry queued", "Finished segments are reused."); }
+      else if (act === "drive") { state.jobs.set(id, await post(`/v1/jobs/${id}/drive`, {})); toast("Saving to Google Drive", "It plays from Drive once Drive has synced it."); }
       else if (act === "render-plan") {
         const text = $("planEditor").value;
         const edited = text.trim() !== planToText(job.script).trim();
@@ -1818,12 +1887,32 @@
 
   // --------------------------------------------------------------- drawer
 
+  // The job list is a light summary; the drawer loads the full job (script, prompts, segments).
+  function drawerView(id) {
+    const job = state.jobs.get(id);
+    const full = state.details.get(id);
+    if (!full || full.updated_at < job.updated_at) loadDetails(id);
+    return full ? { ...full, ...job } : job;
+  }
+  async function loadDetails(id) {
+    if (state.loadingDetails.has(id)) return;
+    state.loadingDetails.add(id);
+    try {
+      const full = await api(`/v1/jobs/${id}`);
+      state.details.set(id, full);
+      if (!state.jobs.has(id) || state.jobs.get(id).updated_at <= full.updated_at) state.jobs.set(id, full);
+      if (state.drawerJob === id) renderDrawer(drawerView(id));
+    } catch { /* the next poll retries */ }
+    finally { state.loadingDetails.delete(id); }
+  }
+
   function openDrawer(id) {
     const job = state.jobs.get(id);
     if (!job) return;
     state.drawerJob = id;
     $("drawerBody").dataset.renderedFor = "";
-    renderDrawer(job);
+    $("drawerBody").innerHTML = "";
+    renderDrawer(drawerView(id));
     $("scrim").hidden = false;
     $("drawer").hidden = false;
     $("drawerClose").focus();
@@ -1831,8 +1920,8 @@
   function closeDrawer() {
     if ($("drawer").hidden) return;
     $("drawer").hidden = true; $("scrim").hidden = true;
-    const video = $("drawerBody").querySelector("video");
-    if (video) video.pause();
+    $("drawerBody").innerHTML = "";  // stops the video or Drive player
+    $("drawerBody").dataset.renderedFor = "";
     state.drawerJob = null;
   }
   $("drawerClose").onclick = closeDrawer;
@@ -1842,24 +1931,27 @@
     $("drawerTitle").textContent = jobTitle(job);
     $("drawerBadge").innerHTML = `<span class="badge ${job.status}">${esc(STATUS[job.status] || job.status)}</span>`;
     const body = $("drawerBody");
-    const signature = `${job.id}:${job.status}:${job.updated_at}`;
+    const signature = `${job.id}:${job.status}:${job.updated_at}:${state.details.has(job.id)}:${playbackSource()}`;
     if (body.dataset.renderedFor === signature) return;
     const editing = body.querySelector("#planEditor");
     const keepEdits = editing && body.dataset.renderedFor.startsWith(`${job.id}:done`);
     const editedText = keepEdits ? editing.value : null;
-    const video = body.querySelector("video");
-    const keepVideo = video && job.video_url && body.dataset.renderedFor.startsWith(`${job.id}:done`);
-    if (keepVideo) { body.dataset.renderedFor = signature; return; }
+    const oldMedia = body.querySelector(".drawer-media");
+    const keepMedia = Boolean(oldMedia && job.video_url && oldMedia.dataset.job === job.id && oldMedia.classList.contains("playing"));
     body.dataset.renderedFor = signature;
 
     const sections = [];
-    if (job.video_url) sections.push(`<video controls playsinline preload="metadata" src="${esc(job.video_url)}"></video>`);
     if (ACTIVE.includes(job.status)) sections.push(`<div style="display:grid;gap:6px">${progressHtml(job)}</div>`);
     if (job.error) sections.push(`<div class="alert bad">${esc(job.error)}</div>`);
     for (const warning of job.warnings || []) sections.push(`<div class="alert warn">${esc(warning)}</div>`);
 
     const actions = [];
-    if (job.video_url) actions.push(`<a class="btn btn-sm btn-primary" href="${esc(job.video_url)}" download>${icon("download")}Download</a>`, `<button class="btn btn-sm" type="button" data-act="copy-link">${icon("copy")}Copy link</button>`);
+    if (job.video_url) {
+      actions.push(downloadLink(job, "btn btn-sm btn-primary"), `<button class="btn btn-sm" type="button" data-act="copy-link">${icon("copy")}Copy link</button>`);
+      if (job.drive?.file_id) actions.push(`<a class="btn btn-sm" href="${esc(job.drive.view_url)}" target="_blank" rel="noopener">${icon("external")}Open in Drive</a>`);
+      if (useDrive(job)) actions.push(`<button class="btn btn-sm btn-ghost" type="button" data-play="${esc(job.id)}" data-source="server">${icon("play")}Play from server</button>`);
+      if (!job.drive || job.drive.status === "failed") actions.push(`<button class="btn btn-sm" type="button" data-act="drive">${icon("upload")}Save to Drive</button>`);
+    }
     if (ACTIVE.includes(job.status)) actions.push(`<button class="btn btn-sm btn-danger" type="button" data-act="cancel">Cancel</button>`);
     if (["failed", "cancelled"].includes(job.status) && job.resumable) actions.push(`<button class="btn btn-sm" type="button" data-act="retry">Retry · reuse finished segments</button>`);
     actions.push(`<button class="btn btn-sm btn-ghost" type="button" data-act="copy-id">${icon("copy")}Copy id</button>`, `<button class="btn btn-sm btn-ghost" type="button" data-act="copy-page">${icon("copy")}Copy page link</button>`);
@@ -1877,6 +1969,10 @@
       const loras = (job.status === "done" ? job.loras_applied : job.loras) || [];
       if (loras.length) kv.push([job.status === "done" ? "LoRAs applied" : "LoRAs", loras.map((l) => `${esc(shortName(l.file))} <span class="hint">@ ${l.strength}</span>`).join("<br>")]);
       if (job.music_asset_id) kv.push(["Music bed", `<span class="mono">${esc(job.music_asset_id)}</span>`]);
+      if (job.drive) {
+        const note = job.drive.status === "copied" ? `<br><span class="hint">Drive did not report a file id, so Studio plays it from the server. Open it from Drive directly.</span>` : "";
+        kv.push(["Google Drive", `${driveChip(job.drive)} <span class="mono">${esc(job.drive.path || "")}</span>${job.drive.error ? `<br><span class="hint">${esc(job.drive.error)}</span>` : ""}${note}`]);
+      }
     }
     sections.push(`<div><p class="section-title">Details</p><dl class="kv">${kv.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v}</dd>`).join("")}</dl></div>`);
 
@@ -1890,7 +1986,15 @@
     if (job.final_prompts) {
       sections.push(`<details class="advanced" open><summary>Sent to MiniMax H3</summary><p class="hint" style="margin:8px 0">The exact text encoded for each segment: pose tags rewritten to &lt;Picture&gt;, style and pose notes inserted, music muted when a music bed is used.</p><div class="code">${esc(job.final_prompts)}</div></details>`);
     }
-    body.innerHTML = sections.join("");
+    [...body.children].forEach((child) => { if (!(keepMedia && child === oldMedia)) child.remove(); });
+    body.insertAdjacentHTML("beforeend", sections.join(""));
+    if (job.video_url && !keepMedia) {
+      const media = document.createElement("div");
+      media.className = "job-media drawer-media";
+      media.dataset.job = job.id;
+      media.innerHTML = posterHtml(job);
+      body.prepend(media);
+    }
     const editor = body.querySelector("#planEditor");
     if (editor) editor.value = editedText ?? planToText(job.script);
   }
@@ -1914,9 +2018,13 @@
     }
   }
 
+  // Polls the light summary; between full refreshes (every 2 minutes) only jobs changed since the last poll.
   async function refreshJobs() {
     try {
-      const { jobs } = await api("/v1/jobs?limit=60");
+      const whole = !state.lastSync || Date.now() - state.lastFull > 120000;
+      const { jobs, server_time: serverTime } = await api(whole ? "/v1/jobs?limit=60&view=summary" : `/v1/jobs?limit=200&view=summary&since=${state.lastSync - 5}`);
+      if (whole) state.lastFull = Date.now();
+      state.lastSync = serverTime;
       $("jobsError").hidden = true;
       for (const job of jobs) {
         announce(state.jobs.get(job.id), job);
@@ -1933,8 +2041,10 @@
   function schedule(delay) {
     clearTimeout(timer);
     const active = [...state.jobs.values()].some((job) => ACTIVE.includes(job.status));
-    timer = setTimeout(async () => { await refreshJobs(); schedule(); }, delay ?? (active ? 3000 : 15000));
+    const idle = document.hidden ? 4 : 1;  // background tabs poll less
+    timer = setTimeout(async () => { await refreshJobs(); schedule(); }, delay ?? (active ? 3000 : 15000) * idle);
   }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && (PREFIX || token)) schedule(300); });
 
   document.querySelectorAll('input[name="filter"]').forEach((input) => input.addEventListener("change", () => { state.filter = input.value; renderLibrary(); }));
   $("jobSearch").addEventListener("input", (event) => { state.query = event.target.value; renderLibrary(); });
@@ -2410,7 +2520,33 @@
     const permission = "Notification" in window ? Notification.permission : "unsupported";
     $("notifyBtn").disabled = permission !== "default";
     $("notifyBtn").textContent = { granted: "Enabled", denied: "Blocked", unsupported: "Unsupported", default: "Enable" }[permission];
+    $("playbackSource").value = playbackSource();
+    if (PREFIX || token) loadDriveExport();
   }
+  function paintDriveExport(settings) {
+    $("driveMountChip").className = `chip ${settings.mounted ? "ok" : "warn"}`;
+    $("driveMountChip").textContent = settings.mounted ? "Drive mounted" : "Drive not mounted";
+    $("driveExportEnabled").checked = settings.enabled;
+    $("driveExportFolder").value = settings.folder;
+    $("driveExportSegments").checked = settings.segments;
+    $("driveExportHint").textContent = settings.mounted ? "" : "Mount Drive in the Colab notebook to turn this on.";
+  }
+  async function loadDriveExport() {
+    try { paintDriveExport(await api("/v1/drive/export")); }
+    catch (error) { $("driveMountChip").textContent = "Unavailable"; $("driveExportHint").textContent = error.message; }
+  }
+  $("driveExportSave").onclick = async () => {
+    try {
+      paintDriveExport(await api("/v1/drive/export", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: $("driveExportEnabled").checked, folder: $("driveExportFolder").value.trim() || "Hawk H3/Videos", segments: $("driveExportSegments").checked }) }));
+      toast("Delivery settings saved");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  };
+  $("playbackSource").onchange = () => {
+    storage.set("hawkH3Playback", $("playbackSource").value);
+    state.cards.forEach((entry) => { entry.mediaKey = ""; });
+    renderAllJobs();
+  };
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-copy]");
     if (button) copy(document.querySelector(button.dataset.copy).value);
@@ -2553,11 +2689,11 @@
     if (!job) { el.innerHTML = `<div class="job-body"><span class="hint">Job ${esc(jobId.slice(0, 8))} · loading…</span></div>`; return; }
     const key = `${job.status}:${job.updated_at}`;
     if (el.dataset.key === key) return;
-    const hadVideo = el.querySelector("video");
+    const playing = el.querySelector(".job-media.playing");
     el.dataset.key = key;
-    if (!(hadVideo && job.video_url)) {
+    if (!(playing && job.video_url)) {
       el.innerHTML = `<div class="job-media">${mediaHtml(job)}</div><div class="job-body"><div class="job-head"><span class="badge ${job.status}">${esc(STATUS[job.status] || job.status)}</span><span class="job-title">${esc(jobTitle(job))}</span></div>
-        <div class="job-actions"><button class="btn btn-sm" type="button" data-open-job="${job.id}">Details</button>${job.video_url ? `<a class="btn btn-sm" href="${esc(job.video_url)}" download>${icon("download")}Download</a>` : ""}</div></div>`;
+        <div class="job-actions"><button class="btn btn-sm" type="button" data-open-job="${job.id}">Details</button>${job.video_url ? downloadLink(job, "btn btn-sm") : ""}</div></div>`;
     }
   }
   function updateAgentJobCards() {

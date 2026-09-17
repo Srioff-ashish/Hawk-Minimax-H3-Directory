@@ -134,7 +134,16 @@ from google.colab import drive
 drive.mount('/content/drive')
 ```
 
-Then *Import → From Google Drive* browses My Drive; pick files or folders, a collection and tags. Drive imports are copied on the Colab machine, so they're fast and have no 100 MB limit. Select media to use it in Create, attach it to an agent chat, or set a music bed; Create and the agent chat also have a *From media* picker.
+The same mount turns on **fast video delivery** (next section). Then *Import → From Google Drive* browses My Drive; pick files or folders, a collection and tags. Drive imports are copied on the Colab machine, so they're fast and have no 100 MB limit. Select media to use it in Create, attach it to an agent chat, or set a music bed; Create and the agent chat also have a *From media* picker.
+
+### Videos play from Google Drive
+
+Downloading through the tunnel gets slow, especially while a render is using the CPU. With Drive mounted, the API copies every finished video to **My Drive → Hawk H3 → Videos → <date>**. Once Drive has synced it (usually under a minute), Studio plays and downloads it **from Google's servers**, without the tunnel:
+
+- Video cards show a poster frame. Nothing downloads until you press play.
+- The player and **Download** use Drive when the video is marked *In Drive*. Until then, or if Drive can't play it yet, they use the server, which streams with seeking. In a video's details, *Play from server* forces the server, and *Save to Drive* copies it again.
+- Drive playback needs a browser signed in to the Google account whose Drive is mounted. To watch on other accounts or devices, share the *Hawk H3* folder in Drive with *Anyone with the link*.
+- **Connect & settings → Video delivery** sets the folder, turns the copy on or off, can also copy segment files, and switches playback between Drive and the server.
 
 ### Agent page
 

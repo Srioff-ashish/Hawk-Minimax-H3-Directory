@@ -42,6 +42,8 @@ class Settings:
     agent_model: str = "xai/grok-4.6"
     #: ComfyUI's input folder on this machine; imports copy files straight into it when set.
     comfy_input_dir: str = ""
+    #: ComfyUI's output folder on this machine; videos are then served straight from disk (with byte ranges).
+    comfy_output_dir: str = ""
     #: Mounted Google Drive (Colab: drive.mount("/content/drive")).
     drive_root: str = "/content/drive/MyDrive"
     max_import_files: int = 2000
@@ -84,6 +86,7 @@ class Settings:
             atlas_api_key=_env("ATLAS_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
+            comfy_output_dir=_env("COMFY_OUTPUT_DIR"),
             drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),
             models=models,
         )
