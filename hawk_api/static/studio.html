@@ -302,6 +302,14 @@
   .agent-persona { padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); display: grid; gap: 8px; }
   .agent-thread { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; background: var(--bg); }
   .agent-thread > * { flex-shrink: 0; }
+  .att-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .att-thumb { width: 120px; height: 120px; object-fit: cover; border-radius: 10px; display: block; background: rgba(0,0,0,.15); }
+  .thumb-grid { align-self: flex-start; display: flex; flex-wrap: wrap; gap: 8px; max-width: min(760px, 92%); }
+  .thumb-grid a { display: block; position: relative; }
+  .thumb-grid img { width: 200px; height: 200px; object-fit: cover; border-radius: 12px; border: 1px solid var(--line); display: block; background: var(--surface-2); box-shadow: var(--shadow-sm); }
+  .thumb-grid .thumb-id { position: absolute; left: 6px; bottom: 6px; font: 600 11px var(--mono); padding: 1px 6px; border-radius: 5px; background: rgba(0,0,0,.6); color: #fff; }
+  .pending-thumb { width: 22px; height: 22px; object-fit: cover; border-radius: 4px; }
+  .asset-thumb { width: 44px; height: 44px; object-fit: cover; border-radius: 7px; display: block; background: var(--surface-2); }
   .bubble { max-width: min(760px, 92%); padding: 10px 14px; border-radius: 14px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; box-shadow: var(--shadow-sm); }
   .bubble.user { align-self: flex-end; background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 4px; }
   .bubble.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
@@ -639,8 +647,8 @@
         <div class="card-head"><h2>Uploaded files</h2><span class="hint">Reuse any file as a reference without uploading it again</span><div class="spacer"></div>
           <button class="btn btn-sm" id="assetsRefresh" type="button">Refresh</button></div>
         <div class="table-wrap"><table class="table">
-          <thead><tr><th>File</th><th>Kind</th><th>Size</th><th>Uploaded</th><th>Asset id</th><th></th></tr></thead>
-          <tbody id="assetRows"><tr><td colspan="6"><div class="skeleton" style="height:18px"></div></td></tr></tbody>
+          <thead><tr><th></th><th>File</th><th>Kind</th><th>Size</th><th>Uploaded</th><th>Asset id</th><th></th></tr></thead>
+          <tbody id="assetRows"><tr><td colspan="7"><div class="skeleton" style="height:18px"></div></td></tr></tbody>
         </table></div>
       </section>
     </main>
@@ -935,7 +943,7 @@
 
   function addAssetRef(asset) {
     if (!ROLES[asset.kind]) return;
-    const ref = newRef(asset.kind, asset.filename, "");
+    const ref = newRef(asset.kind, asset.filename, asset.thumb_url || "");
     ref.asset = asset.id; ref.status = "ready";
     state.refs.push(ref);
     renderRefs();
@@ -1758,16 +1766,17 @@
       state.assets = assets || [];
       $("assetRows").innerHTML = state.assets.length ? state.assets.map((asset) => `
         <tr>
-          <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(asset.filename)}">${esc(asset.filename)}</td>
+          <td style="width:56px">${asset.thumb_url ? `<a href="${esc(asset.file_url)}" target="_blank" rel="noopener"><img class="asset-thumb" src="${esc(asset.thumb_url)}" alt="" loading="lazy"></a>` : `<span class="thumb" style="width:44px;height:44px">${esc(asset.kind)}</span>`}</td>
+          <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(asset.filename)}">${esc(asset.filename)}${asset.source?.generator ? `<div class="hint">generated · ${esc(asset.source.generator.split("/").slice(-2).join("/"))}</div>` : ""}</td>
           <td><span class="chip">${esc(asset.kind)}</span></td>
           <td>${bytes(asset.size)}</td>
           <td class="hint">${ago(asset.created_at)}</td>
           <td><button class="btn btn-ghost btn-xs mono" type="button" data-copy-text="${esc(asset.id)}">${esc(asset.id)}</button></td>
           <td style="text-align:right">${ROLES[asset.kind] ? `<button class="btn btn-xs" type="button" data-use="${esc(asset.id)}">Use as reference</button>` : ""}
             ${asset.kind === "audio" ? `<button class="btn btn-xs" type="button" data-music="${esc(asset.id)}">Use as music bed</button>` : ""}</td>
-        </tr>`).join("") : `<tr><td colspan="6"><div class="empty" style="border:0">No uploads yet. Add files on the Create page.</div></td></tr>`;
+        </tr>`).join("") : `<tr><td colspan="7"><div class="empty" style="border:0">No uploads yet. Add files on the Create page, or ask the Agent to generate images.</div></td></tr>`;
     } catch (error) {
-      $("assetRows").innerHTML = `<tr><td colspan="6"><div class="alert bad">${esc(error.message)}</div></td></tr>`;
+      $("assetRows").innerHTML = `<tr><td colspan="7"><div class="alert bad">${esc(error.message)}</div></td></tr>`;
     }
   }
   $("assetsRefresh").onclick = loadAssets;
@@ -1966,8 +1975,10 @@
     const c = message.content || {};
     const time = new Date(message.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     if (message.role === "user") {
-      const files = (c.attachments || []).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
-      add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${files ? `<div class="row" style="margin-top:6px">${files}</div>` : ""}</div>`);
+      const attachments = c.attachments || [];
+      const images = attachments.filter((f) => f.thumb_url).map((f) => `<a href="${esc(f.file_url || f.thumb_url)}" target="_blank" rel="noopener" title="${esc(f.filename)} · ${esc(f.asset_id)}"><img class="att-thumb" src="${esc(f.thumb_url)}" alt="${esc(f.filename)}" loading="lazy"></a>`).join("");
+      const others = attachments.filter((f) => !f.thumb_url).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
+      add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
       if (c.say) add(`<div class="msg-meta"><span class="who"><svg viewBox="0 0 32 32"><use href="#i-logo"/></svg>Agent</span>· ${time}</div><div class="bubble agent">${linkify(c.say)}</div>`);
@@ -1977,6 +1988,8 @@
       const label = c.job_id ? ` · job ${esc(c.job_id.slice(0, 8))}` : c.tool === "wait_for_job" && c.result?.status ? ` · ${esc(c.result.status)}` : "";
       add(`<details class="tool-card"><summary><span class="${c.ok ? "tool-ok" : "tool-bad"}">${c.ok ? "✓" : "✕"}</span><span class="mono">${esc(c.tool)}</span><span class="hint">${label}</span></summary>
         <div class="code">args ${esc(args.length > 3000 ? `${args.slice(0, 3000)}…` : args)}</div><div class="code">${c.ok ? "result" : "error"} ${esc((result || "").length > 6000 ? `${result.slice(0, 6000)}…` : result || "")}</div></details>`);
+      const shown = (c.ok && Array.isArray(c.result?.assets) ? c.result.assets : []).filter((a) => a.thumb_url && c.tool !== "list_references");
+      if (shown.length) add(`<div class="thumb-grid">${shown.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.id || a.asset_id || "")}</span></a>`).join("")}</div>`);
       const jobId = c.job_id || (c.tool === "wait_for_job" && c.result?.id);
       if (jobId && c.tool !== "wait_for_job") {
         const card = agentJobCard(jobId);
@@ -2052,7 +2065,7 @@
   function renderAttachments() {
     const box = $("agentAttachments");
     box.hidden = !agent.attachments.length;
-    box.innerHTML = agent.attachments.map((a, i) => `<span class="chip ${a.status === "error" ? "bad" : ""}">${esc(a.filename)}${a.status === "uploading" ? ` · ${Math.round(a.progress * 100)}%` : a.status === "error" ? " · failed" : ""}
+    box.innerHTML = agent.attachments.map((a, i) => `<span class="chip ${a.status === "error" ? "bad" : ""}">${a.preview ? `<img class="pending-thumb" src="${esc(a.preview)}" alt="">` : ""}${esc(a.filename)}${a.status === "uploading" ? ` · ${Math.round(a.progress * 100)}%` : a.status === "error" ? " · failed" : ""}
       <button class="icon-btn" type="button" data-remove-attachment="${i}" style="width:18px;height:18px" aria-label="Remove">${icon("x")}</button></span>`).join("");
   }
   $("agentAttachments").addEventListener("click", (event) => {
@@ -2062,7 +2075,7 @@
   $("agentFile").addEventListener("change", (event) => {
     for (const file of event.target.files) {
       if (!kindOf(file)) { toast("Unsupported file", file.name, "bad"); continue; }
-      const item = { filename: file.name, status: "uploading", progress: 0, asset: null };
+      const item = { filename: file.name, status: "uploading", progress: 0, asset: null, preview: kindOf(file) === "image" ? URL.createObjectURL(file) : "" };
       agent.attachments.push(item);
       uploadFile(file, (fraction) => { item.progress = fraction; renderAttachments(); })
         .then((asset) => { item.asset = asset.id; item.status = "ready"; renderAttachments(); })

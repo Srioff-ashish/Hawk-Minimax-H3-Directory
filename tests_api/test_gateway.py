@@ -198,6 +198,8 @@ class FakeComfy:
 
     async def view(self, request):
         key = f"{request.query.get('subfolder', '')}/{request.query['filename']}"
+        if request.query.get("type") == "input":
+            return web.Response(body=self.inputs[key], content_type="application/octet-stream") if key in self.inputs else web.Response(status=404)
         if key not in self.outputs:
             return web.Response(status=404)
         return web.Response(body=self.outputs[key], content_type="video/mp4")

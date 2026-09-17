@@ -327,6 +327,12 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
 
+### Images
+
+`POST /v1/images` (and the MCP / agent tool `generate_image`) creates images with Atlas Cloud's `generateImage` API: `{prompt, reference_asset_ids?, model?, size?, n (1-4), seed?}`. Without references it uses `bytedance/seedream-v5.0-pro/text-to-image`; with references it switches to `bytedance/seedream-v5.0-pro/edit` and sends those images, so you can keep a face and change the outfit, scene or style. Results are stored as image assets and can be used right away as `picture` references in plans and renders.
+
+Every asset in API responses carries a signed `file_url`, and images a `thumb_url` (a 320 px JPEG, via `GET /v1/assets/<id>/file?w=320`). Signed links open without the token, so Studio and the agent chat show thumbnails of uploaded and generated images.
+
 The API process needs `ATLAS_API_KEY` (the Colab launcher passes it already). The **planner model** is also choosable: `/v1/options` returns `planner_models`, and `/v1/plans`, `story` and MCP `plan_film` take `model`.
 
 ---
@@ -338,6 +344,7 @@ The API process needs `ATLAS_API_KEY` (the Colab launcher passes it already). Th
 | `upload_page_link` | Signed link to the browser upload page |
 | `add_reference_from_url` | Fetch a public file URL onto the pod |
 | `list_references` | Uploaded assets |
+| `generate_image` | Generate or edit images with Atlas (Seedream v5.0 Pro by default); results become image assets |
 | `list_options` | Base models, text encoders and LoRAs on the pod, defaults, presets, samplers, aspect ratios |
 | `plan_film` | Start a plan job |
 | `render_film` | Start a render: `script`, `plan_job_id` or `story`, plus `references`, `settings`, `loras`, `lora_preset` |

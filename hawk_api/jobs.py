@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
+import io
 import json
 import logging
 import mimetypes
@@ -45,6 +47,9 @@ ACTIVE = ("queued", "planning", "rendering")
 FINISHED = ("done", "failed", "cancelled")
 #: A job whose prompt ComfyUI no longer knows is only declared lost after this grace period.
 LOST_AFTER_SECONDS = 20.0
+IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
+IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
+THUMB_WIDTHS = (160, 320, 640)
 #: models folder -> (file-name family the Director can use, label for errors)
 MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders": ("qwen3vl", "Text encoder")}
 
@@ -52,6 +57,16 @@ MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders":
 def model_family(folder: str, files: list[str]) -> list[str]:
     family = MODEL_FAMILIES[folder][0]
     return [name for name in files if family in os.path.basename(name).lower()]
+
+
+def _image_type(data: bytes) -> tuple[str, str]:
+    if data.startswith(b"\x89PNG"):
+        return "png", "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "jpg", "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "webp", "image/webp"
+    return "png", "image/png"
 
 
 def script_warnings(text: str) -> list[str]:
@@ -354,6 +369,105 @@ class HawkService:
 
     def list_assets(self, limit: int = 100) -> list[dict]:
         return self.store.list_assets(limit)
+
+    def asset_view(self, asset: dict) -> dict:
+        """The stored asset plus signed links: the file, and a thumbnail for images."""
+        base, token, ttl = self.settings.public_base_url, self.settings.token, self.settings.link_ttl_seconds
+        link = base + sign_path(token, f"/v1/assets/{asset['id']}/file", ttl)
+        view = dict(asset, file_url=link)
+        if asset.get("kind") == "image":
+            view["thumb_url"] = f"{link}&w=320"
+        return view
+
+    async def asset_bytes(self, asset: dict) -> bytes:
+        subfolder, _, filename = asset["path"].rpartition("/")
+        try:
+            _, _, body = await self.comfy.view(filename, subfolder, "input")
+        except ComfyNotFound as exc:
+            raise NotFound(f"The file for asset {asset['id']} is gone from ComfyUI's input folder.") from exc
+        except ComfyError as exc:
+            raise Unavailable(str(exc)) from None
+        return b"".join([chunk async for chunk in body])
+
+    async def asset_file(self, asset_id: str, width: int = 0) -> tuple[bytes, str]:
+        asset = self.store.get_asset(asset_id)
+        if asset is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        mime = mimetypes.guess_type(asset["filename"])[0] or "application/octet-stream"
+        if asset["kind"] != "image" or width <= 0:
+            return await self.asset_bytes(asset), mime
+        width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
+        cache = os.path.join(self.settings.data_dir, "thumbs", f"{asset_id}_{width}.jpg")
+        if os.path.isfile(cache):
+            with open(cache, "rb") as handle:
+                return handle.read(), "image/jpeg"
+        data = await self.asset_bytes(asset)
+        try:
+            from PIL import Image
+        except ImportError:  # no Pillow: send the original
+            return data, mime
+        try:
+            image = Image.open(io.BytesIO(data))
+            image.thumbnail((width, width * 4))
+            buffer = io.BytesIO()
+            image.convert("RGB").save(buffer, format="JPEG", quality=82)
+        except Exception:
+            return data, mime
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        with open(cache, "wb") as handle:
+            handle.write(buffer.getvalue())
+        return buffer.getvalue(), "image/jpeg"
+
+    async def generate_images(
+        self,
+        prompt: str,
+        *,
+        model: str | None = None,
+        reference_asset_ids: list[str] | tuple = (),
+        size: str | None = None,
+        n: int = 1,
+        seed: int | None = None,
+    ) -> dict:
+        """Atlas image generation (Seedream v5.0 Pro by default). The results become image
+        assets, ready to use as picture references."""
+        if not (prompt or "").strip():
+            raise RequestError("Describe the image to generate.")
+        references = []
+        for asset_id in reference_asset_ids or []:
+            asset = self.store.get_asset(asset_id)
+            if asset is None:
+                raise RequestError(f"Unknown asset_id {asset_id!r}.")
+            if asset["kind"] != "image":
+                raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
+            mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
+            references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
+        model = (model or "").strip() or (IMAGE_EDIT_MODEL if references else IMAGE_MODEL)
+        if references and model.endswith("/text-to-image"):
+            model = model[: -len("/text-to-image")] + "/edit"
+        if not references and model.endswith("/edit"):
+            raise RequestError(f"{model} edits images: pass reference_asset_ids, or use a text-to-image model.")
+        payload: dict = {"model": model, "prompt": prompt.strip()}
+        if size:
+            payload["size"] = size
+        if seed is not None:
+            payload["seed"] = seed
+        if n and n > 1:
+            payload["n"] = n
+        if references:
+            payload["images"] = references
+        try:
+            images = await self.atlas.generate_image(payload)
+        except AtlasError as exc:
+            raise RequestError(str(exc)) from None
+        stem = re.sub(r"[^a-z0-9]+", "_", prompt.lower()).strip("_")[:40] or "image"
+        assets = []
+        for number, data in enumerate(images, 1):
+            extension, mime = _image_type(data)
+            asset = await self.add_asset(f"gen_{stem}_{number}.{extension}", io.BytesIO(data), mime, len(data))
+            asset["source"] = {"generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
+            self.store.add_asset(asset)
+            assets.append(self.asset_view(asset))
+        return {"model": model, "assets": assets}
 
     def _refs(self, references: list[ReferenceIn]) -> list[graphs.Ref]:
         refs = []

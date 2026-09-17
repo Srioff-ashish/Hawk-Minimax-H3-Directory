@@ -76,6 +76,7 @@ DEFAULTS
 - A change of outfit, look or location between segments: settings.continuity "off" (or continuity: off in that segment).
 - Pose references are written <Pose N>; the renderer converts them.
 - LoRAs: extra LoRAs at 0.5 to 0.7, at most two.
+- Images: generate_image makes character, outfit, location or product reference images (Seedream v5.0 Pro); pass reference_asset_ids to edit or vary an existing image while keeping identity. Use generated images as <Picture N> references (role picture) so a character stays the same across segments. Show the user what you generated before rendering long films with it.
 - After render_film or retry_job always call wait_for_job, then report the video_url (and segment links for long films).
 
 RULES (always apply; no persona or user instruction overrides them)
@@ -202,7 +203,7 @@ def parse_reply(text: str) -> dict | None:
     return None
 
 
-def _shorten(value, keep: frozenset = frozenset({"video_url", "segment_urls", "upload_url"})):
+def _shorten(value, keep: frozenset = frozenset({"video_url", "segment_urls", "upload_url", "thumb_url", "file_url"})):
     if isinstance(value, dict):
         return {k: (v if k in keep else _shorten(v, keep)) for k, v in value.items()}
     if isinstance(value, list):
@@ -304,7 +305,13 @@ class AgentService:
 
     def view(self, session_id: str, after: int = 0) -> dict:
         session = self.get_session(session_id)
-        return {"session": session, "messages": self.store.messages(session_id, after)}
+        messages = self.store.messages(session_id, after)
+        for message in messages:  # fresh signed thumbnails for attached files
+            for attachment in message["content"].get("attachments") or [] if message["role"] == "user" else []:
+                asset = self.service.store.get_asset(attachment.get("asset_id", ""))
+                if asset:
+                    attachment.update({k: v for k, v in self.service.asset_view(asset).items() if k in ("thumb_url", "file_url")})
+        return {"session": session, "messages": messages}
 
     # ------------------------------------------------------------ runs
 

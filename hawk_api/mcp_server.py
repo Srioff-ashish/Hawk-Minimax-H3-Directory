@@ -53,6 +53,9 @@ def build_mcp(service: HawkService) -> MCPServer:
         log_level="WARNING",  # the SDK configures global logging; INFO logs every HTTP call
     )
 
+    async def _viewed(coro):
+        return service.asset_view(await coro)
+
     async def run(coro):
         try:
             return await coro
@@ -65,11 +68,29 @@ def build_mcp(service: HawkService) -> MCPServer:
 
     @mcp.tool(description="Download a public image, audio or video URL onto the pod as a reference asset. Returns its asset_id.")
     async def add_reference_from_url(url: str, filename: str | None = None) -> dict:
-        return await run(service.add_asset_from_url(url, filename))
+        return await run(_viewed(service.add_asset_from_url(url, filename)))
 
     @mcp.tool(description="List uploaded reference assets (newest first) with asset_id, kind and file name.")
     async def list_references(limit: int = 30) -> dict:
-        return {"assets": service.list_assets(limit)}
+        return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit)]}
+
+    @mcp.tool(description=(
+        "Generate or edit images with Atlas Cloud (default ByteDance Seedream v5.0 Pro). Text only: text-to-image. "
+        "With reference_asset_ids: the edit model changes or combines those images (keep a face, change outfit or scene, "
+        "make variations). Returns new image assets (asset_id, thumb_url) that work as picture references in plan_film and "
+        "render_film, e.g. to lock a character's identity across segments. size like 2048x2048, 1536x2048 or 2048x1152 is optional; "
+        "n is 1-4. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
+    ))
+    async def generate_image(
+        prompt: str,
+        reference_asset_ids: list[str] | None = None,
+        model: str | None = None,
+        size: str | None = None,
+        n: int = 1,
+        seed: int | None = None,
+    ) -> dict:
+        return await run(service.generate_images(prompt, model=model, reference_asset_ids=reference_asset_ids or [],
+                                                 size=size, n=max(1, min(4, n)), seed=seed))
 
     @mcp.tool(description="Show what the pod can use: ref2va base models and text encoders (with the defaults), LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, samplers, schedulers, aspect ratios and continuity modes.")
     async def list_options() -> dict:

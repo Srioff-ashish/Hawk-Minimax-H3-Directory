@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI, File, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent import AgentService
@@ -20,13 +20,13 @@ from .auth import bearer, signature_valid, split_path_token, token_matches
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
-from .schemas import AgentMessageIn, AgentSessionIn, PlanRequest, UrlAssetRequest, VideoRequest
+from .schemas import AgentMessageIn, AgentSessionIn, ImageRequest, PlanRequest, UrlAssetRequest, VideoRequest
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
 #: (they contain no data; every API call the Studio makes still needs the token).
 PUBLIC_PATHS = {"/healthz", "/docs", "/openapi.json", "/docs/oauth2-redirect", "/studio"}
 #: Paths a signed link (?exp=&sig=) may open without the token.
-SIGNABLE = re.compile(r"^/(upload|v1/jobs/[^/]+/video|v1/jobs/[^/]+/segments/\d+)$")
+SIGNABLE = re.compile(r"^/(upload|v1/jobs/[^/]+/video|v1/jobs/[^/]+/segments/\d+|v1/assets/[^/]+/file)$")
 UPLOAD_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "upload.html")
 STUDIO_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "studio.html")
 
@@ -143,7 +143,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         for upload in files:
             if upload.size is not None and upload.size > limit:
                 raise RequestError(f"{upload.filename} is larger than {settings.max_upload_mb} MB.")
-            assets.append(await service.add_asset(upload.filename or "upload", upload.file, upload.content_type, upload.size))
+            assets.append(service.asset_view(await service.add_asset(upload.filename or "upload", upload.file, upload.content_type, upload.size)))
         return {"assets": assets}
 
     @app.post("/v1/assets", tags=["assets"], status_code=201)
@@ -152,11 +152,22 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.post("/v1/assets/from-url", tags=["assets"], status_code=201)
     async def asset_from_url(body: UrlAssetRequest):
-        return await service.add_asset_from_url(body.url, body.filename)
+        return service.asset_view(await service.add_asset_from_url(body.url, body.filename))
 
     @app.get("/v1/assets", tags=["assets"])
     async def list_assets(limit: int = 100):
-        return {"assets": service.list_assets(limit)}
+        return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit)]}
+
+    @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
+    async def asset_file(asset_id: str, w: int = 0):
+        """The asset itself, or a JPEG thumbnail at most ``w`` pixels wide for images."""
+        content, media_type = await service.asset_file(asset_id, w)
+        return Response(content, media_type=media_type, headers={"cache-control": "private, max-age=86400"})
+
+    @app.post("/v1/images", tags=["assets"], status_code=201)
+    async def generate_images(body: ImageRequest):
+        return await service.generate_images(body.prompt, model=body.model, reference_asset_ids=body.reference_asset_ids,
+                                             size=body.size, n=body.n, seed=body.seed)
 
     @app.get("/studio", include_in_schema=False)
     async def studio_page():

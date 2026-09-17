@@ -7,6 +7,8 @@ and a fake Atlas with scripted model replies.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 import os
 import re
@@ -48,10 +50,25 @@ class FakeAtlas:
         self.reply = lambda body: json.dumps({"say": "hi", "actions": [], "done": True})
         self.delay = 0.0
         self.app = web.Application()
-        self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat)])
+        self.image_requests: list[dict] = []
+        self.polls = 0
+        self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat),
+                             web.post("/api/v1/model/generateImage", self.generate), web.get("/api/v1/model/prediction/{pid}", self.prediction)])
 
     async def models(self, _request):
         return web.json_response({"data": MODELS})
+
+    async def generate(self, request):
+        self.image_requests.append(await request.json())
+        return web.json_response({"code": 200, "data": {"id": f"pred{len(self.image_requests)}"}})
+
+    async def prediction(self, request):
+        self.polls += 1
+        payload = self.image_requests[-1]
+        if self.polls % 2:  # one "processing" poll before each result
+            return web.json_response({"data": {"status": "processing"}})
+        outputs = ["data:image/png;base64," + base64.b64encode(tiny_png()).decode()] * payload.get("n", 1)
+        return web.json_response({"data": {"status": "completed", "outputs": outputs}})
 
     async def chat(self, request):
         body = await request.json()
@@ -61,6 +78,16 @@ class FakeAtlas:
         text = self.reply(body)
         return web.json_response({"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
                                   "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
+
+
+def tiny_png(color=(200, 80, 40), size=(96, 64)) -> bytes:
+    try:
+        from PIL import Image
+    except ImportError:
+        return PNG
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def tool_result(body: dict, tool: str) -> dict:
@@ -180,6 +207,53 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         later = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"after": messages[-2]["id"]})).json()
         self.assertEqual(len(later["messages"]), 1)
+
+    async def test_generate_and_edit_images(self):
+        agent_module.WAIT_POLL_SECONDS = 0.05
+        created = (await self.http.post("/v1/images", json={"prompt": "A fit model in her forties, studio portrait", "n": 2, "size": "1536x2048"})).json()
+        self.assertEqual(created["model"], "bytedance/seedream-v5.0-pro/text-to-image")
+        self.assertEqual(len(created["assets"]), 2)
+        first = created["assets"][0]
+        self.assertEqual((first["kind"], first["filename"][:4]), ("image", "gen_"))
+        self.assertEqual(self.atlas.image_requests[-1], {"model": "bytedance/seedream-v5.0-pro/text-to-image",
+                                                          "prompt": "A fit model in her forties, studio portrait", "size": "1536x2048", "n": 2})
+        async with httpx.AsyncClient() as browser:  # signed links need no token
+            thumb = await browser.get(first["thumb_url"])
+            full = await browser.get(first["file_url"])
+        self.assertEqual(thumb.status_code, 200)
+        self.assertEqual(full.content[:4], b"\x89PNG")
+        try:
+            import PIL  # noqa: F401
+            self.assertEqual((thumb.headers["content-type"], thumb.content[:3]), ("image/jpeg", b"\xff\xd8\xff"))
+        except ImportError:
+            pass
+        listed = (await self.http.get("/v1/assets")).json()["assets"]
+        self.assertTrue(all("file_url" in a for a in listed) and "thumb_url" in listed[0])
+
+        def reply(body):
+            if assistant_turns(body) == 0:
+                return json.dumps({"say": "Making her outfit variation.", "actions": [{"tool": "generate_image", "args": {
+                    "prompt": "Same woman, red satin dress, white studio", "reference_asset_ids": [first["asset_id"] if "asset_id" in first else first["id"]]}}]})
+            result = tool_result(body, "generate_image")
+            return json.dumps({"say": f"Here it is: {result['assets'][0]['thumb_url']}", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Put her in a red dress", "attachments": [first["id"]]})
+        view = await self.settle(chat)
+        tool = next(m for m in view["messages"] if m["role"] == "tool")["content"]
+        self.assertTrue(tool["ok"], tool)
+        self.assertEqual(tool["result"]["model"], "bytedance/seedream-v5.0-pro/edit")
+        edit_payload = self.atlas.image_requests[-1]
+        self.assertTrue(edit_payload["images"][0].startswith("data:image/png;base64,"))
+        self.assertIn("thumb_url", view["messages"][0]["content"]["attachments"][0])
+        self.assertIn("&w=320", view["messages"][-1]["content"]["say"])
+
+        audio = (await self.http.post("/v1/assets", files={"files": ("beat.mp3", b"ID3" + b"0" * 64, "audio/mpeg")})).json()["assets"][0]
+        bad = await self.http.post("/v1/images", json={"prompt": "x", "reference_asset_ids": [audio["id"]]})
+        self.assertEqual(bad.status_code, 422)
+        wrong = await self.http.post("/v1/images", json={"prompt": "x", "model": "bytedance/seedream-v5.0-pro/edit"})
+        self.assertEqual(wrong.status_code, 422)
 
     async def test_invalid_json_is_repaired_then_fails(self):
         replies = iter(["Sure! I will do it.", json.dumps({"say": "Fixed.", "actions": [], "done": True})])

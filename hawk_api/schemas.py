@@ -101,6 +101,15 @@ class VideoRequest(BaseModel):
         return self
 
 
+class ImageRequest(BaseModel):
+    prompt: str = Field(min_length=1, description="What the image should show, or how to change the reference images.")
+    reference_asset_ids: list[str] = Field(default_factory=list, max_length=10, description="Image assets to edit or combine; switches to the edit model.")
+    model: str | None = Field(None, description="Atlas image model; default bytedance/seedream-v5.0-pro/text-to-image (or /edit with references).")
+    size: str | None = Field(None, description="e.g. 2048x2048, 1536x2048 or 2048x1152. Omit for the model default.")
+    n: int = Field(1, ge=1, le=4, description="How many images.")
+    seed: int | None = Field(None, ge=0)
+
+
 class AgentSessionIn(BaseModel):
     title: str | None = Field(None, description="Chat title; the agent renames it once the task is clear.")
     persona: str | None = Field(None, description="Who the agent should be, e.g. 'Bollywood ad-film director'.")
