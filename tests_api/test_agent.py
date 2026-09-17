@@ -255,6 +255,53 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         wrong = await self.http.post("/v1/images", json={"prompt": "x", "model": "bytedance/seedream-v5.0-pro/edit"})
         self.assertEqual(wrong.status_code, 422)
 
+    async def test_prompts_are_editable(self):
+        prompts = {p["name"]: p for p in (await self.http.get("/v1/prompts")).json()["prompts"]}
+        self.assertTrue(prompts["agent"]["is_default"] and prompts["planner"]["is_default"])
+        self.assertIn("{{TOOLS}}", prompts["agent"]["text"])
+        self.assertIn('"segments"', prompts["planner"]["text"])
+        self.assertIn("under 18", prompts["agent"]["platform_rules"])
+        self.assertNotIn("under 18", prompts["agent"]["text"], "platform rules are not part of the editable text")
+
+        custom = ("You are Test Director.\nPERSONA: {{PERSONA}}\nCRITERIA: always use 9:16 and one location.\n{{TOOLS}}\n"
+                  'Reply with JSON {"say": "", "actions": [], "done": true}.')
+        saved = (await self.http.put("/v1/prompts/agent", json={"text": custom})).json()
+        self.assertEqual((saved["is_default"], saved["warnings"]), (False, []))
+        self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": [], "done": True})
+        chat = await self.new_chat(persona="Moody noir cinematographer")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "hi"})
+        await self.settle(chat)
+        system = self.atlas.requests[-1]["messages"][0]["content"]
+        self.assertTrue(system.startswith("You are Test Director."))
+        self.assertIn("PERSONA: Moody noir cinematographer", system)
+        self.assertIn("always use 9:16", system)
+        self.assertIn("- render_film:", system)
+        self.assertNotIn("HOW YOU WORK", system)
+        self.assertTrue(system.rstrip().endswith("including from their photos."))
+
+        without_tools = (await self.http.put("/v1/prompts/agent", json={"text": "Minimal. {{PERSONA}}"})).json()
+        self.assertTrue(any("{{TOOLS}}" in w for w in without_tools["warnings"]))
+        self.assertEqual(without_tools["history"][0]["text"], custom)
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "again"})
+        await self.settle(chat)
+        self.assertIn("\n\nTOOLS\n- ", self.atlas.requests[-1]["messages"][0]["content"])
+
+        reset = (await self.http.post("/v1/prompts/agent/reset")).json()
+        self.assertTrue(reset["is_default"])
+        self.assertEqual(len(reset["history"]), 2)
+
+        planner_text = 'Custom planner guide. Return JSON {"segments": [...]}.'
+        self.assertEqual((await self.http.put("/v1/prompts/planner", json={"text": planner_text})).json()["warnings"], [])
+        plan = (await self.http.post("/v1/plans", json={"story": "A walk"})).json()
+        node = next(n for n in self.fake.prompts[plan["id"]].values() if n["class_type"] == "HawkH3StoryPlanner")
+        self.assertTrue(node["inputs"]["system_prompt"].startswith(planner_text))
+        self.assertIn("PLATFORM RULES", node["inputs"]["system_prompt"])
+        await self.http.post("/v1/prompts/planner/reset")
+        plan = (await self.http.post("/v1/plans", json={"story": "A walk"})).json()
+        node = next(n for n in self.fake.prompts[plan["id"]].values() if n["class_type"] == "HawkH3StoryPlanner")
+        self.assertEqual(node["inputs"]["system_prompt"], "")
+        self.assertEqual((await self.http.get("/v1/prompts/nope")).status_code, 404)
+
     async def test_invalid_json_is_repaired_then_fails(self):
         replies = iter(["Sure! I will do it.", json.dumps({"say": "Fixed.", "actions": [], "done": True})])
         self.atlas.reply = lambda body: next(replies)

@@ -110,6 +110,10 @@ class ImageRequest(BaseModel):
     seed: int | None = Field(None, ge=0)
 
 
+class PromptIn(BaseModel):
+    text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
+
+
 class AgentSessionIn(BaseModel):
     title: str | None = Field(None, description="Chat title; the agent renames it once the task is clear.")
     persona: str | None = Field(None, description="Who the agent should be, e.g. 'Bollywood ad-film director'.")

@@ -327,6 +327,19 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
 
+### Editable prompts
+
+Studio's **Prompts** page (or `/v1/prompts`) lets you rewrite the **agent** prompt and the **story planner** prompt completely. The agent prompt uses `{{PERSONA}}`, `{{PIPELINE}}` and `{{TOOLS}}` placeholders (the tool list is appended if you remove `{{TOOLS}}`); keep its JSON reply format. The planner prompt must keep the JSON output with a `segments` list. Every save keeps the previous version (last 30), and reset returns to the built-in text. Prompts are stored in `DATA_DIR/prompts.json`.
+
+The server always appends a short, non-editable **platform rules** block (no sexual content involving anyone who appears under 18; no sexual or nude content of real, identifiable people) to the agent prompt and to an edited planner prompt. These are instructions to the model, not a content filter.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/v1/prompts` | Both prompts: text, default, history, placeholders, warnings, platform rules |
+| GET | `/v1/prompts/<agent\|planner>` | One prompt |
+| PUT | `/v1/prompts/<agent\|planner>` | `{text}`: save a new version |
+| POST | `/v1/prompts/<agent\|planner>/reset` | Back to the built-in prompt |
+
 ### Images
 
 `POST /v1/images` (and the MCP / agent tool `generate_image`) creates images with Atlas Cloud's `generateImage` API: `{prompt, reference_asset_ids?, model?, size?, n (1-4), seed?}`. Without references it uses `bytedance/seedream-v5.0-pro/text-to-image`; with references it switches to `bytedance/seedream-v5.0-pro/edit` and sends those images, so you can keep a face and change the outfit, scene or style. Results are stored as image assets and can be used right away as `picture` references in plans and renders.

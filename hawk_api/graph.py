@@ -227,6 +227,7 @@ def add_planner(
     seed: int,
     temperature: float = 0.7,
     max_tokens: int = 16384,
+    system_prompt: str = "",
 ) -> str:
     inputs = {
         "story": story,
@@ -235,7 +236,7 @@ def add_planner(
         "aspect_ratio": aspect_ratio,
         "model": model,
         "seed": seed % 2147483648,
-        "system_prompt": "",
+        "system_prompt": system_prompt,
         "temperature": temperature,
         "max_tokens": max_tokens,
         "json_mode": True,

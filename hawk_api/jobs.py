@@ -25,6 +25,7 @@ from hawk_h3.script import ScriptError, build_jobs, parse_script
 from . import graph as graphs
 from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
+from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
 from .config import ModelSettings, Settings
 from .loras import (
@@ -200,6 +201,7 @@ class HawkService:
         self.store = store or Store(settings.db_path)
         self.comfy = comfy or ComfyClient(settings.comfy_url)
         self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
+        self.prompts = PromptStore(settings.data_dir)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
 
@@ -489,6 +491,8 @@ class HawkService:
             "model": options.model or self.settings.planner_model,
             "seed": seed,
             "temperature": options.temperature,
+            # Blank keeps the node's built-in guide; an edited planner prompt gets the platform rules appended.
+            "system_prompt": (f"{custom.rstrip()}\n\n{PLATFORM_RULES}" if (custom := self.prompts.custom("planner")) else ""),
         }
 
     @staticmethod

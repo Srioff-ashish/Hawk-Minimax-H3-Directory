@@ -345,6 +345,16 @@
     .agent-list { max-height: 220px; }
     .agent-chat { height: calc(100vh - 150px); min-height: 480px; }
   }
+
+  /* ---------- prompts ---------- */
+  .prompts-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  .prompts-layout > * { min-width: 0; }
+  .prompts-side { position: sticky; top: 76px; }
+  .dirty-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
+  #promptEditor { min-height: 60vh; tab-size: 2; }
+  .placeholder-chip { cursor: pointer; font-family: var(--mono); }
+  .placeholder-chip:hover { border-color: var(--brand-line); color: var(--brand); }
+  @media (max-width: 1100px) { .prompts-layout { grid-template-columns: minmax(0, 1fr); } .prompts-side { position: static; } }
   @media (max-width: 1100px) {
     .create-layout { grid-template-columns: minmax(0, 1fr); }
     .summary { position: static; }
@@ -372,6 +382,7 @@
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs><linearGradient id="hawkGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#4f46e5"/><stop offset="1" stop-color="#9333ea"/></linearGradient></defs>
   <symbol id="i-logo" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="url(#hawkGrad)"/><path d="M5.5 17.2c3.9-.2 7-1.9 9.3-5.4.6 2.4 2.1 4.1 4.6 5-2 .3-3.6 1.2-4.8 2.8-2.4-1.9-5.4-2.6-9.1-2.4z" fill="#fff"/><path d="M14.8 11.8 20.6 6.5c.5 2.8-.3 5.3-2.4 7.3" fill="#fff" fill-opacity=".72"/><circle cx="16.4" cy="13.2" r=".85" fill="#4f46e5"/><path d="m21.4 19.6 5 2.9-5 2.9z" fill="#fff"/></symbol>
+  <symbol id="i-prompt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4z"/><path d="M8 9h8M8 12h5"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
   <symbol id="i-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></symbol>
   <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></symbol>
@@ -396,6 +407,7 @@
     <a class="nav-item" href="#create" data-route="create"><svg><use href="#i-create"/></svg><span>Create</span></a>
     <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Library</span><span class="nav-count" id="activeCount" hidden>0</span></a>
     <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
+    <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Assets</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
     <div class="sidebar-foot">
@@ -641,6 +653,54 @@
       </div>
     </main>
 
+
+    <!-- ================================================================ PROMPTS -->
+    <main class="content" id="page-prompts" data-page="prompts" hidden>
+      <div class="prompts-layout">
+        <section class="card" aria-label="Prompt editor">
+          <div class="card-head">
+            <div class="segmented" role="radiogroup" aria-label="Which prompt">
+              <label><input type="radio" name="promptName" value="agent" checked>Agent</label>
+              <label><input type="radio" name="promptName" value="planner">Story planner</label>
+            </div>
+            <span class="badge plain" id="promptState"></span>
+            <span class="dirty-dot" id="promptDirty" title="Unsaved changes" hidden></span>
+            <div class="spacer"></div>
+            <label class="sr-only" for="promptHistory">Version history</label>
+            <select class="select" id="promptHistory" style="width:auto;max-width:230px;height:30px"></select>
+            <button class="btn btn-sm" id="promptLoadDefault" type="button">Load default</button>
+            <button class="btn btn-sm btn-danger" id="promptReset" type="button">Reset</button>
+            <button class="btn btn-primary btn-sm" id="promptSave" type="button">Save <span class="kbd">⌘S</span></button>
+          </div>
+          <div class="card-body" style="display:grid;gap:10px">
+            <p class="hint" id="promptHelp" style="margin:0"></p>
+            <div class="row" id="promptPlaceholders"></div>
+            <label class="sr-only" for="promptEditor">Prompt text</label>
+            <textarea class="textarea code-edit" id="promptEditor" spellcheck="false"></textarea>
+            <div class="row"><span class="hint" id="promptCount"></span><div class="spacer"></div><span class="hint" id="promptSaved"></span></div>
+            <div id="promptWarnings" style="display:grid;gap:6px"></div>
+          </div>
+        </section>
+        <aside class="prompts-side" style="display:grid;gap:16px">
+          <section class="card">
+            <div class="card-head"><h2>Platform rules</h2><span class="hint">always appended · not editable</span></div>
+            <div class="card-body" style="display:grid;gap:10px">
+              <div class="code" id="platformRules" style="max-height:none"></div>
+              <p class="hint" style="margin:0">The server adds these after the agent prompt and after an edited planner prompt. They are instructions to the model, not a filter: the chosen model decides how to apply them.</p>
+            </div>
+          </section>
+          <section class="card">
+            <div class="card-head"><h2>Tips</h2></div>
+            <div class="card-body hint" style="display:grid;gap:8px">
+              <div><b>Agent:</b> changes apply from the agent's next step, even in a chat that is already running. Keep the JSON reply format or the agent's replies can't be read.</div>
+              <div><b>Story planner:</b> used by AI planner mode, Plan &amp; render, plan_film and the agent. Keep the JSON output with a <code>segments</code> list. Reset uses the built-in guide again. Workflows inside the ComfyUI UI keep their own planner node setting.</div>
+              <div>Every save keeps the previous version under <b>Version history</b>.</div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+
     <!-- ================================================================ ASSETS -->
     <main class="content" id="page-assets" data-page="assets" hidden>
       <section class="card">
@@ -735,6 +795,7 @@
     assets: ["Assets", "Files uploaded to the GPU server"],
     connect: ["Connect & settings", "Chat connectors, API and preferences"],
     agent: ["Agent", "Your autonomous video director"],
+    prompts: ["Prompts", "Edit the agent and story planner instructions"],
   };
   const DRAFT_KEY = "hawkH3Draft";
 
@@ -871,6 +932,7 @@
     if (page === "assets") loadAssets();
     if (page === "connect") renderConnect();
     if (page === "library") renderLibrary();
+    if (page === "prompts" && (PREFIX || token)) loadPrompts();
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
@@ -2137,6 +2199,128 @@
     }
   }
   setInterval(() => { if ((PREFIX || token) && $("page-agent").hidden) loadAgentSessions(); }, 20000);
+
+  // -------------------------------------------------------------- prompts
+
+  const prompts = { data: {}, name: "agent", savedText: "" };
+  const PROMPT_HELP = {
+    agent: "The agent's instructions for every chat. {{PERSONA}}, {{PIPELINE}} and {{TOOLS}} are filled in on each step.",
+    planner: "The story planner's guide: how briefs become segment scripts in H3's prompt format.",
+  };
+
+  function promptWarnings(name, text) {
+    const warnings = [];
+    if (!text.trim()) warnings.push("The prompt is empty.");
+    if (name === "agent") {
+      if (!text.includes("{{TOOLS}}")) warnings.push("{{TOOLS}} is missing: the tool list will be appended at the end.");
+      if (!text.includes("{{PERSONA}}")) warnings.push("{{PERSONA}} is missing: chat personas will have no effect.");
+      if (!text.includes('"actions"') || !text.includes('"say"')) warnings.push('The reply format looks incomplete: the agent must answer with JSON {"say", "actions", "done"}.');
+    } else if (!text.includes('"segments"')) {
+      warnings.push('No "segments" JSON output format found: the planner\'s reply must be JSON with a segments list.');
+    }
+    return warnings;
+  }
+
+  function promptDirty() { return $("promptEditor").value !== prompts.savedText; }
+
+  function paintPromptStatus() {
+    const text = $("promptEditor").value;
+    const dirty = promptDirty();
+    $("promptDirty").hidden = !dirty;
+    $("promptSave").disabled = !dirty;
+    $("promptCount").textContent = `${text.length.toLocaleString()} characters · ~${Math.round(text.length / 4).toLocaleString()} tokens`;
+    $("promptWarnings").innerHTML = promptWarnings(prompts.name, text).map((w) => `<div class="alert warn">${esc(w)}</div>`).join("");
+  }
+
+  function renderPrompt() {
+    const p = prompts.data[prompts.name];
+    if (!p) return;
+    $("promptEditor").value = p.text;
+    prompts.savedText = p.text;
+    $("promptState").textContent = p.is_default ? "Default" : "Edited";
+    $("promptState").className = `badge plain ${p.is_default ? "" : "queued"}`;
+    $("promptHelp").textContent = PROMPT_HELP[prompts.name];
+    $("promptSaved").textContent = p.updated_at ? `Last saved ${new Date(p.updated_at * 1000).toLocaleString()}` : "";
+    $("platformRules").textContent = p.platform_rules;
+    $("promptPlaceholders").innerHTML = Object.entries(p.placeholders || {}).map(([token, info]) =>
+      `<button class="chip placeholder-chip" type="button" data-placeholder="${esc(token)}" title="${esc(info)}">${esc(token)}</button>`).join("");
+    $("promptHistory").innerHTML = `<option value="">Version history (${p.history.length})</option>` +
+      p.history.map((h, i) => `<option value="${i}">${esc(new Date(h.saved_at * 1000).toLocaleString())} · ${h.chars.toLocaleString()} chars</option>`).join("");
+    paintPromptStatus();
+  }
+
+  async function loadPrompts(force = false) {
+    if (!force && promptDirty() && prompts.data[prompts.name]) return;
+    try {
+      const { prompts: list } = await api("/v1/prompts");
+      for (const p of list) prompts.data[p.name] = p;
+      renderPrompt();
+    } catch (error) {
+      if (error.status !== 401) toast("Could not load prompts", error.message, "bad");
+    }
+  }
+
+  async function savePrompt() {
+    if (!promptDirty()) return;
+    $("promptSave").disabled = true;
+    try {
+      const saved = await api(`/v1/prompts/${prompts.name}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: $("promptEditor").value }) });
+      prompts.data[prompts.name] = saved;
+      renderPrompt();
+      toast("Prompt saved", saved.is_default ? "Matches the default, so the built-in prompt is used." : "Used from the next step or plan.");
+    } catch (error) {
+      toast("Could not save", error.message, "bad");
+      paintPromptStatus();
+    }
+  }
+
+  $("promptEditor").addEventListener("input", paintPromptStatus);
+  $("promptEditor").addEventListener("keydown", (event) => {
+    if (event.key === "Tab" && !event.shiftKey) { event.preventDefault(); document.execCommand("insertText", false, "  "); }
+  });
+  $("promptSave").onclick = savePrompt;
+  $("promptLoadDefault").onclick = () => {
+    $("promptEditor").value = prompts.data[prompts.name]?.default || "";
+    paintPromptStatus();
+    toast("Default loaded into the editor", "Save to use it.", "ok", 2500);
+  };
+  $("promptReset").onclick = async () => {
+    if (!(await confirmAction("Reset to the built-in prompt?", "The current version is kept in Version history.", "Reset"))) return;
+    try {
+      prompts.data[prompts.name] = await post(`/v1/prompts/${prompts.name}/reset`, {});
+      renderPrompt();
+      toast("Reset to default");
+    } catch (error) { toast("Could not reset", error.message, "bad"); }
+  };
+  $("promptHistory").addEventListener("change", async (event) => {
+    const index = event.target.value;
+    event.target.value = "";
+    if (index === "") return;
+    if (promptDirty() && !(await confirmAction("Replace unsaved changes?", "The editor will show the selected version.", "Load version"))) return;
+    $("promptEditor").value = prompts.data[prompts.name].history[Number(index)].text;
+    paintPromptStatus();
+    toast("Version loaded into the editor", "Save to use it.", "ok", 2500);
+  });
+  $("promptPlaceholders").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-placeholder]");
+    if (!chip) return;
+    const editor = $("promptEditor");
+    editor.focus();
+    document.execCommand("insertText", false, chip.dataset.placeholder);
+    paintPromptStatus();
+  });
+  document.querySelectorAll('input[name="promptName"]').forEach((input) => input.addEventListener("change", async () => {
+    if (promptDirty() && !(await confirmAction("Discard unsaved changes?", "Switching prompts drops what you haven't saved.", "Discard"))) {
+      document.querySelector(`input[name="promptName"][value="${prompts.name}"]`).checked = true;
+      return;
+    }
+    prompts.name = input.value;
+    renderPrompt();
+  }));
+  document.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s" && !$("page-prompts").hidden) { event.preventDefault(); savePrompt(); }
+  });
+  window.addEventListener("beforeunload", (event) => { if (prompts.data[prompts.name] && promptDirty()) { event.preventDefault(); event.returnValue = ""; } });
 
   // ---------------------------------------------------------------- start
 

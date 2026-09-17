@@ -20,7 +20,8 @@ from .auth import bearer, signature_valid, split_path_token, token_matches
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
-from .schemas import AgentMessageIn, AgentSessionIn, ImageRequest, PlanRequest, UrlAssetRequest, VideoRequest
+from .prompts import PROMPT_NAMES
+from .schemas import AgentMessageIn, AgentSessionIn, ImageRequest, PlanRequest, PromptIn, UrlAssetRequest, VideoRequest
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
 #: (they contain no data; every API call the Studio makes still needs the token).
@@ -223,6 +224,29 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/jobs/{job_id}/segments/{number}", tags=["downloads"])
     async def download_segment(job_id: str, number: int):
         return _stream(await service.open_segment(job_id, number), f"hawk_h3_{job_id[:8]}_segment_{number:03d}.mp4")
+
+    # ------------------------------------------------------------ prompts
+
+    def _prompt_name(name: str) -> str:
+        if name not in PROMPT_NAMES:
+            raise NotFound(f"No prompt {name!r}; use one of {', '.join(PROMPT_NAMES)}.")
+        return name
+
+    @app.get("/v1/prompts", tags=["prompts"])
+    async def prompts_list():
+        return {"prompts": [service.prompts.view(name) for name in PROMPT_NAMES]}
+
+    @app.get("/v1/prompts/{name}", tags=["prompts"])
+    async def prompt_get(name: str):
+        return service.prompts.view(_prompt_name(name))
+
+    @app.put("/v1/prompts/{name}", tags=["prompts"])
+    async def prompt_save(name: str, body: PromptIn):
+        return service.prompts.save(_prompt_name(name), body.text)
+
+    @app.post("/v1/prompts/{name}/reset", tags=["prompts"])
+    async def prompt_reset(name: str):
+        return service.prompts.save(_prompt_name(name), None)
 
     # ------------------------------------------------------------ agent
 
