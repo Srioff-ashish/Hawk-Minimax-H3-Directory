@@ -2560,7 +2560,7 @@
 
   // ---------------------------------------------------------------- agent
 
-  const agent = { sessions: [], current: null, lastId: 0, models: [], modelsLoaded: false, attachments: [], timer: null, jobCards: new Map(), rendered: new Set() };
+  const agent = { drafts: new Map(), draftFor: undefined, sessions: [], current: null, lastId: 0, models: [], modelsLoaded: false, attachments: [], timer: null, jobCards: new Map(), rendered: new Set() };
   const PERSONAS = [
     "Bollywood music-video director: bold colours, dance energy, quick cuts, playful Hinglish lines",
     "Luxury fashion film director: slow elegant camera, soft light, minimal dialogue, one music bed",
@@ -2643,8 +2643,42 @@
     if (suggestion) { $("agentInput").value = SUGGESTIONS[Number(suggestion.dataset.suggest)]; autoGrow(); $("agentInput").focus(); }
   });
 
+  // Unsent text and attachments belong to one chat: kept per chat (text survives a reload).
+  const AGENT_DRAFT_KEY = "hawkH3AgentDrafts";
+  const draftKey = (id) => id || "new";
+  function loadAgentDrafts() { try { return JSON.parse(storage.get(AGENT_DRAFT_KEY) || "{}"); } catch { return {}; } }
+  function stashAgentDraft(id) {
+    const key = draftKey(id);
+    const text = $("agentInput").value;
+    agent.drafts.set(key, { text, attachments: agent.attachments });
+    const saved = loadAgentDrafts();
+    const ready = agent.attachments.filter((a) => a.status === "ready");
+    if (text.trim() || ready.length) saved[key] = { text, attachments: ready, at: Date.now() }; else delete saved[key];
+    const keys = Object.keys(saved).sort((a, b) => (saved[b].at || 0) - (saved[a].at || 0));
+    keys.slice(30).forEach((k) => delete saved[k]);  // keep the 30 most recent drafts
+    storage.set(AGENT_DRAFT_KEY, JSON.stringify(saved));
+  }
+  function restoreAgentDraft(id) {
+    const key = draftKey(id);
+    const draft = agent.drafts.get(key) || loadAgentDrafts()[key] || { text: "", attachments: [] };
+    $("agentInput").value = draft.text || "";
+    agent.attachments = draft.attachments || [];
+    autoGrow();
+    renderAttachments();
+  }
+  function clearAgentDraft(id) {
+    const key = draftKey(id);
+    agent.drafts.delete(key);
+    const saved = loadAgentDrafts();
+    delete saved[key];
+    storage.set(AGENT_DRAFT_KEY, JSON.stringify(saved));
+  }
+
   async function openAgentSession(id) {
-    if (agent.current !== id) {  // the persona box always belongs to the open chat
+    if (agent.current !== id) {  // the persona box and the composer always belong to the open chat
+      if (agent.draftFor !== undefined) stashAgentDraft(agent.draftFor);
+      agent.draftFor = id;
+      restoreAgentDraft(id);
       togglePersona(false);
       $("agentPersona").value = agent.sessions.find((s) => s.id === id)?.persona || "";
     }
@@ -2833,7 +2867,12 @@
   });
 
   function autoGrow() { const input = $("agentInput"); input.style.height = "auto"; input.style.height = `${Math.min(200, input.scrollHeight)}px`; }
-  $("agentInput").addEventListener("input", autoGrow);
+  let agentDraftTimer = null;
+  $("agentInput").addEventListener("input", () => {
+    autoGrow();
+    clearTimeout(agentDraftTimer);
+    agentDraftTimer = setTimeout(() => { if (agent.draftFor !== undefined) stashAgentDraft(agent.draftFor); }, 400);
+  });
   $("agentInput").addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendAgentMessage(); }
   });
@@ -2848,6 +2887,8 @@
         const session = await post("/v1/agent/sessions", { model: $("agentModel").value || undefined });
         agent.sessions.unshift(session);
         agent.current = session.id;
+        agent.draftFor = session.id;
+        clearAgentDraft(null);
         history.replaceState(null, "", `#agent/${session.id}`);
         agent.lastId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
       } catch (error) { return toast("Could not start a chat", error.message, "bad"); }
@@ -2857,6 +2898,7 @@
       await post(`/v1/agent/sessions/${agent.current}/messages`, { text, attachments });
       $("agentInput").value = ""; autoGrow();
       agent.attachments = []; renderAttachments();
+      clearAgentDraft(agent.current);
       await pollAgent(true);
     } catch (error) {
       toast(error.status === 409 ? "The agent is still working" : "Could not send", error.status === 409 ? "Wait for it, or press Stop." : error.message, "bad");
@@ -2877,6 +2919,7 @@
     if (target && agent.sessions.some((s) => s.id === target)) {
       if (target !== agent.current || !agent.lastId) await openAgentSession(target);
     } else {
+      if (agent.draftFor !== null) { if (agent.draftFor !== undefined) stashAgentDraft(agent.draftFor); agent.draftFor = null; restoreAgentDraft(null); }
       agent.current = null;
       renderAgentEmpty();
       $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
