@@ -2644,6 +2644,10 @@
   });
 
   async function openAgentSession(id) {
+    if (agent.current !== id) {  // the persona box always belongs to the open chat
+      togglePersona(false);
+      $("agentPersona").value = agent.sessions.find((s) => s.id === id)?.persona || "";
+    }
     agent.current = id;
     agent.lastId = 0;
     agent.rendered.clear();
@@ -2658,7 +2662,7 @@
     const index = agent.sessions.findIndex((s) => s.id === session.id);
     if (index >= 0) agent.sessions[index] = session; else agent.sessions.unshift(session);
     if (document.activeElement !== $("agentTitle")) $("agentTitle").value = session.title;
-    if ($("agentPersonaPanel").hidden) $("agentPersona").value = session.persona || "";
+    if (session.id === agent.current && $("agentPersonaPanel").hidden) $("agentPersona").value = session.persona || "";
     const running = session.status === "running" || session.status === "stopping";
     const status = $("agentStatus");
     status.hidden = session.status === "idle";
@@ -2766,8 +2770,10 @@
     try {
       const session = await post("/v1/agent/sessions", { model: $("agentModel").value || undefined });
       agent.sessions.unshift(session);
-      location.hash = `#agent/${session.id}`;
+      history.replaceState(null, "", `#agent/${session.id}`);
+      await openAgentSession(session.id);
       $("agentInput").focus();
+      return session;
     } catch (error) {
       toast("Could not start a chat", error.message, "bad");
     }
@@ -2788,7 +2794,7 @@
   function togglePersona(open) {
     $("agentPersonaPanel").hidden = !open;
     $("agentPersonaBtn").setAttribute("aria-expanded", String(open));
-    if (open) { $("agentPersona").value = currentSession()?.persona || ""; $("agentPersona").focus(); }
+    if (open) { agent.personaFor = agent.current; $("agentPersona").value = currentSession()?.persona || ""; $("agentPersona").focus(); }
   }
   $("agentPersonaBtn").onclick = () => togglePersona($("agentPersonaPanel").hidden);
   $("agentPersonaClose").onclick = () => togglePersona(false);
@@ -2797,8 +2803,10 @@
     if (chip) $("agentPersona").value = PERSONAS[Number(chip.dataset.persona)];
   });
   $("agentPersonaSave").onclick = async () => {
-    if (!agent.current) await newAgentChat();
-    if (await patchSession({ persona: $("agentPersona").value })) { togglePersona(false); toast("Persona saved"); }
+    const text = $("agentPersona").value;
+    if (!agent.current) { if (!(await newAgentChat())) return; agent.personaFor = agent.current; }
+    if (agent.personaFor !== agent.current) { togglePersona(false); return toast("Chat changed", "Open Persona again to edit this chat's persona.", "warn"); }
+    if (await patchSession({ persona: text })) { togglePersona(false); toast("Persona saved", "For this chat only."); }
   };
 
   function renderAttachments() {
