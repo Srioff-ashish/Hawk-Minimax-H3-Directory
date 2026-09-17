@@ -27,7 +27,7 @@ Typical flow:
 
 Reference roles: picture (identity, outfit, place -> <Picture N>), pose (body pose only -> <Pose N>), video (motion or camera -> <Video N>), audio (voice, music -> <Audio N>), video_soundtrack (audio of video for_video).
 Script rules: segments separated by a line '---'; optional headers title:, duration: (1-15 s), pictures: 1,2, poses:, videos:, audios:, continuity: (off, last_frame, tail_5, tail_22, tail_39), seed:; 'style:' (one paragraph, ended by a blank line or a header) is prepended to every segment; count segments in the job's progress.segments_total and fix the script if it differs from the scenes you wrote. Number tags by the order references were listed. Write each prompt as a director's brief: reference roles, action in order, one camera move, quoted dialogue, sounds, 'Music N/A' if no score.
-LoRAs: the server adds its default LoRAs (usually the turbo LoRA) automatically; list_options shows the files available on the pod and the presets.
+LoRAs: the server adds its default LoRAs (usually the turbo LoRA) automatically. list_loras shows every LoRA file on the pod, the defaults and the presets. To use one, pass settings.loras=[{"name": "<file name or a unique part of it>", "strength": 0.6}] in render_film (or lora_preset); get_job's loras_applied confirms what was applied. strength 0 switches a default off.
 Music: H3 composes new music in every segment, so a multi-segment film jumps at each cut. For one continuous track, upload it (upload page or add_reference_from_url) and pass settings.music_asset_id; the Director mixes it under the whole film (settings.music_volume_db, scene_volume_db, music_fade_seconds) and turns off each segment's own music. Do not also list the track in references.
 Planner: plan_film takes model, any id from list_options.planner_models (default xai/grok-4.3); pick a vision model when references are attached.
 Models: list_options shows diffusion_models (ref2va base models), text_encoders and the defaults. settings.unet_name / settings.clip_name pick others for one render, by file name or a unique part such as "bf16". bf16 gives the best quality but is slowest; int8 / fp8 / nvfp4 are faster. Omit them to use the defaults.
@@ -116,9 +116,21 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         return await run(service.generate_images(prompt, model=model, reference_asset_ids=reference_asset_ids or [],
                                                  size=size, n=max(1, min(4, n)), seed=seed))
 
-    @mcp.tool(description="Show what the pod can use: ref2va base models and text encoders (with the defaults), LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, samplers, schedulers, aspect ratios and continuity modes.")
+    @mcp.tool(description="Show what the pod can use: LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, ref2va base models and text encoders (with the defaults), planner model ids, samplers, schedulers, aspect ratios and continuity modes.")
     async def list_options() -> dict:
-        return await run(service.options())
+        options = await run(service.options())
+        # Compact for chat models: LoRAs first, and planner models as ids (the full catalogue
+        # with pricing is tens of KB and pushed the LoRA list out of view).
+        first = ("available_loras", "default_loras", "lora_presets")
+        compact = {key: options[key] for key in first}
+        compact.update({key: value for key, value in options.items() if key not in first})
+        compact["planner_models"] = [model["id"] for model in options.get("planner_models") or []]
+        return compact
+
+    @mcp.tool(description="LoRA files on the pod (models/loras), the default LoRAs the server adds (and whether they are present) and the presets from loras.json. Use a file name, or a unique part of it, in render_film settings.loras.")
+    async def list_loras() -> dict:
+        options = await run(service.options())
+        return {key: options[key] for key in ("available_loras", "default_loras", "lora_presets")}
 
     @mcp.tool(description="Start an LLM plan: turns a brief plus references into a segment script. Returns a job; poll get_job until done, then read its script.")
     async def plan_film(

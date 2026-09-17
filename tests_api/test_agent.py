@@ -52,11 +52,12 @@ class FakeAtlas:
         self.app = web.Application()
         self.image_requests: list[dict] = []
         self.polls = 0
+        self.model_list = MODELS
         self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat),
                              web.post("/api/v1/model/generateImage", self.generate), web.get("/api/v1/model/prediction/{pid}", self.prediction)])
 
     async def models(self, _request):
-        return web.json_response({"data": MODELS})
+        return web.json_response({"data": self.model_list})
 
     async def generate(self, request):
         self.image_requests.append(await request.json())
@@ -96,6 +97,12 @@ def tool_result(body: dict, tool: str) -> dict:
         if message["role"] == "user" and match:
             return json.loads(match.group(1))
     raise AssertionError(f"no {tool} result in the conversation")
+
+
+def tool_result_text(content: str, tool: str) -> str:
+    match = re.search(rf"TOOL RESULT {tool}: (.*?)(?:\n\nTOOL RESULT|\Z)", content, re.S)
+    assert match, f"no {tool} result"
+    return match.group(1)
 
 
 def assistant_turns(body: dict) -> int:
@@ -207,6 +214,27 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         later = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"after": messages[-2]["id"]})).json()
         self.assertEqual(len(later["messages"]), 1)
+
+    async def test_agent_sees_loras_with_a_large_model_catalogue(self):
+        # Atlas lists 100+ models with pricing; the LoRA list must still reach the agent.
+        big = [{**MODELS[0], "id": f"vendor/chat-model-{n}", "name": f"Vendor: Chat model {n} with a long descriptive name"} for n in range(150)]
+        self.atlas.model_list = MODELS + big
+        self.fake.model_files["loras"].append("extra/style-alpha-minimax-h3.safetensors")
+
+        def reply(body):
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "Checking LoRAs.", "actions": [{"tool": "list_options", "args": {}}, {"tool": "list_loras", "args": {}}]})
+            return json.dumps({"say": "ok", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Which LoRAs can you use?"})
+        await self.settle(chat)
+        last = self.atlas.requests[-1]["messages"][-1]["content"]
+        for tool in ("list_options", "list_loras"):
+            self.assertIn("extra/style-alpha-minimax-h3.safetensors", tool_result_text(last, tool), tool)
+        self.assertIn("- list_loras:", self.atlas.requests[0]["messages"][0]["content"])
 
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05

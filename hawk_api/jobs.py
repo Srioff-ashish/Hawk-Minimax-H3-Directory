@@ -121,7 +121,7 @@ def drive_links(drive: dict | None) -> dict | None:
         return None
     links = dict(drive)
     file_id = drive.get("file_id")
-    if file_id:
+    if file_id and not str(file_id).lower().startswith("local"):  # "local-<n>": upload not finished
         links.update(
             preview_url=f"https://drive.google.com/file/d/{file_id}/preview",
             view_url=f"https://drive.google.com/file/d/{file_id}/view",

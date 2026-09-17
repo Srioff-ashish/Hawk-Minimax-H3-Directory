@@ -499,6 +499,11 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             options = await call("list_options")
             self.assertIn(TURBO, options["available_loras"])
             self.assertTrue(options["default_loras"][0]["present"])
+            self.assertEqual(list(options)[:3], ["available_loras", "default_loras", "lora_presets"])
+            self.assertTrue(all(isinstance(model, str) for model in options["planner_models"]))
+            loras = await call("list_loras")
+            self.assertEqual(set(loras), {"available_loras", "default_loras", "lora_presets"})
+            self.assertIn(REALISM, loras["available_loras"])
 
             job = await call("render_film", {"references": [{"asset_id": asset, "role": "pose"}], "script": "She ends in <Pose 1>."})
             done = await self.wait(job["id"])
