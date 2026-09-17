@@ -21,6 +21,7 @@ import httpx
 from hawk_h3.script import ScriptError, build_jobs, parse_script
 
 from . import graph as graphs
+from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
 from .config import ModelSettings, Settings
@@ -183,6 +184,7 @@ class HawkService:
         self.settings = settings
         self.store = store or Store(settings.db_path)
         self.comfy = comfy or ComfyClient(settings.comfy_url)
+        self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
 
@@ -277,7 +279,15 @@ class HawkService:
         available = await self.available_loras(refresh=True)
         config = load_config(self.settings.loras_path)
         director = await self.comfy.object_info("HawkH3Director")
+        try:
+            planner_models = await self.atlas.list_models()
+        except AtlasError as exc:
+            log.warning("hawk_api: Atlas model list unavailable: %s", exc)
+            planner_models = []
         return {
+            "planner_models": planner_models,
+            "default_planner_model": self.settings.planner_model,
+            "default_agent_model": self.settings.agent_model,
             "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
             "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
             "default_unet": self.settings.models.unet_name,

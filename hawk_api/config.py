@@ -37,6 +37,9 @@ class Settings:
     lora_cache_seconds: float = 60.0
     reconcile_seconds: float = 30.0
     planner_model: str = "xai/grok-4.3"
+    atlas_url: str = "https://api.atlascloud.ai/v1"
+    atlas_api_key: str = ""
+    agent_model: str = "xai/grok-4.6"
     models: ModelSettings = field(default_factory=ModelSettings)
 
     @property
@@ -72,5 +75,8 @@ class Settings:
             max_upload_mb=int(_env("MAX_UPLOAD_MB", str(cls.max_upload_mb))),
             link_ttl_seconds=int(_env("LINK_TTL_SECONDS", str(cls.link_ttl_seconds))),
             planner_model=_env("HAWK_PLANNER_MODEL", cls.planner_model),
+            atlas_url=_env("ATLAS_API_URL", cls.atlas_url).rstrip("/"),
+            atlas_api_key=_env("ATLAS_API_KEY"),
+            agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             models=models,
         )

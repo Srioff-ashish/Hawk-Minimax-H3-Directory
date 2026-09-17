@@ -15,11 +15,12 @@ from fastapi import FastAPI, File, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .agent import AgentService
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
-from .schemas import PlanRequest, UrlAssetRequest, VideoRequest
+from .schemas import AgentMessageIn, AgentSessionIn, PlanRequest, UrlAssetRequest, VideoRequest
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
 #: (they contain no data; every API call the Studio makes still needs the token).
@@ -87,11 +88,15 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
 
+    agent = AgentService(service, mcp)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await service.start()
+        await agent.start()
         async with mcp.session_manager.run():
             yield
+        await agent.stop()
         await service.stop()
 
     app = FastAPI(
@@ -101,6 +106,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         lifespan=lifespan,
     )
     app.state.service = service
+    app.state.agent = agent
 
     @app.exception_handler(RequestError)
     async def _request_error(_request, exc: RequestError):
@@ -206,6 +212,46 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/jobs/{job_id}/segments/{number}", tags=["downloads"])
     async def download_segment(job_id: str, number: int):
         return _stream(await service.open_segment(job_id, number), f"hawk_h3_{job_id[:8]}_segment_{number:03d}.mp4")
+
+    # ------------------------------------------------------------ agent
+
+    @app.get("/v1/agent/models", tags=["agent"])
+    async def agent_models():
+        try:
+            models = await service.atlas.list_models()
+        except Exception as exc:  # AtlasError or network
+            raise Unavailable(str(exc)) from None
+        return {"models": models, "default_agent_model": settings.agent_model, "default_planner_model": settings.planner_model,
+                "configured": service.atlas.configured}
+
+    @app.post("/v1/agent/sessions", tags=["agent"], status_code=201)
+    async def agent_create(body: AgentSessionIn):
+        return agent.create_session(body.title, body.persona, body.model)
+
+    @app.get("/v1/agent/sessions", tags=["agent"])
+    async def agent_list():
+        return {"sessions": agent.list_sessions()}
+
+    @app.get("/v1/agent/sessions/{session_id}", tags=["agent"])
+    async def agent_get(session_id: str, after: int = 0):
+        return agent.view(session_id, after)
+
+    @app.patch("/v1/agent/sessions/{session_id}", tags=["agent"])
+    async def agent_update(session_id: str, body: AgentSessionIn):
+        return agent.update_session(session_id, title=body.title, persona=body.persona, model=body.model)
+
+    @app.post("/v1/agent/sessions/{session_id}/messages", tags=["agent"], status_code=202)
+    async def agent_send(session_id: str, body: AgentMessageIn):
+        return await agent.send(session_id, body.text, body.attachments)
+
+    @app.post("/v1/agent/sessions/{session_id}/stop", tags=["agent"])
+    async def agent_stop(session_id: str):
+        return agent.request_stop(session_id)
+
+    @app.delete("/v1/agent/sessions/{session_id}", tags=["agent"])
+    async def agent_delete(session_id: str):
+        await agent.delete_session(session_id)
+        return {"deleted": session_id}
 
     app.mount("/", mcp_app)  # serves /mcp; mounted last so the routes above win
     app.add_middleware(AuthMiddleware, token=settings.token)

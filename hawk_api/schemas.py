@@ -101,6 +101,17 @@ class VideoRequest(BaseModel):
         return self
 
 
+class AgentSessionIn(BaseModel):
+    title: str | None = Field(None, description="Chat title; the agent renames it once the task is clear.")
+    persona: str | None = Field(None, description="Who the agent should be, e.g. 'Bollywood ad-film director'.")
+    model: str | None = Field(None, description="Atlas chat model id; default HAWK_AGENT_MODEL (xai/grok-4.6).")
+
+
+class AgentMessageIn(BaseModel):
+    text: str = Field("", description="Your message.")
+    attachments: list[str] = Field(default_factory=list, description="Asset ids uploaded with this message.")
+
+
 class UrlAssetRequest(BaseModel):
     url: str = Field(description="A direct http(s) link to an image, audio or video file.")
     filename: str | None = Field(None, description="Override the file name (its extension decides the kind).")

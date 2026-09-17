@@ -23,6 +23,7 @@ The gateway builds the same graph as the example workflows (Model Loader → LoR
 - [4. Connect Grok](#4-connect-grok)
 - [5. Using it from a chat](#5-using-it-from-a-chat)
 - [6. REST reference](#6-rest-reference)
+- [Agent: an autonomous video director](#agent-an-autonomous-video-director)
 - [7. MCP tools](#7-mcp-tools)
 - [8. Jobs, progress and resume](#8-jobs-progress-and-resume)
 - [9. Security](#9-security)
@@ -300,6 +301,33 @@ A finished render's job:
 `video_url` and `segment_urls` are **signed links**: they open in any browser without the token and expire after 7 days (`LINK_TTL_SECONDS`). Fetch the job again for fresh ones.
 
 Errors are JSON `{"error": "…", "details": {…}}` with status 401 (token), 404 (unknown job), 409 (wrong state, e.g. cancelling a finished job), 422 (bad request: script, references, LoRAs) or 503 (ComfyUI unreachable).
+
+---
+
+## Agent: an autonomous video director
+
+Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does whole video tasks by itself: it reads the options, plans, renders, waits for the render, retries failures and hands you the video link.
+
+- **Models:** any chat model on your Atlas account. The picker lists Grok 4.6 (default, `HAWK_AGENT_MODEL`), Grok 4.5, Grok 4.3 first. `GET /v1/agent/models` returns the list with vision support and prices.
+- **Persona:** free text per chat ("a Bollywood ad-film director who loves warm colours"). You can also tell the agent "be a …" in the chat. Safety rules are fixed and not changed by the persona: no sexual content involving anyone who appears under 18, and no sexual or nude content of real, identifiable people.
+- **Tools:** exactly the MCP tools of this server, listed and called **in-process**, so the agent never goes through the tunnel and gets new tools automatically. It also has `wait_for_job` (waits on the server without spending tokens), `set_persona` and `rename_chat`.
+- **History:** every chat is stored in `DATA_DIR/jobs.sqlite3`. The last 30 messages are sent to the model verbatim; very long chats are summarised automatically, and the full history stays in the database.
+- **Runs on the server:** a message starts a background run that continues if you close the browser. Limits per message: 40 model steps and 3 hours. **Stop** ends it after the current step. A server restart marks a running chat as interrupted.
+- **Protocol:** Atlas does not advertise tool calling for Grok, so the model answers every turn with JSON: `{"say": "…", "actions": [{"tool": "…", "args": {…}}], "done": false}`. Replies in any other shape get one repair round.
+- **Cost:** each chat shows tokens used and the estimated cost from Atlas prices.
+
+| Method | Path | |
+|---|---|---|
+| GET | `/v1/agent/models` | Chat models on the Atlas account |
+| POST | `/v1/agent/sessions` | `{title?, persona?, model?}` → new chat |
+| GET | `/v1/agent/sessions` | Chats, most recent first |
+| GET | `/v1/agent/sessions/<id>?after=<message id>` | The chat and its messages after that id |
+| PATCH | `/v1/agent/sessions/<id>` | Change `title`, `persona` or `model` |
+| POST | `/v1/agent/sessions/<id>/messages` | `{text, attachments: [asset_id]}` → 202, the agent starts working; 409 while it is still working |
+| POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
+| DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
+
+The API process needs `ATLAS_API_KEY` (the Colab launcher passes it already). The **planner model** is also choosable: `/v1/options` returns `planner_models`, and `/v1/plans`, `story` and MCP `plan_film` take `model`.
 
 ---
 

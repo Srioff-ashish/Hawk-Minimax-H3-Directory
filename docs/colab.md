@@ -125,6 +125,12 @@ The start cell also prints a **Studio** link: `https://….trycloudflare.com/t/<
 
 Like the connector, the link changes every session, and uploads are limited to 100 MB (use the URL box for bigger files).
 
+### Agent page
+
+**Agent** in Studio's sidebar is an autonomous director. Start a chat, pick the model (Grok 4.6 by default, or Grok 4.3 and any other Atlas model), optionally set a **Persona**, attach files and describe the video. It plans, renders, waits and fixes problems by itself, shows every tool it uses, and plays the result in the chat. It runs on the Colab server, so you can close the browser; press **Stop** to end a run. It uses the Studio tools in-process, never through the tunnel. Details: [API → Agent](api.md#agent-an-autonomous-video-director).
+
+In **AI planner** mode on the Create page, **Planner model** picks which Atlas model writes the plan; a warning appears when the model can't see your reference images.
+
 ## Connect Claude or Grok each session
 
 The quick-tunnel URL is new every session, so the connector has to be updated every time.

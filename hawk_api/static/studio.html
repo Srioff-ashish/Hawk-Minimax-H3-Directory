@@ -284,6 +284,59 @@
   .toast strong { display: block; }
 
   /* ---------- responsive ---------- */
+
+  /* ---------- agent ---------- */
+  .agent-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 16px; height: calc(100vh - 140px); min-height: 520px; }
+  .agent-layout > * { min-width: 0; min-height: 0; }
+  .agent-list { display: flex; flex-direction: column; overflow: hidden; }
+  .agent-sessions { flex: 1; overflow: auto; padding: 6px; display: grid; gap: 2px; align-content: start; }
+  .agent-session { display: grid; gap: 2px; text-align: left; padding: 9px 10px; border-radius: 8px; border: 0; background: none; cursor: pointer; color: var(--ink); }
+  .agent-session:hover { background: var(--surface-2); }
+  .agent-session[aria-current="true"] { background: var(--brand-soft); }
+  .agent-session strong { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
+  .agent-session span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent-chat { display: flex; flex-direction: column; overflow: hidden; }
+  .agent-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  .agent-title { flex: 1; min-width: 160px; border: 1px solid transparent; background: none; font-size: 15px; font-weight: 650; padding: 5px 8px; border-radius: 6px; }
+  .agent-title:hover, .agent-title:focus { border-color: var(--line-strong); outline: none; background: var(--surface); }
+  .agent-persona { padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); display: grid; gap: 8px; }
+  .agent-thread { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; background: var(--bg); }
+  .agent-thread > * { flex-shrink: 0; }
+  .bubble { max-width: min(760px, 92%); padding: 10px 14px; border-radius: 14px; line-height: 1.55; overflow-wrap: anywhere; white-space: pre-wrap; box-shadow: var(--shadow-sm); }
+  .bubble.user { align-self: flex-end; background: var(--brand); color: var(--brand-ink); border-bottom-right-radius: 4px; }
+  .bubble.agent { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bubble.agent a { color: var(--brand); }
+  .bubble.user a { color: inherit; text-decoration: underline; }
+  .msg-meta { font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .msg-meta.user { align-self: flex-end; }
+  .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
+  .who svg { width: 18px; height: 18px; border-radius: 5px; }
+  .tool-card { align-self: flex-start; width: min(760px, 92%); border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; overflow: hidden; }
+  .tool-card summary { cursor: pointer; padding: 7px 12px; display: flex; align-items: center; gap: 8px; list-style: none; color: var(--ink-2); }
+  .tool-card summary::-webkit-details-marker { display: none; }
+  .tool-card summary .mono { color: var(--ink); font-weight: 600; }
+  .tool-card .code { margin: 0 12px 10px; max-height: 220px; font-size: 12px; }
+  .tool-ok { color: var(--ok); } .tool-bad { color: var(--bad); }
+  .agent-job { align-self: flex-start; width: min(520px, 92%); }
+  .note-line { align-self: center; font-size: 12px; color: var(--muted); padding: 2px 10px; border-radius: 999px; background: var(--surface-2); }
+  .note-line.error { color: var(--bad); background: var(--bad-soft); }
+  .note-line.warn { color: var(--warn); background: var(--warn-soft); }
+  .typing { align-self: flex-start; display: inline-flex; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
+  .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
+  .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  .agent-composer { border-top: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 8px; background: var(--surface); }
+  .agent-composer .textarea { min-height: 44px; max-height: 200px; resize: none; }
+  .agent-empty { margin: auto; max-width: 560px; text-align: center; display: grid; gap: 12px; color: var(--muted); }
+  .agent-empty h3 { margin: 0; color: var(--ink); font-size: 18px; }
+  .suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+  .suggestion { text-align: left; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink-2); }
+  .suggestion:hover { border-color: var(--brand-line); background: var(--brand-soft); }
+  @media (max-width: 860px) {
+    .agent-layout { grid-template-columns: minmax(0, 1fr); height: auto; }
+    .agent-list { max-height: 220px; }
+    .agent-chat { height: calc(100vh - 150px); min-height: 480px; }
+  }
   @media (max-width: 1100px) {
     .create-layout { grid-template-columns: minmax(0, 1fr); }
     .summary { position: static; }
@@ -334,6 +387,7 @@
     <a class="logo" href="#create" aria-label="Hawk H3 Studio home"><svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg><span class="wordmark"><b>Hawk <span>H3</span> Studio</b><small>AI video director</small></span></a>
     <a class="nav-item" href="#create" data-route="create"><svg><use href="#i-create"/></svg><span>Create</span></a>
     <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Library</span><span class="nav-count" id="activeCount" hidden>0</span></a>
+    <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Assets</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
     <div class="sidebar-foot">
@@ -406,6 +460,10 @@
                   <button class="btn btn-sm" id="templatesBtn" type="button" aria-haspopup="true" aria-expanded="false">Templates ▾</button>
                   <div class="menu-list" id="templatesMenu" role="menu" hidden></div>
                 </div>
+                <span class="field" id="plannerModelWrap" hidden style="display:inline-flex;grid-auto-flow:column;align-items:center;gap:6px">
+                  <label class="label" for="plannerModel" style="white-space:nowrap">Planner model</label>
+                  <select class="select" id="plannerModel" style="width:auto;max-width:230px;height:30px"><option value="">Server default</option></select>
+                </span>
                 <span class="hint" id="modeHint"></span>
               </div>
               <label class="sr-only" for="prompt">Prompt</label>
@@ -536,6 +594,45 @@
       <div id="jobsEmpty" class="empty" hidden><svg><use href="#i-film"/></svg><strong>No videos yet</strong><span>Your renders and plans appear here.</span><a class="btn btn-primary btn-sm" href="#create">Create a video</a></div>
     </main>
 
+
+    <!-- ================================================================ AGENT -->
+    <main class="content" id="page-agent" data-page="agent" hidden>
+      <div class="agent-layout">
+        <aside class="card agent-list" aria-label="Chats">
+          <div class="card-head"><h2>Chats</h2><div class="spacer"></div><button class="btn btn-primary btn-sm" id="agentNew" type="button"><svg><use href="#i-create"/></svg>New chat</button></div>
+          <div id="agentSessions" class="agent-sessions"></div>
+        </aside>
+        <section class="card agent-chat" aria-label="Conversation">
+          <div class="agent-head">
+            <input class="agent-title" id="agentTitle" aria-label="Chat title" placeholder="New chat">
+            <span class="badge" id="agentStatus" hidden></span>
+            <div class="spacer"></div>
+            <label class="sr-only" for="agentModel">Model</label>
+            <select class="select" id="agentModel" style="width:auto;max-width:220px;height:32px"></select>
+            <button class="btn btn-sm" id="agentPersonaBtn" type="button" aria-expanded="false">Persona</button>
+            <span class="hint" id="agentUsage" title="Model tokens and estimated cost for this chat"></span>
+          </div>
+          <div class="agent-persona" id="agentPersonaPanel" hidden>
+            <label class="label" for="agentPersona">Who should the agent be? It shapes its tone and creative choices; safety rules always apply.</label>
+            <textarea class="textarea" id="agentPersona" rows="3" style="min-height:70px" placeholder="e.g. A Bollywood ad-film director who loves warm colours, quick cuts and witty Hinglish lines"></textarea>
+            <div class="row" id="personaChips"></div>
+            <div class="row"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
+          </div>
+          <div class="agent-thread" id="agentThread" aria-live="polite"></div>
+          <div class="agent-composer">
+            <div class="row" id="agentAttachments" hidden></div>
+            <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
+              <label class="icon-btn" title="Attach images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
+              <label class="sr-only" for="agentInput">Message</label>
+              <textarea class="textarea" id="agentInput" rows="1" placeholder="Tell the agent what to make… (Enter to send, Shift+Enter for a new line)"></textarea>
+              <button class="btn btn-primary" id="agentSend" type="button">Send</button>
+              <button class="btn btn-danger" id="agentStop" type="button" hidden>Stop</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
     <!-- ================================================================ ASSETS -->
     <main class="content" id="page-assets" data-page="assets" hidden>
       <section class="card">
@@ -629,6 +726,7 @@
     library: ["Library", "Your renders and plans"],
     assets: ["Assets", "Files uploaded to the GPU server"],
     connect: ["Connect & settings", "Chat connectors, API and preferences"],
+    agent: ["Agent", "Your autonomous video director"],
   };
   const DRAFT_KEY = "hawkH3Draft";
 
@@ -752,7 +850,8 @@
     const name = (location.hash || "#create").slice(1).split("?")[0];
     const jobLink = name.match(/^job\/([\w-]+)$/);
     if (jobLink) { state.pendingOpen = jobLink[1]; history.replaceState(null, "", "#library"); return route(); }
-    const page = PAGES[name] ? name : "create";
+    const agentLink = name.match(/^agent\/([\w-]+)$/);
+    const page = agentLink ? "agent" : PAGES[name] ? name : "create";
     document.querySelectorAll("[data-page]").forEach((el) => { el.hidden = el.dataset.page !== page; });
     document.querySelectorAll("[data-route]").forEach((el) => {
       if (el.dataset.route === page) el.setAttribute("aria-current", "page"); else el.removeAttribute("aria-current");
@@ -764,6 +863,8 @@
     if (page === "assets") loadAssets();
     if (page === "connect") renderConnect();
     if (page === "library") renderLibrary();
+    if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
+    else clearTimeout(agent.timer);
   }
   window.addEventListener("hashchange", route);
 
@@ -985,6 +1086,7 @@
     $("planBtn").hidden = !planner;
     $("planRender").hidden = !planner;
     $("segmentsField").hidden = !planner;
+    $("plannerModelWrap").hidden = !planner;
     $("durationLabel").textContent = planner ? "Seconds per segment" : "Duration";
     $("prompt").placeholder = planner
       ? "Describe the film: story, characters, mood, locations and the exact lines of dialogue. The planner writes H3 prompts for every segment."
@@ -1055,11 +1157,16 @@
       if (words) chips.push(`<span class="chip ${words > budget ? "warn" : "ok"}" title="About 2 spoken words per second leaves room for the action">Dialogue ${words} / ${budget} words</span>`);
       if (/music/i.test(text) === false && !state.music) chips.push(`<span class="chip" title="Say Music N/A when you want none">No music direction</span>`);
     }
+    if (mode() === "planner" && state.options) {
+      const chosen = (state.options.planner_models || []).find((m) => m.id === $("plannerModel").value);
+      const hasImages = state.refs.some((ref) => ref.kind !== "audio" && ref.status !== "error");
+      if (chosen && !chosen.vision && hasImages) chips.push(`<span class="chip warn" title="This model cannot look at your reference images">${esc(chosen.name)} is text-only</span>`);
+    }
     chips.push(`<span class="hint" style="margin-left:auto">${text.length.toLocaleString()} characters</span>`);
     $("promptFoot").innerHTML = chips.join("");
   }
 
-  ["duration", "segments", "aspect", "resolution", "unet", "clip"].forEach((id) => $(id).addEventListener("input", () => { updateSummary(); updatePromptFoot(); saveDraft(); }));
+  ["duration", "segments", "aspect", "resolution", "unet", "clip", "plannerModel"].forEach((id) => $(id).addEventListener("input", () => { updateSummary(); updatePromptFoot(); saveDraft(); }));
   $("prompt").addEventListener("input", () => { updateSummary(); updatePromptFoot(); saveDraft(); });
 
   // --------------------------------------------------------------- models
@@ -1097,6 +1204,8 @@
     $("aspect").innerHTML = aspects.map((a) => `<option ${a === current ? "selected" : ""}>${esc(a)}</option>`).join("");
     fillModels("unet", state.options.diffusion_models, state.options.default_unet);
     fillModels("clip", state.options.text_encoders, state.options.default_clip);
+    const plannerModels = state.options.planner_models || [];
+    $("plannerModel").innerHTML = modelOptions(plannerModels, $("plannerModel").value || draftValue("plannerModel") || state.options.default_planner_model, state.options.default_planner_model);
     $("preset").innerHTML = `<option value="">No preset</option>` + Object.keys(state.options.lora_presets || {}).map((name) => `<option>${esc(name)}</option>`).join("");
     for (const row of state.options.default_loras || []) {
       if (row.file && !state.lora[row.file]) state.lora[row.file] = { on: true, strength: row.strength };
@@ -1228,7 +1337,7 @@
 
   // ---------------------------------------------------------------- draft
 
-  const DRAFT_FIELDS = ["prompt", "duration", "segments", "aspect", "resolution", "unet", "clip", "steps", "seed", "continuity", "refSize"];
+  const DRAFT_FIELDS = ["prompt", "duration", "segments", "aspect", "resolution", "unet", "clip", "steps", "seed", "continuity", "refSize", "plannerModel"];
   let draft = {};
   try { draft = JSON.parse(storage.get(DRAFT_KEY) || "{}"); } catch { draft = {}; }
   const draftValue = (id) => draft[id];
@@ -1278,6 +1387,7 @@
     const references = referencesPayload();
     const seconds = Number($("duration").value);
     const planner = { story: prompt, segment_count: Number($("segments").value), segment_seconds: seconds, aspect_ratio: $("aspect").value || "16:9" };
+    if ($("plannerModel").value) planner.model = $("plannerModel").value;
     setBusy(true);
     try {
       let job;
@@ -1477,6 +1587,7 @@
     renderRecent();
     renderCounts();
     if (state.drawerJob && state.jobs.has(state.drawerJob)) renderDrawer(state.jobs.get(state.drawerJob));
+    updateAgentJobCards();
   }
 
   $("jobs").addEventListener("click", async (event) => {
@@ -1697,6 +1808,322 @@
     await Notification.requestPermission();
     renderConnect();
   };
+
+
+  // ---------------------------------------------------------------- agent
+
+  const agent = { sessions: [], current: null, lastId: 0, models: [], modelsLoaded: false, attachments: [], timer: null, jobCards: new Map(), rendered: new Set() };
+  const PERSONAS = [
+    "Bollywood music-video director: bold colours, dance energy, quick cuts, playful Hinglish lines",
+    "Luxury fashion film director: slow elegant camera, soft light, minimal dialogue, one music bed",
+    "Punchy ad-film maker: 10–20 second spots, a clear hero shot, one memorable Hinglish line",
+    "Documentary storyteller: natural light, handheld intimacy, calm Hinglish voiceover",
+  ];
+  const SUGGESTIONS = [
+    "Make a 10-second Hinglish chai ad preview: a woman on a rainy balcony, one warm line of dialogue.",
+    "Plan a 3-segment music video for my uploaded song, then render a preview with it as the music bed.",
+    "Render my last plan as a final: bf16 models at 1 MP, and tell me the time per step.",
+    "Check my failed jobs, figure out why they failed, and retry them with fixes.",
+  ];
+  $("personaChips").innerHTML = PERSONAS.map((p, i) => `<button class="chip" type="button" data-persona="${i}" style="cursor:pointer">${esc(p.split(":")[0])}</button>`).join("");
+
+  function linkify(value) {
+    return esc(value).replace(/https?:\/\/[^\s<>"']+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url.length > 70 ? `${url.slice(0, 67)}…` : url}</a>`);
+  }
+
+  async function loadAgentModels() {
+    if (agent.modelsLoaded) return;
+    try {
+      const data = await api("/v1/agent/models");
+      agent.models = data.models || [];
+      agent.defaultModel = data.default_agent_model;
+      agent.modelsLoaded = true;
+      if (!data.configured) toast("Agent needs an Atlas key", "Set ATLAS_API_KEY for the API and restart it.", "warn", 8000);
+    } catch (error) {
+      agent.models = [];
+      toast("Could not load models", error.message, "bad");
+    }
+    fillAgentModels();
+  }
+
+  function modelOptions(models, selected, fallback) {
+    const list = models.slice();
+    if (fallback && !list.some((m) => m.id === fallback)) list.unshift({ id: fallback, name: fallback });
+    return list.map((m) => `<option value="${esc(m.id)}" ${m.id === selected ? "selected" : ""}>${esc(m.name || m.id)}${m.vision === false ? " · text only" : ""}</option>`).join("");
+  }
+  function fillAgentModels() {
+    const session = currentSession();
+    $("agentModel").innerHTML = modelOptions(agent.models, session?.model || agent.defaultModel, session?.model || agent.defaultModel);
+  }
+
+  const currentSession = () => agent.sessions.find((s) => s.id === agent.current) || null;
+
+  async function loadAgentSessions() {
+    try {
+      const { sessions } = await api("/v1/agent/sessions");
+      agent.sessions = sessions;
+      renderAgentSessions();
+    } catch (error) {
+      if (error.status !== 401) toast("Could not load chats", error.message, "bad");
+    }
+  }
+
+  function renderAgentSessions() {
+    const running = agent.sessions.filter((s) => s.status === "running" || s.status === "stopping").length;
+    $("agentBusy").hidden = !running;
+    $("agentSessions").innerHTML = agent.sessions.length ? agent.sessions.map((s) => `
+      <button class="agent-session" type="button" data-session="${s.id}" aria-current="${s.id === agent.current}">
+        <strong>${s.status === "running" || s.status === "stopping" ? '<span class="dot ok" style="box-shadow:none"></span>' : ""}${esc(s.title)}</strong>
+        <span>${esc((s.model || "").replace(/^[^/]+\//, ""))} · ${ago(s.updated_at)}</span>
+      </button>`).join("") : `<p class="hint" style="padding:10px;margin:0">No chats yet.</p>`;
+  }
+  $("agentSessions").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-session]");
+    if (item) location.hash = `#agent/${item.dataset.session}`;
+  });
+
+  function renderAgentEmpty() {
+    $("agentThread").innerHTML = `<div class="agent-empty">
+      <svg viewBox="0 0 32 32" width="44" height="44" style="margin:0 auto"><use href="#i-logo"/></svg>
+      <h3>Your autonomous video director</h3>
+      <p style="margin:0">Describe what you want. The agent plans, renders, waits and fixes problems on its own, using every Studio tool on this server, then hands you the video.</p>
+      <div class="suggestions">${SUGGESTIONS.map((s, i) => `<button class="suggestion" type="button" data-suggest="${i}">${esc(s)}</button>`).join("")}</div>
+    </div>`;
+  }
+  $("agentThread").addEventListener("click", (event) => {
+    const suggestion = event.target.closest("[data-suggest]");
+    if (suggestion) { $("agentInput").value = SUGGESTIONS[Number(suggestion.dataset.suggest)]; autoGrow(); $("agentInput").focus(); }
+  });
+
+  async function openAgentSession(id) {
+    agent.current = id;
+    agent.lastId = 0;
+    agent.rendered.clear();
+    agent.jobCards.clear();
+    $("agentThread").innerHTML = "";
+    storage.set("hawkH3AgentChat", id);
+    renderAgentSessions();
+    await pollAgent(true);
+  }
+
+  function updateAgentHeader(session) {
+    const index = agent.sessions.findIndex((s) => s.id === session.id);
+    if (index >= 0) agent.sessions[index] = session; else agent.sessions.unshift(session);
+    if (document.activeElement !== $("agentTitle")) $("agentTitle").value = session.title;
+    if ($("agentPersonaPanel").hidden) $("agentPersona").value = session.persona || "";
+    const running = session.status === "running" || session.status === "stopping";
+    const status = $("agentStatus");
+    status.hidden = session.status === "idle";
+    status.className = `badge ${session.status === "error" ? "failed" : running ? "rendering" : ""}`;
+    status.textContent = { running: "Working", stopping: "Stopping", error: "Error" }[session.status] || session.status;
+    $("agentSend").hidden = running;
+    $("agentStop").hidden = !running;
+    $("agentStop").disabled = session.status === "stopping";
+    const usage = session.usage || {};
+    $("agentUsage").textContent = usage.steps ? `${((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)).toLocaleString()} tokens · $${(usage.cost_usd || 0).toFixed(3)}` : "";
+    if (agent.modelsLoaded && $("agentModel").value !== session.model) fillAgentModels();
+    renderAgentSessions();
+    const typing = $("agentThread").querySelector(".typing");
+    if (running && !typing) $("agentThread").insertAdjacentHTML("beforeend", `<div class="typing" aria-label="Agent is working"><i></i><i></i><i></i></div>`);
+    if (!running && typing) typing.remove();
+  }
+
+  function agentJobCard(jobId) {
+    const job = state.jobs.get(jobId);
+    const el = document.createElement("div");
+    el.className = "card job agent-job";
+    el.dataset.agentJob = jobId;
+    agent.jobCards.set(jobId, el);
+    paintAgentJob(el, job, jobId);
+    return el;
+  }
+  function paintAgentJob(el, job, jobId) {
+    if (!job) { el.innerHTML = `<div class="job-body"><span class="hint">Job ${esc(jobId.slice(0, 8))} · loading…</span></div>`; return; }
+    const key = `${job.status}:${job.updated_at}`;
+    if (el.dataset.key === key) return;
+    const hadVideo = el.querySelector("video");
+    el.dataset.key = key;
+    if (!(hadVideo && job.video_url)) {
+      el.innerHTML = `<div class="job-media">${mediaHtml(job)}</div><div class="job-body"><div class="job-head"><span class="badge ${job.status}">${esc(STATUS[job.status] || job.status)}</span><span class="job-title">${esc(jobTitle(job))}</span></div>
+        <div class="job-actions"><button class="btn btn-sm" type="button" data-open-job="${job.id}">Details</button>${job.video_url ? `<a class="btn btn-sm" href="${esc(job.video_url)}" download>${icon("download")}Download</a>` : ""}</div></div>`;
+    }
+  }
+  function updateAgentJobCards() {
+    for (const [jobId, el] of agent.jobCards) paintAgentJob(el, state.jobs.get(jobId), jobId);
+  }
+  $("agentThread").addEventListener("click", (event) => {
+    const open = event.target.closest("[data-open-job]");
+    if (open) openDrawer(open.dataset.openJob);
+  });
+
+  function renderAgentMessage(message) {
+    if (agent.rendered.has(message.id)) return;
+    agent.rendered.add(message.id);
+    const thread = $("agentThread");
+    thread.querySelector(".agent-empty")?.remove();
+    const typing = thread.querySelector(".typing");
+    const add = (html) => { if (typing) typing.insertAdjacentHTML("beforebegin", html); else thread.insertAdjacentHTML("beforeend", html); };
+    const c = message.content || {};
+    const time = new Date(message.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (message.role === "user") {
+      const files = (c.attachments || []).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
+      add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${files ? `<div class="row" style="margin-top:6px">${files}</div>` : ""}</div>`);
+    } else if (message.role === "assistant") {
+      if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
+      if (c.say) add(`<div class="msg-meta"><span class="who"><svg viewBox="0 0 32 32"><use href="#i-logo"/></svg>Agent</span>· ${time}</div><div class="bubble agent">${linkify(c.say)}</div>`);
+    } else if (message.role === "tool") {
+      const args = JSON.stringify(c.args || {}, null, 2);
+      const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;
+      const label = c.job_id ? ` · job ${esc(c.job_id.slice(0, 8))}` : c.tool === "wait_for_job" && c.result?.status ? ` · ${esc(c.result.status)}` : "";
+      add(`<details class="tool-card"><summary><span class="${c.ok ? "tool-ok" : "tool-bad"}">${c.ok ? "✓" : "✕"}</span><span class="mono">${esc(c.tool)}</span><span class="hint">${label}</span></summary>
+        <div class="code">args ${esc(args.length > 3000 ? `${args.slice(0, 3000)}…` : args)}</div><div class="code">${c.ok ? "result" : "error"} ${esc((result || "").length > 6000 ? `${result.slice(0, 6000)}…` : result || "")}</div></details>`);
+      const jobId = c.job_id || (c.tool === "wait_for_job" && c.result?.id);
+      if (jobId && c.tool !== "wait_for_job") {
+        const card = agentJobCard(jobId);
+        if (typing) thread.insertBefore(card, typing); else thread.append(card);
+      }
+    } else if (message.role === "note") {
+      if (c.kind === "repair") return;
+      add(`<div class="note-line ${esc(c.kind || "")}">${linkify(c.text || "")}</div>`);
+    }
+  }
+
+  async function pollAgent(scroll = false) {
+    clearTimeout(agent.timer);
+    if (!agent.current) return;
+    const id = agent.current;
+    try {
+      const view = await api(`/v1/agent/sessions/${id}?after=${agent.lastId}`);
+      if (agent.current !== id) return;
+      const thread = $("agentThread");
+      const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
+      if (!agent.lastId && !view.messages.length) renderAgentEmpty();
+      for (const message of view.messages) { renderAgentMessage(message); agent.lastId = Math.max(agent.lastId, message.id); }
+      updateAgentHeader(view.session);
+      if (view.messages.some((m) => m.role === "tool" && m.content?.job_id)) refreshJobs();
+      if (scroll || (nearBottom && view.messages.length)) thread.scrollTop = thread.scrollHeight;
+      const running = view.session.status === "running" || view.session.status === "stopping";
+      agent.timer = setTimeout(() => pollAgent(), running ? 2000 : 12000);
+    } catch (error) {
+      if (error.status === 404) { agent.current = null; storage.remove("hawkH3AgentChat"); renderAgentEmpty(); loadAgentSessions(); return; }
+      agent.timer = setTimeout(() => pollAgent(), 8000);
+    }
+  }
+
+  async function newAgentChat() {
+    try {
+      const session = await post("/v1/agent/sessions", { model: $("agentModel").value || undefined });
+      agent.sessions.unshift(session);
+      location.hash = `#agent/${session.id}`;
+      $("agentInput").focus();
+    } catch (error) {
+      toast("Could not start a chat", error.message, "bad");
+    }
+  }
+  $("agentNew").onclick = newAgentChat;
+
+  async function patchSession(fields) {
+    if (!agent.current) return;
+    try {
+      const session = await api(`/v1/agent/sessions/${agent.current}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(fields) });
+      updateAgentHeader(session);
+      return session;
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  }
+  $("agentTitle").addEventListener("change", () => patchSession({ title: $("agentTitle").value }));
+  $("agentTitle").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); $("agentTitle").blur(); } });
+  $("agentModel").addEventListener("change", async () => { if (await patchSession({ model: $("agentModel").value })) toast("Model changed", $("agentModel").selectedOptions[0]?.textContent || "", "ok", 2500); });
+  function togglePersona(open) {
+    $("agentPersonaPanel").hidden = !open;
+    $("agentPersonaBtn").setAttribute("aria-expanded", String(open));
+    if (open) { $("agentPersona").value = currentSession()?.persona || ""; $("agentPersona").focus(); }
+  }
+  $("agentPersonaBtn").onclick = () => togglePersona($("agentPersonaPanel").hidden);
+  $("agentPersonaClose").onclick = () => togglePersona(false);
+  $("personaChips").addEventListener("click", (event) => {
+    const chip = event.target.closest("[data-persona]");
+    if (chip) $("agentPersona").value = PERSONAS[Number(chip.dataset.persona)];
+  });
+  $("agentPersonaSave").onclick = async () => {
+    if (!agent.current) await newAgentChat();
+    if (await patchSession({ persona: $("agentPersona").value })) { togglePersona(false); toast("Persona saved"); }
+  };
+
+  function renderAttachments() {
+    const box = $("agentAttachments");
+    box.hidden = !agent.attachments.length;
+    box.innerHTML = agent.attachments.map((a, i) => `<span class="chip ${a.status === "error" ? "bad" : ""}">${esc(a.filename)}${a.status === "uploading" ? ` · ${Math.round(a.progress * 100)}%` : a.status === "error" ? " · failed" : ""}
+      <button class="icon-btn" type="button" data-remove-attachment="${i}" style="width:18px;height:18px" aria-label="Remove">${icon("x")}</button></span>`).join("");
+  }
+  $("agentAttachments").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-remove-attachment]");
+    if (remove) { agent.attachments.splice(Number(remove.dataset.removeAttachment), 1); renderAttachments(); }
+  });
+  $("agentFile").addEventListener("change", (event) => {
+    for (const file of event.target.files) {
+      if (!kindOf(file)) { toast("Unsupported file", file.name, "bad"); continue; }
+      const item = { filename: file.name, status: "uploading", progress: 0, asset: null };
+      agent.attachments.push(item);
+      uploadFile(file, (fraction) => { item.progress = fraction; renderAttachments(); })
+        .then((asset) => { item.asset = asset.id; item.status = "ready"; renderAttachments(); })
+        .catch((error) => { item.status = "error"; renderAttachments(); toast("Upload failed", error.message, "bad"); });
+    }
+    event.target.value = "";
+    renderAttachments();
+  });
+
+  function autoGrow() { const input = $("agentInput"); input.style.height = "auto"; input.style.height = `${Math.min(200, input.scrollHeight)}px`; }
+  $("agentInput").addEventListener("input", autoGrow);
+  $("agentInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendAgentMessage(); }
+  });
+
+  async function sendAgentMessage() {
+    const text = $("agentInput").value.trim();
+    if (agent.attachments.some((a) => a.status === "uploading")) return toast("Wait for uploads", "", "warn", 2500);
+    const attachments = agent.attachments.filter((a) => a.status === "ready").map((a) => a.asset);
+    if (!text && !attachments.length) return;
+    if (!agent.current) {
+      try {
+        const session = await post("/v1/agent/sessions", { model: $("agentModel").value || undefined });
+        agent.sessions.unshift(session);
+        agent.current = session.id;
+        history.replaceState(null, "", `#agent/${session.id}`);
+        agent.lastId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+      } catch (error) { return toast("Could not start a chat", error.message, "bad"); }
+    }
+    $("agentSend").disabled = true;
+    try {
+      await post(`/v1/agent/sessions/${agent.current}/messages`, { text, attachments });
+      $("agentInput").value = ""; autoGrow();
+      agent.attachments = []; renderAttachments();
+      await pollAgent(true);
+    } catch (error) {
+      toast(error.status === 409 ? "The agent is still working" : "Could not send", error.status === 409 ? "Wait for it, or press Stop." : error.message, "bad");
+    } finally {
+      $("agentSend").disabled = false;
+    }
+  }
+  $("agentSend").onclick = sendAgentMessage;
+  $("agentStop").onclick = async () => {
+    try { updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/stop`, {})); toast("Stopping after the current step", "", "warn", 3000); }
+    catch (error) { toast("Could not stop", error.message, "bad"); }
+  };
+
+  async function showAgentPage(sessionId) {
+    await loadAgentModels();
+    await loadAgentSessions();
+    const target = sessionId || agent.current || storage.get("hawkH3AgentChat");
+    if (target && agent.sessions.some((s) => s.id === target)) {
+      if (target !== agent.current || !agent.lastId) await openAgentSession(target);
+    } else {
+      agent.current = null;
+      renderAgentEmpty();
+      $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
+      fillAgentModels();
+    }
+  }
+  setInterval(() => { if ((PREFIX || token) && $("page-agent").hidden) loadAgentSessions(); }, 20000);
 
   // ---------------------------------------------------------------- start
 
