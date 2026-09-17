@@ -1053,6 +1053,21 @@ class HawkService:
                     "type": first.get("type", "output"),
                 }
 
+    @staticmethod
+    def _stack_applied(job: dict, node: str) -> list[tuple[str, float]]:
+        """LoRAs a LoRA Stack applied. A stack ComfyUI served from its cache (same LoRAs as an
+        earlier render) sends no report; its output came from a run with these exact inputs,
+        whose LoRA names ComfyUI validated, so read them from the submitted graph."""
+        if node in job["loras_applied_by_node"]:
+            return job["loras_applied_by_node"][node]
+        inputs = ((job.get("graph") or {}).get(node) or {}).get("inputs") or {}
+        applied = []
+        for key in sorted((k for k in inputs if re.fullmatch(r"lora_\d+", k)), key=lambda k: int(k[5:])):
+            name, strength = inputs[key], inputs.get(f"strength_{key[5:]}", 1.0)
+            if isinstance(name, str) and name != "None" and isinstance(strength, (int, float)) and float(strength) != 0.0:
+                applied.append((name, float(strength)))
+        return applied
+
     def _fail(self, job: dict, message: str, resumable: bool | None = None) -> None:
         job.update(status="failed", error=message, resumable=job["kind"] == "render" if resumable is None else resumable)
         self.store.save_job(job)
@@ -1086,7 +1101,7 @@ class HawkService:
         else:
             if not job["outputs"].get("video"):
                 return self._fail(job, "The render finished but the Director reported no video.")
-            applied = [pair for node in job["nodes"].get("lora_stacks", []) for pair in job["loras_applied_by_node"].get(node, [])]
+            applied = [pair for node in job["nodes"].get("lora_stacks", []) for pair in self._stack_applied(job, node)]
             job["loras_applied"] = [{"file": name, "strength": strength} for name, strength in applied]
             if job["nodes"].get("lora_stacks") or job["loras"]:
                 job["warnings"].extend(compare_applied(job["loras"], applied))

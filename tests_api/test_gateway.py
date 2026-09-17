@@ -68,6 +68,7 @@ class FakeComfy:
         self.cancelled: set[str] = set()
         self.sockets: dict[str, web.WebSocketResponse] = {}
         self.prompts: dict[str, dict] = {}
+        self.stack_cache: set[str] = set()
         self.output_dir: str | None = None  # also write outputs to disk, like real ComfyUI
         self.final_bytes = b"FINAL VIDEO BYTES"
         self.model_files = {
@@ -142,6 +143,10 @@ class FakeComfy:
             outputs[node_id] = {"text": [script]}
             await self.send(client, "executed", {"node": node_id, "output": outputs[node_id], "prompt_id": pid})
         for node_id, node in by_class("HawkH3LoraStack"):
+            signature = json.dumps({k: v for k, v in node["inputs"].items() if not isinstance(v, list)}, sort_keys=True)
+            if signature in self.stack_cache:  # like ComfyUI: a cached, non-output node reports nothing
+                continue
+            self.stack_cache.add(signature)
             lines = [f"{node['inputs'][f'lora_{i}']} @ {node['inputs'][f'strength_{i}']:g}"
                      for i in range(1, 5) if node["inputs"][f"lora_{i}"] != "None"]
             outputs[node_id] = {"text": ["\n".join(lines) or "no LoRAs selected"]}
@@ -336,6 +341,13 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(progress["steps_total"], 5, "sampler steps are reported separately from segments")
         self.assertEqual(render["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": REALISM, "strength": 0.7}])
         self.assertEqual(render["warnings"], [])
+
+        # Same LoRAs again: ComfyUI serves the LoRA Stack from its cache and sends no report.
+        again = await self.wait((await self.http.post("/v1/videos", json={
+            "script": "Another walk", "settings": {"loras": [{"name": "realism", "strength": 0.7}]},
+        })).json()["id"])
+        self.assertEqual((again["status"], again["warnings"]), ("done", []), again)
+        self.assertEqual(again["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": REALISM, "strength": 0.7}])
 
         async with httpx.AsyncClient() as browser:  # signed links need no token
             self.assertEqual((await browser.get(render["video_url"])).content, b"FINAL VIDEO BYTES")

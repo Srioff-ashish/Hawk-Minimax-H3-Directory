@@ -197,8 +197,8 @@ class ImportManager:
 
 #: Colab's Drive mount exposes each file's Drive id as an extended attribute.
 DRIVE_ID_ATTRS = ("user.drive.id", "user.drive.item_id", "user.drive.file_id")
-DRIVE_ID_WAIT_SECONDS = 180.0
-DRIVE_ID_POLL_SECONDS = 5.0
+DRIVE_ID_WAIT_SECONDS = 1800.0  # big videos can take a while to upload from the mount
+DRIVE_ID_POLL_SECONDS = 10.0
 EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False}
 
 
@@ -217,7 +217,8 @@ def drive_file_id(path: str) -> str | None:
             value = getxattr(path, name).decode("utf-8", "ignore").strip()
         except OSError:
             continue
-        if value:
+        # Drive's mount says "local-<n>" until the upload finishes; only a real id opens in Drive.
+        if value and not value.lower().startswith("local"):
             return value
     return None
 
@@ -288,40 +289,44 @@ class DriveExporter:
         self.service.store.save_job(job)
 
     async def export(self, job_id: str) -> None:
-        async with self._lock:
-            try:
-                job = self.service.get_job(job_id)
-                filename, subfolder, type_ = self.service.video_location(job_id)
-                config = self.settings()
-                from .jobs import job_title
+        try:
+            async with self._lock:  # one copy at a time; waiting for Drive's id happens outside
+                target = await self._export_files(job_id)
+            self._set(job_id, status="syncing")
+            deadline = time.monotonic() + DRIVE_ID_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                file_id = await asyncio.to_thread(drive_file_id, target)
+                if file_id and not file_id.lower().startswith("local"):
+                    self._set(job_id, status="ready", file_id=file_id)
+                    return
+                await asyncio.sleep(DRIVE_ID_POLL_SECONDS)
+            self._set(job_id, status="copied")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._set(job_id, status="failed", error=str(exc)[:300])
 
-                day = time.strftime("%Y-%m-%d", time.localtime(job["created_at"]))
-                folder = f"{config['folder']}/{day}"
-                name = f"{_slug(job_title(job))}_{job_id[:8]}.mp4"
-                target_dir = os.path.join(self.browser.root, folder)
-                os.makedirs(target_dir, exist_ok=True)
-                target = os.path.join(target_dir, name)
-                self._set(job_id, status="copying", path=f"{folder}/{name}", folder=folder, file_id=None, error=None)
-                await self._copy(filename, subfolder, type_, target)
-                if config["segments"]:
-                    segments_dir = os.path.join(target_dir, f"{name[:-4]}_segments")
-                    os.makedirs(segments_dir, exist_ok=True)
-                    for number in range(1, (job.get("segments_done") or 0) + 1):
-                        seg_name, seg_folder, seg_type = self.service.segment_location(job_id, number)
-                        await self._copy(seg_name, seg_folder, seg_type, os.path.join(segments_dir, seg_name))
-                self._set(job_id, status="syncing")
-                deadline = time.monotonic() + DRIVE_ID_WAIT_SECONDS
-                while time.monotonic() < deadline:
-                    file_id = await asyncio.to_thread(drive_file_id, target)
-                    if file_id:
-                        self._set(job_id, status="ready", file_id=file_id)
-                        return
-                    await asyncio.sleep(DRIVE_ID_POLL_SECONDS)
-                self._set(job_id, status="copied")
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                self._set(job_id, status="failed", error=str(exc)[:300])
+    async def _export_files(self, job_id: str) -> str:
+        job = self.service.get_job(job_id)
+        filename, subfolder, type_ = self.service.video_location(job_id)
+        config = self.settings()
+        from .jobs import job_title
+
+        day = time.strftime("%Y-%m-%d", time.localtime(job["created_at"]))
+        folder = f"{config['folder']}/{day}"
+        name = f"{_slug(job_title(job))}_{job_id[:8]}.mp4"
+        target_dir = os.path.join(self.browser.root, folder)
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, name)
+        self._set(job_id, status="copying", path=f"{folder}/{name}", folder=folder, file_id=None, error=None)
+        await self._copy(filename, subfolder, type_, target)
+        if config["segments"]:
+            segments_dir = os.path.join(target_dir, f"{name[:-4]}_segments")
+            os.makedirs(segments_dir, exist_ok=True)
+            for number in range(1, (job.get("segments_done") or 0) + 1):
+                seg_name, seg_folder, seg_type = self.service.segment_location(job_id, number)
+                await self._copy(seg_name, seg_folder, seg_type, os.path.join(segments_dir, seg_name))
+        return target
 
     async def _copy(self, filename: str, subfolder: str, type_: str, target: str) -> None:
         local = self.service.local_output(filename, subfolder, type_)

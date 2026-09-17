@@ -48,7 +48,13 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
         await web.TCPSite(self.runner, "127.0.0.1", comfy_port).start()
 
         self._patched = (library_module.drive_file_id, library_module.DRIVE_ID_POLL_SECONDS)
-        library_module.drive_file_id = lambda path: "DRIVEID123" if os.path.isfile(path) else None
+        polls: dict[str, int] = {}
+
+        def fake_drive_id(path):  # like the mount: a local placeholder id until the upload finishes
+            polls[path] = polls.get(path, 0) + 1
+            return None if not os.path.isfile(path) else "local-214" if polls[path] < 3 else "DRIVEID123"
+
+        library_module.drive_file_id = fake_drive_id
         library_module.DRIVE_ID_POLL_SECONDS = 0.05
 
         self.base = f"http://127.0.0.1:{api_port}"
