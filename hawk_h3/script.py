@@ -215,17 +215,26 @@ def _from_text(text: str) -> Script:
         fields: dict[str, str] = {}
         index = 0
         while index < len(lines):
+            if not lines[index].strip() and fields.get("_style"):
+                index += 1  # blank line after a style paragraph
+                continue
             match = _HEADER.match(lines[index])
             if not match:
                 break
             key = match.group(1).lower()
-            if key == "style":
-                # A style header takes the rest of its block.
-                style_parts.append("\n".join([match.group(2)] + lines[index + 1 :]).strip())
-                index = len(lines)
-                break
-            fields[key] = match.group(2)
             index += 1
+            if key == "style":
+                # A style header takes its own paragraph: following lines up to a blank line
+                # or another header. What comes after is still this block's segment, so
+                # "style: …" written straight above scene 1 never swallows scene 1.
+                paragraph = [match.group(2)]
+                while index < len(lines) and lines[index].strip() and not _HEADER.match(lines[index]):
+                    paragraph.append(lines[index])
+                    index += 1
+                style_parts.append("\n".join(paragraph).strip())
+                fields["_style"] = "1"
+                continue
+            fields[key] = match.group(2)
 
         prompt = "\n".join(lines[index:]).strip()
         if not prompt:

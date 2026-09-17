@@ -77,6 +77,21 @@ class TextScripts(unittest.TestCase):
         self.assertIsNone(first.videos)
         self.assertEqual((second.continuity, second.seed), ("off", 7))
 
+    def test_style_on_top_never_swallows_the_first_scene(self):
+        # What an agent writes: style straight above scene 1, no --- between them.
+        scenes = "\n---\n".join(f"title: Scene {n}\nduration: 15\nShot {n} prompt." for n in range(2, 5))
+        for top in ("style: Cinematic, warm grade.\n\n", "style: Cinematic, warm grade.\n", "style: Cinematic,\nwarm grade.\n\n"):
+            script = parse_script(top + "title: Scene 1\nduration: 15\nShot 1 prompt.\n---\n" + scenes)
+            self.assertEqual([s.title for s in script.segments], ["Scene 1", "Scene 2", "Scene 3", "Scene 4"], top)
+            self.assertEqual(script.segments[0].prompt, "Shot 1 prompt.")
+            self.assertEqual(script.segments[0].duration, 15.0)
+            self.assertNotIn("Scene 1", script.style)
+        between = parse_script("title: One\nstyle: Moody.\nduration: 5\nFirst\n---\nSecond")
+        self.assertEqual((between.style, [s.prompt for s in between.segments], between.segments[0].duration), ("Moody.", ["First", "Second"], 5.0))
+        # A plain paragraph after a blank line is the scene, not more style.
+        loose = parse_script("style: Warm.\n\nShe walks in.\n---\nShe sits.")
+        self.assertEqual((loose.style, len(loose.segments)), ("Warm.", 2))
+
     def test_single_plain_prompt(self):
         script = parse_script("A cat walks across a sunny kitchen.")
         self.assertEqual(len(script.segments), 1)

@@ -703,6 +703,38 @@ def restart_api(session: Session) -> None:
     print(session.summary())
 
 
+def restart_comfyui(session: Session, extra_args: list[str] | None = None, force: bool = False) -> None:
+    """Reload the Hawk H3 node code (e.g. after `git pull`): stop ComfyUI and start it again.
+    Models load again on the next render. Refuses while a prompt is running unless force=True."""
+    base = f"http://127.0.0.1:{COMFY_PORT}"
+    queue = _http_json(f"{base}/queue", timeout=5) or {}
+    if queue.get("queue_running") and not force:
+        raise RuntimeError("ComfyUI is rendering. Wait for it to finish (or cancel it), or pass force=True.")
+    proc = session.procs.get("comfyui")
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    if not port_free(COMFY_PORT):  # started by another cell
+        subprocess.run(["pkill", "-f", "ComfyUI/main.py"], capture_output=True)
+        subprocess.run(["pkill", "-f", f"main.py.*--port {COMFY_PORT}"], capture_output=True)
+        subprocess.run(["fuser", "-k", f"{COMFY_PORT}/tcp"], capture_output=True)
+    deadline = time.time() + 60
+    while not port_free(COMFY_PORT) and time.time() < deadline:
+        time.sleep(1)
+    if not port_free(COMFY_PORT):
+        raise RuntimeError(f"Port {COMFY_PORT} is still in use. Stop ComfyUI yourself (`!fuser -k {COMFY_PORT}/tcp`) and retry.")
+    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048", *(extra_args or [])]
+    session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
+    print("Restarting ComfyUI...", flush=True)
+    _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
+    if not _http_json(f"{base}/object_info/HawkH3Director"):
+        raise RuntimeError(f"ComfyUI restarted but the Hawk H3 nodes did not load. Log:\n{log_tail(session.log('comfyui'), 80)}")
+    print("ComfyUI is up with the updated Hawk H3 nodes. The first render reloads the models.")
+
+
 def show_logs(session: Session, lines: int = 60) -> None:
     for name in ("comfyui", "tunnel", "api"):
         print(f"----- {name} -----\n{log_tail(session.log(name), lines)}")
