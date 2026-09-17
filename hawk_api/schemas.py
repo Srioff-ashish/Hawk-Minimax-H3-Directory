@@ -110,6 +110,28 @@ class ImageRequest(BaseModel):
     seed: int | None = Field(None, ge=0)
 
 
+class AssetUpdate(BaseModel):
+    collection: str | None = Field(None, description="Move to this collection (created if new).")
+    tags: list[str] | None = Field(None, description="Replace all tags.")
+    add_tags: list[str] = Field(default_factory=list)
+    remove_tags: list[str] = Field(default_factory=list)
+    filename: str | None = Field(None, description="Rename the display name.")
+
+
+class AssetBulk(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
+    action: Literal["move", "tag", "untag", "delete"]
+    collection: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+
+class DriveImportIn(BaseModel):
+    paths: list[str] = Field(min_length=1, description="Drive files or folders, relative to My Drive.")
+    recursive: bool = Field(True, description="Include subfolders.")
+    collection: str | None = Field(None, description="Target collection; default: the folder name.")
+    tags: list[str] = Field(default_factory=list)
+
+
 class PromptIn(BaseModel):
     text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
 

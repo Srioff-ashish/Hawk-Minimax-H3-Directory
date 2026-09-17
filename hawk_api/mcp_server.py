@@ -45,13 +45,16 @@ def _error(exc: Exception) -> ToolError:
     return ToolError(message)
 
 
-def build_mcp(service: HawkService) -> MCPServer:
+def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
         instructions=INSTRUCTIONS,
         log_level="WARNING",  # the SDK configures global logging; INFO logs every HTTP call
     )
+
+    async def _sync(fn, *args):
+        return fn(*args)
 
     async def _viewed(coro):
         return service.asset_view(await coro)
@@ -70,9 +73,30 @@ def build_mcp(service: HawkService) -> MCPServer:
     async def add_reference_from_url(url: str, filename: str | None = None) -> dict:
         return await run(_viewed(service.add_asset_from_url(url, filename)))
 
-    @mcp.tool(description="List uploaded reference assets (newest first) with asset_id, kind and file name.")
-    async def list_references(limit: int = 30) -> dict:
-        return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit)]}
+    @mcp.tool(description=(
+        "Search the asset library (newest first): images, videos and audio uploaded, imported from Google Drive or generated. "
+        "Filter by kind (image/video/audio), collection, tag, or query (matches file name, id, tags, collection). "
+        "Each asset has id, kind, filename, collection, tags and a thumb_url for images and videos."
+    ))
+    async def list_references(limit: int = 30, kind: str | None = None, collection: str | None = None,
+                              tag: str | None = None, query: str | None = None) -> dict:
+        items, total = service.search_assets(kind=kind, collection=collection, tag=tag, query=query, limit=max(1, min(limit, 200)))
+        return {"assets": [service.asset_view(asset) for asset in items], "total": total}
+
+    @mcp.tool(description="List the library's collections (with file counts per kind) and tags.")
+    async def list_collections() -> dict:
+        return {"collections": service.collections(), "tags": service.tags()}
+
+    @mcp.tool(description="Move assets to a collection and/or add or remove tags, to keep the library organised.")
+    async def organize_assets(asset_ids: list[str], collection: str | None = None, add_tags: list[str] | None = None,
+                              remove_tags: list[str] | None = None) -> dict:
+        updated = []
+        for asset_id in asset_ids:
+            try:
+                updated.append(service.asset_view(service.update_asset(asset_id, collection=collection, add_tags=add_tags, remove_tags=remove_tags)))
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+        return {"assets": updated}
 
     @mcp.tool(description=(
         "Generate or edit images with Atlas Cloud (default ByteDance Seedream v5.0 Pro). Text only: text-to-image. "
@@ -169,5 +193,32 @@ def build_mcp(service: HawkService) -> MCPServer:
     @mcp.tool(description="Resume a failed or cancelled job with the same seed and run folder; finished segments are reused.")
     async def retry_job(job_id: str) -> dict:
         return service.job_view(await run(service.retry(job_id)))
+
+    if drive is not None and imports is not None:
+        @mcp.tool(description=(
+            "Browse the user's Google Drive mounted on the server: folders and media files (image/audio/video) in a folder. "
+            "path is relative to My Drive ('' for the top). Returns available=false when Drive is not mounted."
+        ))
+        async def browse_drive(path: str = "") -> dict:
+            if not drive.available:
+                return {"available": False, "hint": "Ask the user to mount Google Drive in the Colab notebook."}
+            return await run(_sync(drive.browse, path))
+
+        @mcp.tool(description=(
+            "Import files or whole folders from the mounted Google Drive into the asset library (copied on the server, no size limit; "
+            "duplicates are skipped). collection defaults to the folder name. Waits up to wait_seconds and returns progress with "
+            "the imported asset ids; call get_import for a longer import."
+        ))
+        async def import_from_drive(paths: list[str], collection: str | None = None, tags: list[str] | None = None,
+                                    recursive: bool = True, wait_seconds: int = 60) -> dict:
+            state = await run(imports.start(paths, recursive=recursive, collection=collection, tags=tags or []))
+            return await imports.wait(state["id"], max(0, min(wait_seconds, 300)))
+
+        @mcp.tool(description="Progress of a Google Drive import: total, done, imported, duplicates, failed and asset ids.")
+        async def get_import(import_id: str) -> dict:
+            try:
+                return imports.get(import_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
 
     return mcp

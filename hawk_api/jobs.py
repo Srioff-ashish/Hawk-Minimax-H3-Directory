@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import dataclasses
+import hashlib
 import io
 import json
 import logging
@@ -12,6 +13,7 @@ import mimetypes
 import os
 import random
 import re
+import shutil
 import sqlite3
 import tempfile
 import threading
@@ -48,6 +50,7 @@ ACTIVE = ("queued", "planning", "rendering")
 FINISHED = ("done", "failed", "cancelled")
 #: A job whose prompt ComfyUI no longer knows is only declared lost after this grace period.
 LOST_AFTER_SECONDS = 20.0
+DEFAULT_COLLECTION = "Uploads"
 IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
 IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
 THUMB_WIDTHS = (160, 320, 640)
@@ -58,6 +61,30 @@ MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders":
 def model_family(folder: str, files: list[str]) -> list[str]:
     family = MODEL_FAMILIES[folder][0]
     return [name for name in files if family in os.path.basename(name).lower()]
+
+
+def normalize_tags(tags) -> list[str]:
+    if isinstance(tags, str):
+        tags = tags.split(",")
+    seen: list[str] = []
+    for tag in tags or []:
+        tag = re.sub(r"\s+", " ", str(tag)).strip().lower()[:40]
+        if tag and tag not in seen:
+            seen.append(tag)
+    return seen[:30]
+
+
+def _hash_file(fileobj) -> str | None:
+    """sha256 of a seekable file object, rewound afterwards; None when it cannot seek."""
+    try:
+        start = fileobj.tell()
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: fileobj.read(1 << 20), b""):
+            digest.update(chunk)
+        fileobj.seek(start)
+        return digest.hexdigest()
+    except (AttributeError, OSError, ValueError):
+        return None
 
 
 def _image_type(data: bytes) -> tuple[str, str]:
@@ -147,6 +174,16 @@ class Store:
         with self._lock:
             rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def all_assets(self) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC").fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def delete_asset(self, asset_id: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
+            self._db.commit()
 
     def save_job(self, job: dict) -> None:
         job["updated_at"] = time.time()
@@ -322,27 +359,123 @@ class HawkService:
 
     # ---------------------------------------------------------- assets
 
-    async def add_asset(self, filename: str, fileobj, content_type: str | None = None, size: int | None = None) -> dict:
+    async def add_asset(
+        self,
+        filename: str,
+        fileobj,
+        content_type: str | None = None,
+        size: int | None = None,
+        *,
+        collection: str | None = None,
+        tags=None,
+        source: dict | None = None,
+        local_path: str | None = None,
+        dedupe: bool = True,
+    ) -> dict:
+        """Store one file as an asset. Identical content already in the library is not stored
+        twice: the existing asset comes back with ``duplicate: true``."""
         kind = asset_kind(filename, content_type)
+        digest = await asyncio.to_thread(_hash_file, fileobj)
+        if dedupe and digest:
+            existing = next((a for a in self.store.all_assets() if a.get("sha256") == digest), None)
+            if existing is not None:
+                return dict(existing, duplicate=True)
         asset_id = uuid.uuid4().hex[:12]
         base = os.path.basename(filename.replace("\\", "/"))
         safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("._") or f"file{os.path.splitext(base)[1]}"
         mime = content_type or mimetypes.guess_type(safe)[0] or "application/octet-stream"
-        try:
-            uploaded = await self.comfy.upload(fileobj, safe, f"hawk_api/{asset_id}", mime)
-        except ComfyError as exc:
-            raise Unavailable(str(exc)) from exc
-        subfolder = uploaded.get("subfolder") or ""
+        input_dir = self.settings.comfy_input_dir
+        if local_path and input_dir and os.path.isdir(input_dir):
+            # Same machine as ComfyUI: copy straight into its input folder (no size limit, no HTTP).
+            target_dir = os.path.join(input_dir, "hawk_api", asset_id)
+            os.makedirs(target_dir, exist_ok=True)
+            await asyncio.to_thread(shutil.copyfile, local_path, os.path.join(target_dir, safe))
+            path = f"hawk_api/{asset_id}/{safe}"
+        else:
+            try:
+                uploaded = await self.comfy.upload(fileobj, safe, f"hawk_api/{asset_id}", mime)
+            except ComfyError as exc:
+                raise Unavailable(str(exc)) from exc
+            subfolder = uploaded.get("subfolder") or ""
+            path = f"{subfolder}/{uploaded['name']}" if subfolder else uploaded["name"]
         asset = {
             "id": asset_id,
             "kind": kind,
             "filename": base,
-            "path": f"{subfolder}/{uploaded['name']}" if subfolder else uploaded["name"],
+            "path": path,
             "size": size,
             "created_at": time.time(),
+            "collection": (collection or "").strip() or DEFAULT_COLLECTION,
+            "tags": normalize_tags(tags),
+            "sha256": digest,
+            "source": source or {"type": "upload"},
         }
         self.store.add_asset(asset)
         return asset
+
+    # ------------------------------------------------------------ library
+
+    def search_assets(self, *, kind=None, collection=None, tag=None, query=None, limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
+        items = self.store.all_assets()
+        needle = (query or "").strip().lower()
+        tag = (tag or "").strip().lower()
+        matches = [
+            a for a in items
+            if (not kind or a.get("kind") == kind)
+            and (not collection or a.get("collection", DEFAULT_COLLECTION) == collection)
+            and (not tag or tag in (a.get("tags") or []))
+            and (not needle or needle in f"{a['filename']} {a['id']} {' '.join(a.get('tags') or [])} {a.get('collection', '')}".lower())
+        ]
+        return matches[offset : offset + limit], len(matches)
+
+    def collections(self) -> list[dict]:
+        groups: dict[str, dict] = {}
+        for asset in self.store.all_assets():
+            name = asset.get("collection") or DEFAULT_COLLECTION
+            group = groups.setdefault(name, {"name": name, "count": 0, "kinds": {}, "updated_at": 0})
+            group["count"] += 1
+            group["kinds"][asset["kind"]] = group["kinds"].get(asset["kind"], 0) + 1
+            group["updated_at"] = max(group["updated_at"], asset["created_at"])
+        return sorted(groups.values(), key=lambda g: g["updated_at"], reverse=True)
+
+    def tags(self) -> list[dict]:
+        counts: dict[str, int] = {}
+        for asset in self.store.all_assets():
+            for tag in asset.get("tags") or []:
+                counts[tag] = counts.get(tag, 0) + 1
+        return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+    def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None) -> dict:
+        asset = self.store.get_asset(asset_id)
+        if asset is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        if collection is not None and collection.strip():
+            asset["collection"] = collection.strip()
+        if tags is not None:
+            asset["tags"] = normalize_tags(tags)
+        if add_tags:
+            asset["tags"] = normalize_tags((asset.get("tags") or []) + normalize_tags(add_tags))
+        if remove_tags:
+            drop = set(normalize_tags(remove_tags))
+            asset["tags"] = [t for t in asset.get("tags") or [] if t not in drop]
+        if filename is not None and filename.strip():
+            asset["filename"] = os.path.basename(filename.strip())
+        self.store.add_asset(asset)
+        return asset
+
+    def delete_asset(self, asset_id: str) -> None:
+        asset = self.store.get_asset(asset_id)
+        if asset is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        self.store.delete_asset(asset_id)
+        input_dir = self.settings.comfy_input_dir
+        if input_dir and asset["path"].startswith(f"hawk_api/{asset_id}/"):
+            shutil.rmtree(os.path.join(input_dir, "hawk_api", asset_id), ignore_errors=True)
+        thumbs = os.path.join(self.settings.data_dir, "thumbs")
+        if os.path.isdir(thumbs):
+            for name in os.listdir(thumbs):
+                if name.startswith(f"{asset_id}_"):
+                    os.remove(os.path.join(thumbs, name))
 
     async def add_asset_from_url(self, url: str, filename: str | None = None) -> dict:
         if not re.match(r"^https?://", url):
@@ -367,7 +500,7 @@ class HawkService:
             if not os.path.splitext(name)[1] and content_type:
                 name += mimetypes.guess_extension(content_type.split(";")[0]) or ""
             buffer.seek(0)
-            return await self.add_asset(name, buffer, content_type, size)
+            return await self.add_asset(name, buffer, content_type, size, collection="From URLs", source={"type": "url", "url": url})
 
     def list_assets(self, limit: int = 100) -> list[dict]:
         return self.store.list_assets(limit)
@@ -377,11 +510,21 @@ class HawkService:
         base, token, ttl = self.settings.public_base_url, self.settings.token, self.settings.link_ttl_seconds
         link = base + sign_path(token, f"/v1/assets/{asset['id']}/file", ttl)
         view = dict(asset, file_url=link)
-        if asset.get("kind") == "image":
+        if asset.get("kind") in ("image", "video"):
             view["thumb_url"] = f"{link}&w=320"
+        view.setdefault("collection", DEFAULT_COLLECTION)
+        view.setdefault("tags", [])
         return view
 
+    def local_asset_path(self, asset: dict) -> str | None:
+        input_dir = self.settings.comfy_input_dir
+        path = os.path.join(input_dir, asset["path"]) if input_dir else ""
+        return path if path and os.path.isfile(path) else None
+
     async def asset_bytes(self, asset: dict) -> bytes:
+        local = self.local_asset_path(asset)
+        if local:
+            return await asyncio.to_thread(lambda: open(local, "rb").read())
         subfolder, _, filename = asset["path"].rpartition("/")
         try:
             _, _, body = await self.comfy.view(filename, subfolder, "input")
@@ -396,6 +539,8 @@ class HawkService:
         if asset is None:
             raise NotFound(f"No asset {asset_id!r}.")
         mime = mimetypes.guess_type(asset["filename"])[0] or "application/octet-stream"
+        if asset["kind"] == "video" and width > 0:
+            return await self._video_thumb(asset, width), "image/jpeg"
         if asset["kind"] != "image" or width <= 0:
             return await self.asset_bytes(asset), mime
         width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
@@ -419,6 +564,37 @@ class HawkService:
         with open(cache, "wb") as handle:
             handle.write(buffer.getvalue())
         return buffer.getvalue(), "image/jpeg"
+
+    async def _video_thumb(self, asset: dict, width: int) -> bytes:
+        width = min((w for w in THUMB_WIDTHS if w >= width), default=THUMB_WIDTHS[-1])
+        cache = os.path.join(self.settings.data_dir, "thumbs", f"{asset['id']}_{width}.jpg")
+        if os.path.isfile(cache):
+            with open(cache, "rb") as handle:
+                return handle.read()
+        if not shutil.which("ffmpeg"):
+            raise NotFound("No video thumbnail: ffmpeg is not installed on the server.")
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        source = self.local_asset_path(asset)
+        temp = None
+        if source is None:
+            temp = tempfile.NamedTemporaryFile(suffix=os.path.splitext(asset["filename"])[1] or ".mp4", delete=False)
+            temp.write(await self.asset_bytes(asset))
+            temp.close()
+            source = temp.name
+        try:
+            for seek in ("1", "0"):
+                process = await asyncio.create_subprocess_exec(
+                    "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", seek, "-i", source, "-frames:v", "1",
+                    "-vf", f"scale={width}:-2", cache, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await process.wait()
+                if process.returncode == 0 and os.path.isfile(cache):
+                    with open(cache, "rb") as handle:
+                        return handle.read()
+        finally:
+            if temp is not None:
+                os.remove(temp.name)
+        raise NotFound("Could not make a thumbnail for this video.")
 
     async def generate_images(
         self,
@@ -465,9 +641,10 @@ class HawkService:
         assets = []
         for number, data in enumerate(images, 1):
             extension, mime = _image_type(data)
-            asset = await self.add_asset(f"gen_{stem}_{number}.{extension}", io.BytesIO(data), mime, len(data))
-            asset["source"] = {"generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
-            self.store.add_asset(asset)
+            asset = await self.add_asset(
+                f"gen_{stem}_{number}.{extension}", io.BytesIO(data), mime, len(data), collection="Generated", tags=["generated"],
+                source={"type": "generated", "generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])},
+            )
             assets.append(self.asset_view(asset))
         return {"model": model, "assets": assets}
 

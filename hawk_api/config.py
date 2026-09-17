@@ -40,6 +40,11 @@ class Settings:
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     agent_model: str = "xai/grok-4.6"
+    #: ComfyUI's input folder on this machine; imports copy files straight into it when set.
+    comfy_input_dir: str = ""
+    #: Mounted Google Drive (Colab: drive.mount("/content/drive")).
+    drive_root: str = "/content/drive/MyDrive"
+    max_import_files: int = 2000
     models: ModelSettings = field(default_factory=ModelSettings)
 
     @property
@@ -78,5 +83,7 @@ class Settings:
             atlas_url=_env("ATLAS_API_URL", cls.atlas_url).rstrip("/"),
             atlas_api_key=_env("ATLAS_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
+            comfy_input_dir=_env("COMFY_INPUT_DIR"),
+            drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),
             models=models,
         )

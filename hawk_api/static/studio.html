@@ -355,6 +355,47 @@
   .placeholder-chip { cursor: pointer; font-family: var(--mono); }
   .placeholder-chip:hover { border-color: var(--brand-line); color: var(--brand); }
   @media (max-width: 1100px) { .prompts-layout { grid-template-columns: minmax(0, 1fr); } .prompts-side { position: static; } }
+
+  /* ---------- media library ---------- */
+  .media-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: start; }
+  .media-side { position: sticky; top: 76px; overflow: hidden; }
+  .media-collections { display: grid; gap: 1px; padding: 6px; max-height: 45vh; overflow: auto; }
+  .media-coll { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border-radius: 7px; border: 0; background: none; cursor: pointer; color: var(--ink-2); font-size: 13.5px; }
+  .media-coll:hover { background: var(--surface-2); }
+  .media-coll[aria-current="true"] { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+  .media-coll span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .media-coll .count { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tag-filter { cursor: pointer; }
+  .tag-filter[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+  .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .media-card { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; cursor: pointer; user-select: none; transition: border-color .12s, box-shadow .12s; }
+  .media-card:hover { border-color: var(--line-strong); box-shadow: var(--shadow); }
+  .media-card.selected { border-color: var(--brand); box-shadow: 0 0 0 2px var(--brand); }
+  .media-thumb { aspect-ratio: 1; background: var(--surface-2); display: grid; place-items: center; color: var(--muted); position: relative; }
+  .media-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .media-thumb svg { width: 34px; height: 34px; }
+  .media-thumb .play { position: absolute; inset: auto 8px 8px auto; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; display: grid; place-items: center; cursor: pointer; font-size: 12px; }
+  .media-check { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 6px; background: rgba(255,255,255,.92); border: 1px solid var(--line-strong); display: grid; place-items: center; }
+  .media-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--brand); }
+  .media-kind { position: absolute; top: 8px; right: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 5px; background: rgba(0,0,0,.6); color: #fff; }
+  .media-meta { padding: 8px 10px 10px; display: grid; gap: 3px; min-width: 0; }
+  .media-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .media-meta .hint { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .selection-bar { position: sticky; bottom: 16px; z-index: 15; margin-top: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px;
+                   background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+  .imports { display: grid; gap: 8px; margin-bottom: 14px; }
+  .import-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; }
+  .import-item .progress { grid-column: 1 / -1; }
+  .drop-overlay { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--brand) 18%, transparent); border: 3px dashed var(--brand); display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--brand); pointer-events: none; }
+  dialog.modal.wide { width: min(940px, calc(100vw - 24px)); }
+  .modal-scroll { max-height: min(60vh, 620px); overflow: auto; }
+  .drive-row { display: grid; grid-template-columns: 24px 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; }
+  .drive-row:hover { background: var(--surface-2); }
+  .drive-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .drive-row button.linklike { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; color: var(--ink); font: inherit; font-weight: 600; }
+  .crumbs-nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 13px; }
+  .crumbs-nav button { border: 0; background: none; color: var(--brand); cursor: pointer; padding: 2px 4px; border-radius: 4px; font: inherit; }
+  @media (max-width: 860px) { .media-layout { grid-template-columns: minmax(0, 1fr); } .media-side { position: static; } .media-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
   @media (max-width: 1100px) {
     .create-layout { grid-template-columns: minmax(0, 1fr); }
     .summary { position: static; }
@@ -405,10 +446,10 @@
   <nav class="sidebar" aria-label="Main">
     <a class="logo" href="#create" aria-label="Hawk H3 Studio home"><svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg><span class="wordmark"><b>Hawk <span>H3</span> Studio</b><small>AI video director</small></span></a>
     <a class="nav-item" href="#create" data-route="create"><svg><use href="#i-create"/></svg><span>Create</span></a>
-    <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Library</span><span class="nav-count" id="activeCount" hidden>0</span></a>
+    <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Videos</span><span class="nav-count" id="activeCount" hidden>0</span></a>
     <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
     <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
-    <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Assets</span></a>
+    <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Media</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
     <div class="sidebar-foot">
       <div class="status-line" role="status" aria-live="polite"><span class="dot" id="healthDot"></span><span id="healthText">Checking server…</span></div>
@@ -451,7 +492,7 @@
         <div class="stack">
           <section class="card" aria-labelledby="h-refs">
             <div class="card-head"><span class="step">1</span><h2 id="h-refs">References</h2><span class="hint">Who, what and where — optional</span><div class="spacer"></div>
-              <a class="btn btn-ghost btn-sm" href="#assets">From library</a></div>
+              <button class="btn btn-ghost btn-sm" type="button" id="refsFromLibrary">From media</button></div>
             <div class="card-body">
               <label class="dropzone" id="drop">
                 <input type="file" id="fileInput" multiple accept="image/*,audio/*,video/*">
@@ -564,6 +605,7 @@
                 <svg><use href="#i-music"/></svg>
                 <div><strong>Add a music track</strong> <span class="hint">looped or trimmed to length, faded out at the end</span></div>
               </label>
+              <div class="row" style="margin-top:8px"><button class="btn btn-ghost btn-sm" type="button" id="musicFromLibrary"><svg><use href="#i-assets"/></svg>Choose from media</button></div>
               <div id="musicInfo" class="row" style="margin-top:10px" hidden></div>
               <div id="musicControls" class="grid grid-2" style="margin-top:12px" hidden>
                 <div class="field"><label class="label" for="musicVol">Music volume</label><div class="range"><input type="range" id="musicVol" min="-30" max="6" step="1" value="-3"><output id="musicVolOut">-3 dB</output></div></div>
@@ -642,7 +684,8 @@
           <div class="agent-composer">
             <div class="row" id="agentAttachments" hidden></div>
             <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
-              <label class="icon-btn" title="Attach images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
+              <label class="icon-btn" title="Upload images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
+              <button class="icon-btn" type="button" id="agentFromLibrary" title="Attach from media" aria-label="Attach from media" style="flex:none;width:36px;height:36px"><svg><use href="#i-assets"/></svg></button>
               <label class="sr-only" for="agentInput">Message</label>
               <textarea class="textarea" id="agentInput" rows="1" placeholder="Tell the agent what to make… (Enter to send, Shift+Enter for a new line)"></textarea>
               <button class="btn btn-primary" id="agentSend" type="button">Send</button>
@@ -703,14 +746,53 @@
 
     <!-- ================================================================ ASSETS -->
     <main class="content" id="page-assets" data-page="assets" hidden>
-      <section class="card">
-        <div class="card-head"><h2>Uploaded files</h2><span class="hint">Reuse any file as a reference without uploading it again</span><div class="spacer"></div>
-          <button class="btn btn-sm" id="assetsRefresh" type="button">Refresh</button></div>
-        <div class="table-wrap"><table class="table">
-          <thead><tr><th></th><th>File</th><th>Kind</th><th>Size</th><th>Uploaded</th><th>Asset id</th><th></th></tr></thead>
-          <tbody id="assetRows"><tr><td colspan="7"><div class="skeleton" style="height:18px"></div></td></tr></tbody>
-        </table></div>
-      </section>
+      <div class="media-layout">
+        <aside class="card media-side" aria-label="Collections and tags">
+          <div class="card-head"><h2>Collections</h2></div>
+          <div class="media-collections" id="mediaCollections"></div>
+          <div class="card-head" style="border-top:1px solid var(--line)"><h2>Tags</h2></div>
+          <div class="card-body row" id="mediaTags" style="gap:6px"></div>
+        </aside>
+        <section style="min-width:0" id="mediaMain">
+          <div class="toolbar">
+            <div class="segmented" role="radiogroup" aria-label="Kind">
+              <label><input type="radio" name="mediaKind" value="" checked>All</label>
+              <label><input type="radio" name="mediaKind" value="image">Images</label>
+              <label><input type="radio" name="mediaKind" value="video">Videos</label>
+              <label><input type="radio" name="mediaKind" value="audio">Audio</label>
+            </div>
+            <div class="search"><svg><use href="#i-search"/></svg><input class="input" id="mediaSearch" placeholder="Search name, tag or id" aria-label="Search media"></div>
+            <div class="spacer"></div>
+            <span class="hint" id="mediaCount"></span>
+            <div class="menu">
+              <button class="btn btn-primary btn-sm" id="importBtn" type="button" aria-haspopup="true" aria-expanded="false"><svg><use href="#i-upload"/></svg>Import ▾</button>
+              <div class="menu-list" id="importMenu" role="menu" hidden style="left:auto;right:0">
+                <button type="button" role="menuitem" data-import="files"><strong>Upload files</strong><span>Images, audio and video from this device (up to 100 MB each)</span></button>
+                <button type="button" role="menuitem" data-import="folder"><strong>Upload a folder</strong><span>Every media file inside it, subfolders included</span></button>
+                <button type="button" role="menuitem" data-import="drive"><strong>From Google Drive</strong><span>Browse your mounted Drive; copied on the server, no size limit</span></button>
+              </div>
+            </div>
+            <input type="file" id="mediaFiles" multiple accept="image/*,audio/*,video/*" hidden>
+            <input type="file" id="mediaFolder" webkitdirectory multiple hidden>
+          </div>
+          <div class="imports" id="mediaImports" hidden></div>
+          <div class="media-grid" id="mediaGrid"></div>
+          <div class="empty" id="mediaEmpty" hidden><svg><use href="#i-assets"/></svg><strong>No media here yet</strong><span>Import files from this device or Google Drive, drop them anywhere on this page, or ask the Agent to generate images.</span></div>
+          <div class="selection-bar" id="mediaSelection" hidden>
+            <strong id="mediaSelCount"></strong>
+            <button class="btn btn-sm btn-primary" type="button" data-bulk="create">Use in Create</button>
+            <button class="btn btn-sm" type="button" data-bulk="agent">Attach to agent</button>
+            <button class="btn btn-sm" type="button" data-bulk="music" id="bulkMusic">Set as music bed</button>
+            <button class="btn btn-sm" type="button" data-bulk="move">Move…</button>
+            <button class="btn btn-sm" type="button" data-bulk="tag">Add tags…</button>
+            <button class="btn btn-sm" type="button" data-bulk="untag">Remove tags…</button>
+            <button class="btn btn-sm btn-danger" type="button" data-bulk="delete">Delete</button>
+            <div class="spacer"></div>
+            <button class="btn btn-sm btn-ghost" type="button" data-bulk="all">Select all</button>
+            <button class="btn btn-sm btn-ghost" type="button" data-bulk="clear">Clear</button>
+          </div>
+        </section>
+      </div>
     </main>
 
     <!-- ================================================================ CONNECT -->
@@ -758,6 +840,42 @@
   <div class="drawer-body" id="drawerBody"></div>
 </aside>
 
+
+<dialog class="modal" id="inputDialog">
+  <form method="dialog">
+    <div class="modal-body"><h3 id="inputTitle"></h3><label class="label" for="inputValue" id="inputLabel"></label>
+      <input class="input" id="inputValue" list="inputOptions" autocomplete="off"><datalist id="inputOptions"></datalist></div>
+    <div class="modal-foot"><button class="btn" value="cancel">Cancel</button><button class="btn btn-primary" value="ok" id="inputOk">OK</button></div>
+  </form>
+</dialog>
+
+<dialog class="modal wide" id="driveDialog" aria-labelledby="driveTitle">
+  <div class="modal-body" style="gap:12px">
+    <div class="row"><h3 id="driveTitle">Import from Google Drive</h3><div class="spacer"></div><button class="icon-btn" type="button" id="driveClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+    <nav class="crumbs-nav" id="driveCrumbs" aria-label="Drive folders"></nav>
+    <div class="modal-scroll card" id="driveList" style="padding:4px"></div>
+    <div class="grid grid-3">
+      <div class="field"><label class="label" for="driveCollection">Collection</label><input class="input" id="driveCollection" list="collectionOptions" placeholder="Folder name"></div>
+      <div class="field"><label class="label" for="driveTags">Tags</label><input class="input" id="driveTags" placeholder="comma separated"></div>
+      <label class="check" style="align-self:end;height:36px"><input type="checkbox" id="driveRecursive" checked> Include subfolders</label>
+    </div>
+  </div>
+  <div class="modal-foot"><span class="hint" id="driveSelected" style="margin-right:auto">Nothing selected</span><button class="btn" type="button" id="driveCancel">Cancel</button><button class="btn btn-primary" type="button" id="driveImport" disabled>Import</button></div>
+</dialog>
+<datalist id="collectionOptions"></datalist>
+
+<dialog class="modal wide" id="pickerDialog" aria-labelledby="pickerTitle">
+  <div class="modal-body" style="gap:12px">
+    <div class="row"><h3 id="pickerTitle">Choose from media</h3><div class="spacer"></div><button class="icon-btn" type="button" id="pickerClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+    <div class="row">
+      <div class="search" style="flex:1;min-width:200px"><svg><use href="#i-search"/></svg><input class="input" id="pickerSearch" placeholder="Search" style="width:100%"></div>
+      <select class="select" id="pickerCollection" style="width:auto;min-width:170px"></select>
+    </div>
+    <div class="modal-scroll"><div class="media-grid" id="pickerGrid"></div></div>
+  </div>
+  <div class="modal-foot"><span class="hint" id="pickerCount" style="margin-right:auto"></span><button class="btn" type="button" id="pickerCancel">Cancel</button><button class="btn btn-primary" type="button" id="pickerOk" disabled>Add</button></div>
+</dialog>
+
 <dialog class="modal" id="confirmDialog">
   <form method="dialog">
     <div class="modal-body"><h3 id="confirmTitle">Are you sure?</h3><p class="hint" id="confirmText" style="margin:0"></p></div>
@@ -791,8 +909,8 @@
   const STATUS = { queued: "Queued", planning: "Writing plan", rendering: "Rendering", done: "Done", failed: "Failed", cancelled: "Cancelled" };
   const PAGES = {
     create: ["Create", "Compose a shot or a multi-segment film"],
-    library: ["Library", "Your renders and plans"],
-    assets: ["Assets", "Files uploaded to the GPU server"],
+    library: ["Videos", "Your renders and plans"],
+    assets: ["Media", "Images, video and audio: upload, import from Google Drive, organise, reuse"],
     connect: ["Connect & settings", "Chat connectors, API and preferences"],
     agent: ["Agent", "Your autonomous video director"],
     prompts: ["Prompts", "Edit the agent and story planner instructions"],
@@ -844,7 +962,7 @@
   }
   const post = (path, data) => api(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
 
-  function uploadFile(file, onProgress) {
+  function uploadFile(file, onProgress, fields = {}) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", PREFIX + "/v1/assets");
@@ -860,6 +978,7 @@
       xhr.onerror = () => reject(new Error("Upload failed: network error (the tunnel refuses files over 100 MB)."));
       const form = new FormData();
       form.append("files", file);
+      for (const [key, value] of Object.entries(fields)) if (value) form.append(key, value);
       xhr.send(form);
     });
   }
@@ -929,7 +1048,7 @@
     $("crumbPage").textContent = PAGES[page][0];
     $("pageSub").textContent = PAGES[page][1];
     $("newBtn").hidden = page === "create";
-    if (page === "assets") loadAssets();
+    if (page === "assets") loadMedia();
     if (page === "connect") renderConnect();
     if (page === "library") renderLibrary();
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
@@ -1003,13 +1122,13 @@
     }
   }
 
-  function addAssetRef(asset) {
+  function addAssetRef(asset, quiet = false) {
     if (!ROLES[asset.kind]) return;
     const ref = newRef(asset.kind, asset.filename, asset.thumb_url || "");
     ref.asset = asset.id; ref.status = "ready";
     state.refs.push(ref);
     renderRefs();
-    toast("Added to references", asset.filename);
+    if (!quiet) toast("Added to references", asset.filename);
   }
 
   async function addUrl() {
@@ -1820,41 +1939,463 @@
   document.querySelectorAll('input[name="filter"]').forEach((input) => input.addEventListener("change", () => { state.filter = input.value; renderLibrary(); }));
   $("jobSearch").addEventListener("input", (event) => { state.query = event.target.value; renderLibrary(); });
 
-  // --------------------------------------------------------------- assets
+  // ---------------------------------------------------------------- media
 
-  async function loadAssets() {
+  const media = { kind: "", collection: "", tag: "", q: "", assets: [], collections: [], tags: [], total: 0, selected: new Set(), last: null, audio: null };
+  const AUDIO_ICON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><use href="#i-music"/></svg>`;
+
+  function mediaCardHtml(asset, selected) {
+    const thumb = asset.thumb_url
+      ? `<img src="${esc(asset.thumb_url)}" alt="" loading="lazy" onerror="this.replaceWith(document.createTextNode('${esc(asset.kind)}'))">`
+      : asset.kind === "audio" ? `<svg><use href="#i-music"/></svg>` : `<svg><use href="#i-film"/></svg>`;
+    const play = asset.kind === "audio" || asset.kind === "video" ? `<button class="play" type="button" data-play="${asset.id}" aria-label="Play ${esc(asset.filename)}">▶</button>` : "";
+    const tags = (asset.tags || []).slice(0, 3).map((t) => `#${esc(t)}`).join(" ");
+    return `<div class="media-card ${selected ? "selected" : ""}" data-asset="${asset.id}" title="${esc(asset.filename)}">
+      <div class="media-thumb">${thumb}${play}</div>
+      <label class="media-check" aria-label="Select ${esc(asset.filename)}"><input type="checkbox" data-check ${selected ? "checked" : ""}></label>
+      <span class="media-kind">${esc(asset.kind)}</span>
+      <div class="media-meta"><div class="media-name">${esc(asset.filename)}</div>
+        <div class="hint">${esc(asset.collection || "Uploads")} · ${bytes(asset.size)}</div>
+        ${tags ? `<div class="hint" style="color:var(--brand)">${tags}</div>` : ""}</div>
+    </div>`;
+  }
+
+  function libraryQuery({ kind = "", collection = "", tag = "", q = "" } = {}) {
+    const params = new URLSearchParams({ limit: "1000" });
+    if (kind) params.set("kind", kind);
+    if (collection) params.set("collection", collection);
+    if (tag) params.set("tag", tag);
+    if (q) params.set("q", q);
+    return api(`/v1/library?${params}`);
+  }
+
+  async function loadMedia() {
     try {
-      const { assets } = await api("/v1/assets?limit=200");
-      state.assets = assets || [];
-      $("assetRows").innerHTML = state.assets.length ? state.assets.map((asset) => `
-        <tr>
-          <td style="width:56px">${asset.thumb_url ? `<a href="${esc(asset.file_url)}" target="_blank" rel="noopener"><img class="asset-thumb" src="${esc(asset.thumb_url)}" alt="" loading="lazy"></a>` : `<span class="thumb" style="width:44px;height:44px">${esc(asset.kind)}</span>`}</td>
-          <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(asset.filename)}">${esc(asset.filename)}${asset.source?.generator ? `<div class="hint">generated · ${esc(asset.source.generator.split("/").slice(-2).join("/"))}</div>` : ""}</td>
-          <td><span class="chip">${esc(asset.kind)}</span></td>
-          <td>${bytes(asset.size)}</td>
-          <td class="hint">${ago(asset.created_at)}</td>
-          <td><button class="btn btn-ghost btn-xs mono" type="button" data-copy-text="${esc(asset.id)}">${esc(asset.id)}</button></td>
-          <td style="text-align:right">${ROLES[asset.kind] ? `<button class="btn btn-xs" type="button" data-use="${esc(asset.id)}">Use as reference</button>` : ""}
-            ${asset.kind === "audio" ? `<button class="btn btn-xs" type="button" data-music="${esc(asset.id)}">Use as music bed</button>` : ""}</td>
-        </tr>`).join("") : `<tr><td colspan="7"><div class="empty" style="border:0">No uploads yet. Add files on the Create page, or ask the Agent to generate images.</div></td></tr>`;
+      const data = await libraryQuery(media);
+      media.assets = data.assets; media.total = data.total; media.collections = data.collections; media.tags = data.tags;
+      for (const id of [...media.selected]) if (!media.assets.some((a) => a.id === id)) media.selected.delete(id);
+      renderMedia();
     } catch (error) {
-      $("assetRows").innerHTML = `<tr><td colspan="7"><div class="alert bad">${esc(error.message)}</div></td></tr>`;
+      if (error.status !== 401) toast("Could not load media", error.message, "bad");
     }
   }
-  $("assetsRefresh").onclick = loadAssets;
-  $("assetRows").addEventListener("click", (event) => {
-    const use = event.target.closest("[data-use]");
-    const music = event.target.closest("[data-music]");
-    const copyButton = event.target.closest("[data-copy-text]");
-    if (use) addAssetRef(state.assets.find((a) => a.id === use.dataset.use));
-    if (music) {
-      const asset = state.assets.find((a) => a.id === music.dataset.music);
-      state.music = { filename: asset.filename, status: "ready", progress: 1, asset: asset.id, error: "" };
-      renderMusic();
-      toast("Music bed set", asset.filename);
+
+  function renderMedia() {
+    const all = media.collections.reduce((sum, c) => sum + c.count, 0);
+    $("mediaCollections").innerHTML = [`<button class="media-coll" type="button" data-collection="" aria-current="${!media.collection}"><span>All media</span><span class="count">${all}</span></button>`]
+      .concat(media.collections.map((c) => `<button class="media-coll" type="button" data-collection="${esc(c.name)}" aria-current="${media.collection === c.name}"><span>${esc(c.name)}</span><span class="count">${c.count}</span></button>`)).join("");
+    $("mediaTags").innerHTML = media.tags.length ? media.tags.slice(0, 40).map((t) => `<button class="chip tag-filter" type="button" data-tag="${esc(t.name)}" aria-pressed="${media.tag === t.name}">#${esc(t.name)} <span class="hint">${t.count}</span></button>`).join("") : `<span class="hint">No tags yet</span>`;
+    $("collectionOptions").innerHTML = media.collections.map((c) => `<option value="${esc(c.name)}">`).join("");
+    $("mediaGrid").innerHTML = media.assets.map((a) => mediaCardHtml(a, media.selected.has(a.id))).join("");
+    $("mediaEmpty").hidden = media.assets.length > 0;
+    $("mediaCount").textContent = `${media.total} item${media.total === 1 ? "" : "s"}`;
+    renderSelection();
+  }
+
+  function renderSelection() {
+    const count = media.selected.size;
+    $("mediaSelection").hidden = !count;
+    $("mediaSelCount").textContent = `${count} selected`;
+    const chosen = media.assets.filter((a) => media.selected.has(a.id));
+    $("bulkMusic").hidden = !(chosen.length === 1 && chosen[0].kind === "audio");
+    document.querySelectorAll("#mediaGrid .media-card").forEach((card) => {
+      const on = media.selected.has(card.dataset.asset);
+      card.classList.toggle("selected", on);
+      card.querySelector("[data-check]").checked = on;
+    });
+  }
+
+  function playAsset(asset) {
+    if (asset.kind === "video") return window.open(asset.file_url, "_blank", "noopener");
+    if (media.audio && media.audioId === asset.id) { media.audio.pause(); media.audio = null; media.audioId = null; return; }
+    if (media.audio) media.audio.pause();
+    media.audio = new Audio(asset.file_url);
+    media.audioId = asset.id;
+    media.audio.play().catch(() => toast("Could not play", asset.filename, "bad"));
+  }
+
+  $("mediaGrid").addEventListener("click", (event) => {
+    const card = event.target.closest(".media-card");
+    if (!card) return;
+    const asset = media.assets.find((a) => a.id === card.dataset.asset);
+    if (event.target.closest("[data-play]")) { event.preventDefault(); return playAsset(asset); }
+    const ids = media.assets.map((a) => a.id);
+    if (event.shiftKey && media.last) {
+      const [from, to] = [ids.indexOf(media.last), ids.indexOf(asset.id)].sort((a, b) => a - b);
+      ids.slice(from, to + 1).forEach((id) => media.selected.add(id));
+    } else if (media.selected.has(asset.id)) {
+      media.selected.delete(asset.id);
+    } else {
+      media.selected.add(asset.id);
     }
-    if (copyButton) copy(copyButton.dataset.copyText, "Asset id copied");
+    media.last = asset.id;
+    if (event.target.matches("[data-check]")) event.preventDefault();
+    renderSelection();
   });
+  $("mediaGrid").addEventListener("dblclick", (event) => {
+    const card = event.target.closest(".media-card");
+    const asset = card && media.assets.find((a) => a.id === card.dataset.asset);
+    if (asset) window.open(asset.file_url, "_blank", "noopener");
+  });
+  $("mediaCollections").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-collection]");
+    if (!item) return;
+    media.collection = item.dataset.collection; media.selected.clear(); loadMedia();
+  });
+  $("mediaTags").addEventListener("click", (event) => {
+    const item = event.target.closest("[data-tag]");
+    if (!item) return;
+    media.tag = media.tag === item.dataset.tag ? "" : item.dataset.tag; loadMedia();
+  });
+  document.querySelectorAll('input[name="mediaKind"]').forEach((input) => input.addEventListener("change", () => { media.kind = input.value; loadMedia(); }));
+  let mediaSearchTimer = null;
+  $("mediaSearch").addEventListener("input", () => { clearTimeout(mediaSearchTimer); mediaSearchTimer = setTimeout(() => { media.q = $("mediaSearch").value.trim(); loadMedia(); }, 250); });
+
+  function askInput(title, label, value = "", options = []) {
+    const dialog = $("inputDialog");
+    $("inputTitle").textContent = title; $("inputLabel").textContent = label; $("inputValue").value = value;
+    $("inputOptions").innerHTML = options.map((o) => `<option value="${esc(o)}">`).join("");
+    return new Promise((resolve) => {
+      dialog.onclose = () => resolve(dialog.returnValue === "ok" ? $("inputValue").value.trim() : null);
+      dialog.showModal();
+      $("inputValue").select();
+    });
+  }
+  const splitTags = (text) => (text || "").split(",").map((t) => t.trim()).filter(Boolean);
+
+  async function bulk(action, extra = {}) {
+    const ids = [...media.selected];
+    const result = await post("/v1/assets/bulk", { ids, action, ...extra });
+    if (result.errors?.length) toast("Some items failed", result.errors.slice(0, 3).join("\n"), "warn", 8000);
+    return result;
+  }
+
+  function useAssetsInCreate(assets) {
+    let added = 0, music = null;
+    for (const asset of assets) {
+      if (asset.kind === "audio" && assets.length === 1) { music = asset; break; }
+      if (!state.refs.some((r) => r.asset === asset.id)) { addAssetRef(asset, true); added += 1; }
+    }
+    if (music) setMusicBed(music);
+    if (added) toast(`Added ${added} reference${added > 1 ? "s" : ""}`, "Change their roles on the Create page.");
+  }
+
+  function setMusicBed(asset) {
+    state.music = { filename: asset.filename, status: "ready", progress: 1, asset: asset.id, error: "" };
+    renderMusic();
+    toast("Music bed set", asset.filename);
+  }
+
+  function attachToAgent(assets) {
+    for (const asset of assets) {
+      if (!agent.attachments.some((a) => a.asset === asset.id)) agent.attachments.push({ filename: asset.filename, status: "ready", progress: 1, asset: asset.id, preview: asset.thumb_url || "" });
+    }
+    renderAttachments();
+    toast(`${assets.length} file${assets.length > 1 ? "s" : ""} attached`, "Write your message to the agent.");
+  }
+
+  $("mediaSelection").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-bulk]");
+    if (!button) return;
+    const chosen = media.assets.filter((a) => media.selected.has(a.id));
+    const action = button.dataset.bulk;
+    try {
+      if (action === "clear") { media.selected.clear(); renderSelection(); }
+      else if (action === "all") { media.assets.forEach((a) => media.selected.add(a.id)); renderSelection(); }
+      else if (action === "create") { useAssetsInCreate(chosen); location.hash = "#create"; }
+      else if (action === "agent") { attachToAgent(chosen); location.hash = "#agent"; }
+      else if (action === "music") { setMusicBed(chosen[0]); location.hash = "#create"; }
+      else if (action === "move") {
+        const name = await askInput("Move to collection", "Collection (new or existing)", media.collection, media.collections.map((c) => c.name));
+        if (!name) return;
+        await bulk("move", { collection: name }); toast(`Moved ${chosen.length} to ${name}`); media.selected.clear(); loadMedia();
+      } else if (action === "tag" || action === "untag") {
+        const value = await askInput(action === "tag" ? "Add tags" : "Remove tags", "Tags, comma separated", "", media.tags.map((t) => t.name));
+        if (!splitTags(value).length) return;
+        await bulk(action, { tags: splitTags(value) }); toast(action === "tag" ? "Tags added" : "Tags removed"); loadMedia();
+      } else if (action === "delete") {
+        if (!(await confirmAction(`Delete ${chosen.length} file${chosen.length > 1 ? "s" : ""}?`, "They are removed from the library and the GPU server. Finished videos are not affected.", "Delete"))) return;
+        await bulk("delete"); toast(`Deleted ${chosen.length}`, "", "warn"); media.selected.clear(); loadMedia();
+      }
+    } catch (error) { toast("Action failed", error.message, "bad"); }
+  });
+
+  // ---- uploads (files, folders, drag & drop)
+
+  const importItems = new Map();
+  function renderImports() {
+    const box = $("mediaImports");
+    box.hidden = !importItems.size;
+    box.innerHTML = [...importItems.values()].map((item) => `<div class="import-item">
+      <strong>${esc(item.title)}</strong><span class="hint">${esc(item.status)}</span>
+      <div class="progress thin"><i style="width:${Math.round((item.progress || 0) * 100)}%"></i></div></div>`).join("");
+  }
+
+  async function uploadMany(files, collection) {
+    const list = [...files].filter((file) => kindOf(file));
+    const skipped = files.length - list.length;
+    const big = list.filter((file) => file.size > MAX_TUNNEL_BYTES);
+    const queue = list.filter((file) => file.size <= MAX_TUNNEL_BYTES);
+    if (!queue.length) return toast("Nothing to upload", big.length ? "Files over 100 MB can't pass the tunnel: import them from Google Drive." : "No images, audio or video found.", "warn", 8000);
+    const key = `upload-${Date.now()}`;
+    const item = { title: `Uploading ${queue.length} file${queue.length > 1 ? "s" : ""} to ${collection}`, status: "starting", progress: 0 };
+    importItems.set(key, item); renderImports();
+    let done = 0, duplicates = 0, failed = 0;
+    const progress = new Map();
+    const paint = () => {
+      item.progress = [...progress.values()].reduce((a, b) => a + b, 0) / queue.length;
+      item.status = `${done}/${queue.length} done${duplicates ? ` · ${duplicates} already in library` : ""}${failed ? ` · ${failed} failed` : ""}`;
+      renderImports();
+    };
+    const worker = async () => {
+      while (queue.length) {
+        const file = queue.shift();
+        try {
+          const asset = await uploadFile(file, (fraction) => { progress.set(file, fraction); paint(); }, { collection });
+          if (asset.duplicate) duplicates += 1;
+        } catch { failed += 1; }
+        progress.set(file, 1); done += 1; paint();
+      }
+    };
+    const total = queue.length;
+    await Promise.all([worker(), worker(), worker()]);
+    toast("Upload finished", `${total - failed} of ${total} stored${duplicates ? `, ${duplicates} were already there` : ""}${skipped ? `, ${skipped} non-media skipped` : ""}${big.length ? `, ${big.length} over 100 MB (use Drive)` : ""}`, failed ? "warn" : "ok", 8000);
+    setTimeout(() => { importItems.delete(key); renderImports(); }, 4000);
+    loadMedia();
+  }
+
+  async function chooseCollection(defaultName) {
+    const name = await askInput("Upload to collection", "Collection (new or existing)", defaultName || media.collection || "Uploads", media.collections.map((c) => c.name));
+    return name || null;
+  }
+
+  $("mediaFiles").addEventListener("change", async (event) => {
+    const files = [...event.target.files]; event.target.value = "";
+    const collection = await chooseCollection(); if (collection) uploadMany(files, collection);
+  });
+  $("mediaFolder").addEventListener("change", async (event) => {
+    const files = [...event.target.files]; event.target.value = "";
+    const folder = files[0]?.webkitRelativePath?.split("/")[0];
+    const collection = await chooseCollection(folder); if (collection) uploadMany(files, collection);
+  });
+
+  function toggleImportMenu(open) { $("importMenu").hidden = !open; $("importBtn").setAttribute("aria-expanded", String(open)); }
+  $("importBtn").onclick = () => toggleImportMenu($("importMenu").hidden);
+  $("importMenu").addEventListener("click", (event) => {
+    const choice = event.target.closest("[data-import]")?.dataset.import;
+    if (!choice) return;
+    toggleImportMenu(false);
+    if (choice === "files") $("mediaFiles").click();
+    else if (choice === "folder") $("mediaFolder").click();
+    else openDrive("");
+  });
+  document.addEventListener("click", (event) => { if (!event.target.closest("#importBtn") && !event.target.closest("#importMenu")) toggleImportMenu(false); });
+
+  async function entryFiles(entry, out) {
+    if (entry.isFile) { await new Promise((resolve) => entry.file((file) => { out.push(file); resolve(); }, resolve)); return; }
+    if (!entry.isDirectory) return;
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((resolve) => reader.readEntries(resolve, () => resolve([])));
+      if (!batch.length) break;
+      for (const child of batch) await entryFiles(child, out);
+    }
+  }
+
+  let dragDepth = 0, overlay = null;
+  document.addEventListener("dragenter", (event) => {
+    if ($("page-assets").hidden || !event.dataTransfer?.types?.includes("Files")) return;
+    dragDepth += 1;
+    if (!overlay) { overlay = document.createElement("div"); overlay.className = "drop-overlay"; overlay.textContent = "Drop files or folders to add them to your media"; document.body.append(overlay); }
+  });
+  document.addEventListener("dragleave", () => { if (overlay && --dragDepth <= 0) { overlay.remove(); overlay = null; dragDepth = 0; } });
+  document.addEventListener("dragover", (event) => { if (overlay) event.preventDefault(); });
+  document.addEventListener("drop", async (event) => {
+    if (!overlay) return;
+    event.preventDefault(); overlay.remove(); overlay = null; dragDepth = 0;
+    const files = [];
+    const items = [...(event.dataTransfer.items || [])].map((item) => item.webkitGetAsEntry && item.webkitGetAsEntry()).filter(Boolean);
+    if (items.length) for (const entry of items) await entryFiles(entry, files);
+    else files.push(...event.dataTransfer.files);
+    const folder = items.find((entry) => entry.isDirectory)?.name;
+    const collection = await chooseCollection(folder);
+    if (collection) uploadMany(files, collection);
+  });
+
+  // ---- Google Drive
+
+  const drive = { path: "", selected: new Set(), data: null };
+  async function openDrive(path) {
+    drive.path = path; drive.selected.clear();
+    if (!$("driveDialog").open) $("driveDialog").showModal();
+    $("driveList").innerHTML = `<div class="skeleton" style="height:120px;margin:6px"></div>`;
+    try {
+      drive.data = await api(`/v1/drive?path=${encodeURIComponent(path)}`);
+    } catch (error) {
+      $("driveList").innerHTML = `<div class="alert bad" style="margin:6px">${esc(error.message)}</div>`;
+      return;
+    }
+    renderDrive();
+  }
+
+  function renderDrive() {
+    const data = drive.data;
+    if (!data.available) {
+      $("driveCrumbs").innerHTML = "";
+      $("driveList").innerHTML = `<div class="card-body" style="display:grid;gap:10px"><strong>Google Drive is not mounted on the server</strong>
+        <span class="hint">Run this in a new cell of your Colab notebook, allow access, then open this dialog again:</span>
+        <div class="code">from google.colab import drive\ndrive.mount('/content/drive')</div></div>`;
+      paintDriveFooter();
+      return;
+    }
+    const parts = data.path ? data.path.split("/") : [];
+    $("driveCrumbs").innerHTML = [`<button type="button" data-drive-path="">My Drive</button>`]
+      .concat(parts.map((part, i) => `<span class="hint">›</span><button type="button" data-drive-path="${esc(parts.slice(0, i + 1).join("/"))}">${esc(part)}</button>`)).join("");
+    const rows = [];
+    if (data.parent !== null) rows.push(`<div class="drive-row"><span></span><span>↩</span><button class="linklike" type="button" data-drive-open="${esc(data.parent)}">Up one level</button><span></span></div>`);
+    for (const folder of data.folders) rows.push(`<div class="drive-row"><input type="checkbox" data-drive-select="${esc(folder.path)}" aria-label="Select folder ${esc(folder.name)}"><svg width="18" height="18"><use href="#i-assets"/></svg><button class="linklike name" type="button" data-drive-open="${esc(folder.path)}">${esc(folder.name)}</button><span class="hint">folder</span></div>`);
+    for (const file of data.files) rows.push(`<div class="drive-row"><input type="checkbox" data-drive-select="${esc(file.path)}" aria-label="Select ${esc(file.name)}"><span class="hint" style="font-size:11px;text-transform:uppercase">${esc(file.kind.slice(0, 3))}</span><span class="name">${esc(file.name)}</span><span class="hint">${bytes(file.size)}</span></div>`);
+    if (!data.folders.length && !data.files.length) rows.push(`<p class="hint" style="padding:12px;margin:0">No folders or media files here.</p>`);
+    rows.unshift(`<div class="drive-row" style="border-bottom:1px solid var(--line);border-radius:0"><input type="checkbox" data-drive-select="${esc(data.path)}" aria-label="Select this whole folder"><span></span><strong>${data.files.length || data.folders.length ? "Import this whole folder" : "This folder"}</strong><span class="hint">${data.files.length} files here</span></div>`);
+    $("driveList").innerHTML = rows.join("");
+    $("driveCollection").placeholder = parts[parts.length - 1] || "Google Drive";
+    paintDriveFooter();
+  }
+
+  function paintDriveFooter() {
+    const count = drive.selected.size;
+    $("driveSelected").textContent = count ? `${count} selected` : "Nothing selected";
+    $("driveImport").disabled = !count;
+  }
+
+  $("driveList").addEventListener("click", (event) => {
+    const open = event.target.closest("[data-drive-open]");
+    if (open) return openDrive(open.dataset.driveOpen);
+  });
+  $("driveList").addEventListener("change", (event) => {
+    const box = event.target.closest("[data-drive-select]");
+    if (!box) return;
+    if (box.checked) drive.selected.add(box.dataset.driveSelect); else drive.selected.delete(box.dataset.driveSelect);
+    paintDriveFooter();
+  });
+  $("driveCrumbs").addEventListener("click", (event) => { const crumb = event.target.closest("[data-drive-path]"); if (crumb) openDrive(crumb.dataset.drivePath); });
+  $("driveClose").onclick = $("driveCancel").onclick = () => $("driveDialog").close();
+  $("driveImport").onclick = async () => {
+    const body = { paths: [...drive.selected], recursive: $("driveRecursive").checked, tags: splitTags($("driveTags").value) };
+    if ($("driveCollection").value.trim()) body.collection = $("driveCollection").value.trim();
+    $("driveImport").disabled = true;
+    try {
+      const started = await post("/v1/drive/import", body);
+      $("driveDialog").close();
+      trackImport(started);
+      if (location.hash !== "#assets") location.hash = "#assets";
+    } catch (error) {
+      toast("Import could not start", error.message, "bad", 8000);
+      paintDriveFooter();
+    }
+  };
+
+  function trackImport(state) {
+    const key = `drive-${state.id}`;
+    const update = (s) => {
+      importItems.set(key, {
+        title: `Google Drive → ${s.collection}`,
+        status: `${s.done}/${s.total} · ${s.imported} new${s.duplicates ? ` · ${s.duplicates} already in library` : ""}${s.failed ? ` · ${s.failed} failed` : ""}`,
+        progress: s.total ? s.done / s.total : 0,
+      });
+      renderImports();
+    };
+    update(state);
+    const poll = async () => {
+      try {
+        const s = await api(`/v1/imports/${state.id}`);
+        update(s);
+        if (s.status === "running") return setTimeout(poll, 1000);
+        toast("Drive import finished", `${s.imported} new, ${s.duplicates} already there${s.failed ? `, ${s.failed} failed: ${s.errors[0] || ""}` : ""}`, s.failed ? "warn" : "ok", 9000);
+        media.collection = s.collection;
+        loadMedia();
+        setTimeout(() => { importItems.delete(key); renderImports(); }, 5000);
+      } catch (error) {
+        toast("Lost track of the import", error.message, "warn");
+      }
+    };
+    setTimeout(poll, 800);
+  }
+
+  // ---- picker (Create references, music bed, agent attachments)
+
+  const picker = { kinds: [], multiple: true, selected: new Map(), resolve: null, assets: [], collection: "", q: "" };
+  async function loadPicker() {
+    try {
+      const data = await libraryQuery({ kind: picker.kinds.length === 1 ? picker.kinds[0] : "", collection: picker.collection, q: picker.q });
+      picker.assets = data.assets.filter((a) => !picker.kinds.length || picker.kinds.includes(a.kind));
+      const current = picker.collection;
+      $("pickerCollection").innerHTML = `<option value="">All collections</option>` + data.collections.map((c) => `<option ${c.name === current ? "selected" : ""}>${esc(c.name)}</option>`).join("");
+      $("pickerGrid").innerHTML = picker.assets.map((a) => mediaCardHtml(a, picker.selected.has(a.id))).join("") || `<p class="hint">Nothing here. Import files on the Media page.</p>`;
+      paintPicker();
+    } catch (error) {
+      $("pickerGrid").innerHTML = `<div class="alert bad">${esc(error.message)}</div>`;
+    }
+  }
+  function paintPicker() {
+    $("pickerCount").textContent = picker.selected.size ? `${picker.selected.size} selected` : "Click to select";
+    $("pickerOk").disabled = !picker.selected.size;
+    $("pickerOk").textContent = picker.selected.size > 1 ? `Add ${picker.selected.size}` : "Add";
+    document.querySelectorAll("#pickerGrid .media-card").forEach((card) => {
+      const on = picker.selected.has(card.dataset.asset);
+      card.classList.toggle("selected", on);
+      card.querySelector("[data-check]").checked = on;
+    });
+  }
+  function pickAssets({ kinds = [], multiple = true, title = "Choose from media" } = {}) {
+    Object.assign(picker, { kinds, multiple, selected: new Map(), collection: "", q: "" });
+    $("pickerTitle").textContent = title;
+    $("pickerSearch").value = "";
+    $("pickerDialog").showModal();
+    loadPicker();
+    return new Promise((resolve) => { picker.resolve = resolve; });
+  }
+  function closePicker(result) {
+    if ($("pickerDialog").open) $("pickerDialog").close();
+    const resolve = picker.resolve; picker.resolve = null;
+    if (resolve) resolve(result);
+  }
+  $("pickerGrid").addEventListener("click", (event) => {
+    const card = event.target.closest(".media-card");
+    if (!card) return;
+    const asset = picker.assets.find((a) => a.id === card.dataset.asset);
+    if (event.target.closest("[data-play]")) { event.preventDefault(); return playAsset(asset); }
+    if (event.target.matches("[data-check]")) event.preventDefault();
+    if (picker.selected.has(asset.id)) picker.selected.delete(asset.id);
+    else { if (!picker.multiple) picker.selected.clear(); picker.selected.set(asset.id, asset); }
+    paintPicker();
+  });
+  $("pickerGrid").addEventListener("dblclick", (event) => {
+    const card = event.target.closest(".media-card");
+    const asset = card && picker.assets.find((a) => a.id === card.dataset.asset);
+    if (asset) { picker.selected.set(asset.id, asset); closePicker([...picker.selected.values()]); }
+  });
+  $("pickerCollection").onchange = () => { picker.collection = $("pickerCollection").value; loadPicker(); };
+  let pickerTimer = null;
+  $("pickerSearch").addEventListener("input", () => { clearTimeout(pickerTimer); pickerTimer = setTimeout(() => { picker.q = $("pickerSearch").value.trim(); loadPicker(); }, 250); });
+  $("pickerOk").onclick = () => closePicker([...picker.selected.values()]);
+  $("pickerCancel").onclick = $("pickerClose").onclick = () => closePicker([]);
+  $("pickerDialog").addEventListener("close", () => closePicker([]));
+
+  $("refsFromLibrary").onclick = async () => {
+    const chosen = await pickAssets({ kinds: ["image", "video", "audio"], title: "Add references from media" });
+    let added = 0;
+    for (const asset of chosen) if (!state.refs.some((r) => r.asset === asset.id)) { addAssetRef(asset, true); added += 1; }
+    if (added) toast(`Added ${added} reference${added > 1 ? "s" : ""}`);
+  };
+  $("musicFromLibrary").onclick = async () => {
+    const [asset] = await pickAssets({ kinds: ["audio"], multiple: false, title: "Choose a music bed" });
+    if (asset) setMusicBed(asset);
+  };
+  $("agentFromLibrary").onclick = async () => {
+    const chosen = await pickAssets({ title: "Attach from media" });
+    if (chosen.length) attachToAgent(chosen);
+  };
 
   // -------------------------------------------------------------- connect
 

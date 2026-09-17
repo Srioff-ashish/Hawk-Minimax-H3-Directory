@@ -618,6 +618,8 @@ def start(
         "COMFY_URL": f"http://127.0.0.1:{COMFY_PORT}",
         "DATA_DIR": data_dir,
         "MAX_UPLOAD_MB": str(TUNNEL_UPLOAD_MB),
+        "COMFY_INPUT_DIR": os.path.join(comfy_dir, "input"),
+        "HAWK_DRIVE_ROOT": "/content/drive/MyDrive",
         "HAWK_UNET": models["unet_name"],
         "HAWK_CLIP": models["clip_name"],
         "HAWK_VIDEO_VAE": models["video_vae"],

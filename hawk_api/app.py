@@ -11,17 +11,21 @@ import re
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qs
 
-from fastapi import FastAPI, File, Request, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent import AgentService
+from .library import DriveBrowser, ImportManager
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
-from .schemas import AgentMessageIn, AgentSessionIn, ImageRequest, PlanRequest, PromptIn, UrlAssetRequest, VideoRequest
+from .schemas import (
+    AgentMessageIn, AgentSessionIn, AssetBulk, AssetUpdate, DriveImportIn, ImageRequest, PlanRequest, PromptIn,
+    UrlAssetRequest, VideoRequest,
+)
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
 #: (they contain no data; every API call the Studio makes still needs the token).
@@ -80,7 +84,9 @@ class AuthMiddleware:
 def create_app(settings: Settings | None = None, service: HawkService | None = None) -> FastAPI:
     settings = settings or Settings.from_env()
     service = service or HawkService(settings)
-    mcp = build_mcp(service)
+    drive = DriveBrowser(settings.drive_root)
+    imports = ImportManager(service, drive)
+    mcp = build_mcp(service, drive=drive, imports=imports)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -97,6 +103,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         await agent.start()
         async with mcp.session_manager.run():
             yield
+        await imports.stop()
         await agent.stop()
         await service.stop()
 
@@ -138,18 +145,24 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     # ----------------------------------------------------------- assets
 
-    async def _store_uploads(files: list[UploadFile]) -> dict:
+    async def _store_uploads(files: list[UploadFile], collection: str | None = None, tags: str | None = None) -> dict:
         limit = settings.max_upload_mb * 1024 * 1024
         assets = []
         for upload in files:
             if upload.size is not None and upload.size > limit:
                 raise RequestError(f"{upload.filename} is larger than {settings.max_upload_mb} MB.")
-            assets.append(service.asset_view(await service.add_asset(upload.filename or "upload", upload.file, upload.content_type, upload.size)))
+            asset = await service.add_asset(upload.filename or "upload", upload.file, upload.content_type, upload.size,
+                                            collection=collection, tags=tags)
+            assets.append(service.asset_view(asset))
         return {"assets": assets}
 
     @app.post("/v1/assets", tags=["assets"], status_code=201)
-    async def upload_assets(files: list[UploadFile] = File(..., description="One or more image, audio or video files.")):
-        return await _store_uploads(files)
+    async def upload_assets(
+        files: list[UploadFile] = File(..., description="One or more image, audio or video files."),
+        collection: str | None = Form(None, description="Collection for these files (default Uploads)."),
+        tags: str | None = Form(None, description="Comma-separated tags."),
+    ):
+        return await _store_uploads(files, collection, tags)
 
     @app.post("/v1/assets/from-url", tags=["assets"], status_code=201)
     async def asset_from_url(body: UrlAssetRequest):
@@ -158,6 +171,62 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/assets", tags=["assets"])
     async def list_assets(limit: int = 100):
         return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit)]}
+
+    @app.get("/v1/library", tags=["assets"])
+    async def library(kind: str | None = None, collection: str | None = None, tag: str | None = None, q: str | None = None,
+                      limit: int = 200, offset: int = 0):
+        items, total = service.search_assets(kind=kind, collection=collection, tag=tag, query=q, limit=min(limit, 1000), offset=offset)
+        return {"assets": [service.asset_view(a) for a in items], "total": total,
+                "collections": service.collections(), "tags": service.tags()}
+
+    @app.patch("/v1/assets/{asset_id}", tags=["assets"])
+    async def update_asset(asset_id: str, body: AssetUpdate):
+        return service.asset_view(service.update_asset(asset_id, collection=body.collection, tags=body.tags,
+                                                       add_tags=body.add_tags, remove_tags=body.remove_tags, filename=body.filename))
+
+    @app.delete("/v1/assets/{asset_id}", tags=["assets"])
+    async def delete_asset(asset_id: str):
+        service.delete_asset(asset_id)
+        return {"deleted": [asset_id]}
+
+    @app.post("/v1/assets/bulk", tags=["assets"])
+    async def bulk_assets(body: AssetBulk):
+        done, errors = [], []
+        for asset_id in body.ids:
+            try:
+                if body.action == "delete":
+                    service.delete_asset(asset_id)
+                elif body.action == "move":
+                    if not (body.collection or "").strip():
+                        raise RequestError("Give a collection to move to.")
+                    service.update_asset(asset_id, collection=body.collection)
+                elif body.action == "tag":
+                    service.update_asset(asset_id, add_tags=body.tags)
+                else:
+                    service.update_asset(asset_id, remove_tags=body.tags)
+                done.append(asset_id)
+            except (NotFound, RequestError) as exc:
+                errors.append(f"{asset_id}: {exc}")
+        return {"action": body.action, "done": done, "errors": errors}
+
+    @app.get("/v1/drive", tags=["assets"])
+    async def drive_browse(path: str = ""):
+        if not drive.available:
+            return {"available": False, "root": settings.drive_root,
+                    "hint": "Mount Google Drive in the Colab notebook: from google.colab import drive; drive.mount('/content/drive')"}
+        return drive.browse(path)
+
+    @app.post("/v1/drive/import", tags=["assets"], status_code=202)
+    async def drive_import(body: DriveImportIn):
+        return await imports.start(body.paths, recursive=body.recursive, collection=body.collection, tags=body.tags)
+
+    @app.get("/v1/imports", tags=["assets"])
+    async def imports_recent():
+        return {"imports": imports.recent()}
+
+    @app.get("/v1/imports/{import_id}", tags=["assets"])
+    async def import_status(import_id: str):
+        return imports.get(import_id)
 
     @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
     async def asset_file(asset_id: str, w: int = 0):

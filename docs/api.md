@@ -327,6 +327,15 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
 
+### Media library and Google Drive import
+
+Every uploaded, imported or generated file is an **asset** in a **collection** (default `Uploads`) with optional **tags**. Identical files are stored once: uploading the same content again returns the existing asset with `duplicate: true`.
+
+- **Upload in bulk:** `POST /v1/assets` accepts many `files` plus `collection` and comma-separated `tags` form fields. Studio's **Media** page uploads files or whole folders three at a time (drag and drop works too); files over 100 MB can't pass the Cloudflare tunnel, so import those from Drive.
+- **Google Drive (Colab):** mount Drive in the notebook (`from google.colab import drive; drive.mount('/content/drive')`). `GET /v1/drive?path=` browses My Drive; `POST /v1/drive/import` `{paths, recursive, collection?, tags}` imports files or folders in the background, copying them on the server straight into ComfyUI's input folder (no tunnel, no size limit). `GET /v1/imports/<id>` reports progress. The Colab launcher sets `COMFY_INPUT_DIR` and `HAWK_DRIVE_ROOT`.
+- **Organise:** `GET /v1/library?kind=&collection=&tag=&q=` (with collection and tag counts), `PATCH /v1/assets/<id>`, `POST /v1/assets/bulk` `{ids, action: move|tag|untag|delete}`, `DELETE /v1/assets/<id>`. Video thumbnails need ffmpeg on the server.
+- **Use:** in Studio select media and choose *Use in Create*, *Attach to agent* or *Set as music bed*, or open the media picker from Create (references, music bed) and the agent chat. MCP tools for chats and the agent: `list_references` (filters), `list_collections`, `organize_assets`, `browse_drive`, `import_from_drive`, `get_import`.
+
 ### Editable prompts
 
 Studio's **Prompts** page (or `/v1/prompts`) lets you rewrite the **agent** prompt and the **story planner** prompt completely. The agent prompt uses `{{PERSONA}}`, `{{PIPELINE}}` and `{{TOOLS}}` placeholders (the tool list is appended if you remove `{{TOOLS}}`); keep its JSON reply format. The planner prompt must keep the JSON output with a `segments` list. Every save keeps the previous version (last 30), and reset returns to the built-in text. Prompts are stored in `DATA_DIR/prompts.json`.

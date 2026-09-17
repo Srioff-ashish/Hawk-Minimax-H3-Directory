@@ -125,6 +125,17 @@ The start cell also prints a **Studio** link: `https://….trycloudflare.com/t/<
 
 Like the connector, the link changes every session, and uploads are limited to 100 MB (use the URL box for bigger files).
 
+### Media page and Google Drive
+
+**Media** in Studio's sidebar holds every image, video and audio file: upload many files or whole folders, drop them on the page, or import from Google Drive. For Drive, run this once in a new notebook cell and allow access:
+
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+Then *Import → From Google Drive* browses My Drive; pick files or folders, a collection and tags. Drive imports are copied on the Colab machine, so they're fast and have no 100 MB limit. Select media to use it in Create, attach it to an agent chat, or set a music bed; Create and the agent chat also have a *From media* picker.
+
 ### Agent page
 
 **Agent** in Studio's sidebar is an autonomous director. Start a chat, pick the model (Grok 4.6 by default, or Grok 4.3 and any other Atlas model), optionally set a **Persona**, attach files and describe the video. It plans, renders, waits and fixes problems by itself, shows every tool it uses, and plays the result in the chat. It runs on the Colab server, so you can close the browser; press **Stop** to end a run. It uses the Studio tools in-process, never through the tunnel. Details: [API → Agent](api.md#agent-an-autonomous-video-director).
