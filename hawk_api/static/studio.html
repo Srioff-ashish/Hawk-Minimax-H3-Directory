@@ -971,8 +971,8 @@
       </div>
       <div class="field" id="genRefsField"><span class="label">Reference images</span><span class="hint">Optional: edit or remix these with Seedream.</span>
         <div class="row" id="genRefs"></div></div>
-      <div class="field" id="genLoraField"><span class="label">Krea 2 LoRAs</span><span class="hint">Local only. Trigger words are added for you; one adult LoRA at a time.</span>
-        <div class="lora-list" id="genLoras"></div></div>
+      <div class="field" id="genLoraField"><span class="label">Krea 2 LoRAs</span><span class="hint">Local only. Trigger words are added for you. Stack as many as you like, up to 3 adult LoRAs.</span>
+        <div class="lora-list" id="genLoras"></div><div class="gen-status warn" id="genLoraWarn" hidden></div></div>
       <div id="genResult" hidden style="display:grid;gap:8px"></div>
     </div>
   </form>
@@ -2349,6 +2349,14 @@
     }).join("") : `<span class="hint">No Krea 2 LoRAs installed yet. Add them in the notebook's Krea 2 cell; the catalogue is in DATA_DIR/image_loras.json.</span>`;
     if ($("genLoras").dataset.html !== html) { $("genLoras").innerHTML = html; $("genLoras").dataset.html = html; }
     $("genSteps").disabled = !showLoras;
+    paintLoraWarn();
+  }
+  function paintLoraWarn() {
+    const adult = (gen.options?.local?.loras || []).filter((l) => l.kind === "adult" && gen.loras[l.file]);
+    const total = adult.reduce((sum, l) => sum + Math.abs(gen.loras[l.file].strength), 0);
+    const warn = $("genLoraWarn");
+    warn.hidden = $("genLoraField").hidden || adult.length < 2 || total <= 1.0;
+    warn.textContent = `${adult.length} adult LoRAs at a combined ${total.toFixed(2)}. Above about 1.0 they tend to over-cook (melted anatomy, plastic skin); try around ${(1 / adult.length).toFixed(2)} each.`;
   }
   $("genOpen").onclick = () => openGenerate([]);
   $("genClose").onclick = $("genCancel").onclick = () => $("genDialog").close();
@@ -2370,13 +2378,15 @@
     const info = (gen.options?.local?.loras || []).find((l) => l.file === file) || {};
     if (event.target.type === "checkbox") {
       if (event.target.checked) {
-        if (info.kind === "adult") for (const other of gen.options.local.loras) if (other.kind === "adult" && gen.loras[other.file]) delete gen.loras[other.file];
+        const adults = (gen.options?.local?.loras || []).filter((l) => l.kind === "adult" && gen.loras[l.file]).length;
+        if (info.kind === "adult" && adults >= 3) { event.target.checked = false; return toast("3 adult LoRAs at most", "Untick one first.", "warn", 3000); }
         gen.loras[file] = { strength: Number(row.querySelector('input[type="range"]').value) };
       } else delete gen.loras[file];
       renderGenOptions();
     } else if (event.target.type === "range" && gen.loras[file]) {
       gen.loras[file].strength = Number(event.target.value);
       row.querySelector("output").textContent = Number(event.target.value).toFixed(2);
+      paintLoraWarn();
     }
   });
   $("genForm").addEventListener("submit", async (event) => {
@@ -2386,7 +2396,7 @@
     if (!prompt) return $("genPrompt").focus();
     const engine = genEngine();
     const refs = gen.refs.map((a) => a.id);
-    const body = { prompt, n: Number($("genCount").value), engine: refs.length ? "seedream" : engine, reference_asset_ids: refs };
+    const body = { prompt, n: Number($("genCount").value), engine: refs.length ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
     if ($("genSize").value) body.size = $("genSize").value;
     if ($("genSeed").value !== "") body.seed = Number($("genSeed").value);
     if (!refs.length && (engine === "auto" || engine === "local")) {

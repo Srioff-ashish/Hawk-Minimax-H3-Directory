@@ -682,6 +682,7 @@ class HawkService:
         engine: str | None = None,
         loras: list[dict] | None = None,
         steps: int | None = None,
+        max_adult_loras: int = 1,
     ) -> dict:
         """Make images and store them as assets, ready to use as picture references.
 
@@ -717,12 +718,14 @@ class HawkService:
 
         if not references and engine in ("auto", "local"):
             try:
-                local = await self.local_images.generate(prompt, size=size, n=n, seed=seed, loras=loras, steps=steps)
+                local = await self.local_images.generate(prompt, size=size, n=n, seed=seed, loras=loras, steps=steps,
+                                                         max_adult_loras=max_adult_loras)
             except LocalImageError as exc:
-                if engine == "local" or str(exc).startswith("Refused"):
+                if engine == "local" or exc.fatal:
                     raise RequestError(str(exc)) from None
                 tried.append({"engine": "krea2", "skipped": str(exc)})
             else:
+                notes.extend(local.warnings)
                 return await self._image_result(prompt, local.images, "krea2/turbo", "krea2", notes, tried, reference_asset_ids,
                                           extra={"loras": local.loras, "seconds": local.seconds})
         if loras and not references and engine in ("turbo", "seedream", "atlas"):

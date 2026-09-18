@@ -27,6 +27,8 @@ DEFAULT_STEPS = 8
 WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
+MAX_ADULT_LORAS = 3  # the most a manual (Studio) request may stack; the agent stays at 1
+ADULT_STRENGTH_WARN = 1.0  # combined adult LoRA strength above this tends to over-cook Turbo
 
 # Local generation has no provider-side moderation, so refuse prompts that point at minors.
 _MINOR = re.compile(
@@ -38,7 +40,14 @@ _MINOR = re.compile(
 
 
 class LocalImageError(RuntimeError):
-    """The local engine can't make this image (not installed, busy, failed or refused)."""
+    """The local engine can't make this image (not installed, busy, failed or refused).
+
+    fatal: the request itself is wrong (a LoRA name, too many adult LoRAs), so falling back to
+    another engine would silently drop what was asked for."""
+
+    def __init__(self, message: str, fatal: bool = False):
+        super().__init__(message)
+        self.fatal = fatal
 
 
 @dataclass
@@ -66,6 +75,7 @@ class LocalResult:
     images: list[bytes]
     loras: list[dict] = field(default_factory=list)
     seconds: float = 0.0
+    warnings: list[str] = field(default_factory=list)
 
 
 def check_prompt(prompt: str) -> None:
@@ -73,7 +83,8 @@ def check_prompt(prompt: str) -> None:
     if match:
         raise LocalImageError(
             f"Refused: the prompt mentions {match.group(0)!r}. Images of anyone under 18 are not allowed "
-            "(this rule applies to every engine and can't be changed)."
+            "(this rule applies to every engine and can't be changed).",
+            fatal=True,
         )
 
 
@@ -170,9 +181,10 @@ class LocalImageEngine:
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True))
         return items
 
-    async def resolve_loras(self, requested: list[dict] | None) -> tuple[list[tuple[str, float]], list[ImageLora]]:
+    async def resolve_loras(self, requested: list[dict] | None, max_adult: int = 1
+                            ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:
         if not requested:
-            return [], []
+            return [], [], []
         items = [item for item in await self.catalogue() if item.installed]
         files = await self.service.available_models("loras")
         chosen: list[tuple[str, float]] = []
@@ -184,7 +196,7 @@ class LocalImageEngine:
                       [i for i in items if key and (key in i.file.lower() or key == i.label.lower())]
             if len(matches) != 1:
                 options = ", ".join(i.file for i in items) or "none installed"
-                raise LocalImageError(f"Image LoRA {name!r} matches {len(matches)} installed files. Installed: {options}.")
+                raise LocalImageError(f"Image LoRA {name!r} matches {len(matches)} installed files. Installed: {options}.", fatal=True)
             item = matches[0]
             path = next((f for f in files if f == item.file or f.endswith("/" + item.file)), item.file)
             strength = float(spec["strength"]) if spec.get("strength") is not None else item.strength
@@ -192,14 +204,22 @@ class LocalImageEngine:
                 continue
             chosen.append((path, strength))
             used.append(item)
-        if sum(1 for item in used if item.kind == "adult") > 1:
-            raise LocalImageError("Use one adult LoRA at a time; they overlap and fight each other.")
-        return chosen, used
+        adult = [(item, strength) for item, (_, strength) in zip(used, chosen) if item.kind == "adult"]
+        if len(adult) > max_adult:
+            raise LocalImageError("Use one adult LoRA at a time; they overlap and fight each other." if max_adult == 1
+                                  else f"At most {max_adult} adult LoRAs in one image.", fatal=True)
+        warnings = []
+        total = sum(abs(strength) for _, strength in adult)
+        if len(adult) > 1 and total > ADULT_STRENGTH_WARN:
+            warnings.append(f"{len(adult)} adult LoRAs at a combined strength of {total:.2f}: above about {ADULT_STRENGTH_WARN:.1f} "
+                            "they tend to over-cook (melted anatomy, plastic skin). Lower them if the result looks off.")
+        return chosen, used, warnings
 
     # ------------------------------------------------------------ generate
 
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
-                       loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False) -> LocalResult:
+                       loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False,
+                       max_adult_loras: int = 1) -> LocalResult:
         check_prompt(prompt)
         status = await self.status()
         if not status.get("reachable"):
@@ -208,7 +228,7 @@ class LocalImageEngine:
             raise LocalImageError("Krea 2 is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
         if status["busy"] and not wait_if_busy:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
-        chosen, used = await self.resolve_loras(loras)
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)))
         width, height = parse_size(size)
         text = prompt.strip()
         for item in used:  # trigger words go in automatically
@@ -230,7 +250,7 @@ class LocalImageEngine:
         except ComfyError as exc:
             raise LocalImageError(f"ComfyUI rejected the Krea 2 graph: {exc}") from exc
         images = await self._collect(prompt_id)
-        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1))
+        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 
     async def _collect(self, prompt_id: str) -> list[bytes]:
         deadline = time.monotonic() + WAIT_SECONDS

@@ -117,6 +117,7 @@ class ImageRequest(BaseModel):
     engine: str | None = Field(None, description="auto (default: local Krea 2 when idle, else z-image/turbo, else Seedream), local, turbo or seedream.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="Krea 2 LoRAs for local generation (file name or a unique part, optional strength).")
     steps: int | None = Field(None, ge=1, le=50, description="Local Krea 2 steps; default 8 (or the LoRA's recommendation).")
+    max_adult_loras: int = Field(1, ge=1, le=3, description="Studio's manual mode may stack up to 3 adult Krea 2 LoRAs (with a warning above a combined strength of 1.0). Agents keep 1.")
 
 
 class AssetUpdate(BaseModel):

@@ -523,6 +523,16 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((sampler["steps"], sampler["scheduler"]), (12, "beta"), "the LoRA's recommended sampler settings")
         two_adult = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
         self.assertEqual(two_adult.status_code, 422)
+        auto_two = await self.http.post("/v1/images", json={"prompt": "x", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
+        self.assertEqual(auto_two.status_code, 422, "a LoRA error is not hidden by falling back to another engine")
+        manual = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "max_adult_loras": 3,
+                                                          "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
+        self.assertEqual(manual.status_code, 201, manual.text)
+        self.assertIn("combined strength of 1.30", manual.json()["note"])
+        quiet = (await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "max_adult_loras": 3,
+                                                          "loras": [{"name": "mystic", "strength": 0.4}, {"name": "snofs_krea2", "strength": 0.5}]})).json()
+        self.assertNotIn("note", quiet)
+        self.assertEqual((await self.http.post("/v1/images", json={"prompt": "x", "max_adult_loras": 4})).status_code, 422)
         refused = await self.http.post("/v1/images", json={"prompt": "a 16 year old girl on a beach"})
         self.assertEqual(refused.status_code, 422, "refused outright, not passed to another engine")
         self.assertIn("under 18", refused.json()["error"])
