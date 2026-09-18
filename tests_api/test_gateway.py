@@ -72,6 +72,8 @@ class FakeComfy:
         self.output_dir: str | None = None  # also write outputs to disk, like real ComfyUI
         self.final_bytes = b"FINAL VIDEO BYTES"
         self.missing_nodes: set[str] = set()  # custom node classes this ComfyUI doesn't have
+        self.fail_image = None  # callable(prompt) -> error message for an image graph, or None
+        self.log_lines = ["Starting server\n", "Hawk H3: masked attention skips cuDNN on this Blackwell GPU\n"]
         self.model_files = {
             "loras": [TURBO, REALISM],
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
@@ -87,6 +89,7 @@ class FakeComfy:
             web.get("/view", self.view),
             web.get("/models/{folder}", self.models),
             web.get("/object_info/{node}", self.object_info),
+            web.get("/internal/logs/raw", self.logs),
             web.get("/ws", self.ws),
         ])
 
@@ -136,6 +139,10 @@ class FakeComfy:
         by_class = lambda cls: [(i, n) for i, n in prompt.items() if n["class_type"] == cls]
         for node_id, node in by_class("SaveImage"):  # an image graph (local Krea 2)
             await asyncio.sleep(0.05)
+            failure = self.fail_image(prompt) if self.fail_image else None
+            if failure:
+                messages.append(["execution_error", {"prompt_id": pid, "node_id": "7", "node_type": "KSampler", "exception_message": failure}])
+                return await finish("error")
             batch = next(n for _, n in by_class("EmptyLatentImage") + by_class("EmptySD3LatentImage"))["inputs"]["batch_size"]
             prefix = node["inputs"]["filename_prefix"]
             folder, stem = prefix.rsplit("/", 1)
@@ -234,6 +241,9 @@ class FakeComfy:
 
     async def models(self, request):
         return web.json_response(self.model_files.get(request.match_info["folder"], []))
+
+    async def logs(self, _request):
+        return web.json_response({"entries": [{"t": "", "m": line} for line in self.log_lines], "size": {}})
 
     async def object_info(self, request):
         node = request.match_info["node"]

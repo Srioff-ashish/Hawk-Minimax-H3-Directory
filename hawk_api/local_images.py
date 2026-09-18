@@ -417,10 +417,24 @@ class LocalImageEngine:
         for item in used:
             if item.trigger and item.trigger.lower() not in text.lower():
                 text = f"{text}, {item.trigger}"
-        files = status["files"]
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         boost = EDIT_REF_BOOST if ref_boost is None else max(0.0, min(20.0, float(ref_boost)))
         started = time.monotonic()
+        try:
+            images = await self._run_edits(text, sources, width, height, seed, n, status, chosen, steps, boost)
+        except LocalImageError as exc:
+            # Blackwell: cuDNN attention has no plan for the likeness boost's attention mask. Without the
+            # boost there is no mask, so run once more at 1.0 rather than failing the edit.
+            if boost == 1.0 or "cudnn" not in str(exc).lower():
+                raise
+            images = await self._run_edits(text, sources, width, height, seed, n, status, chosen, steps, 1.0)
+            warnings.append(f"The likeness boost ({boost:g}) failed on this GPU (cuDNN), so this edit ran at 1.0. "
+                            "Restart ComfyUI after updating the Hawk nodes to enable it.")
+        applied = [{"file": status["edit"]["lora"], "strength": 1.0}] + [{"file": f, "strength": v} for f, v in chosen]
+        return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings)
+
+    async def _run_edits(self, text, sources, width, height, seed, n, status, chosen, steps, boost) -> list[bytes]:
+        files = status["files"]
         ids = []
         for index in range(max(1, min(4, n))):  # the edit patch takes one target at a time
             graph = krea_edit_graph(
@@ -434,9 +448,7 @@ class LocalImageEngine:
             except ComfyError as exc:
                 raise LocalImageError(f"ComfyUI rejected the Krea 2 edit graph: {exc}") from exc
             ids.append(prompt_id)
-        images = [image for prompt_id in ids for image in await self._collect(prompt_id)]
-        applied = [{"file": status["edit"]["lora"], "strength": 1.0}] + [{"file": f, "strength": v} for f, v in chosen]
-        return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings)
+        return [image for prompt_id in ids for image in await self._collect(prompt_id)]
 
     async def _collect(self, prompt_id: str) -> list[bytes]:
         deadline = time.monotonic() + WAIT_SECONDS

@@ -121,6 +121,17 @@ class ComfyClient:
             raise ComfyError(f"ComfyUI /models/{folder} failed ({response.status_code})")
         return list(response.json())
 
+    async def logs(self) -> str:
+        """ComfyUI's own log (its /internal/logs endpoint), for diagnosing node errors remotely."""
+        response = await self._request("GET", "/internal/logs/raw")  # {"entries": [{"t": time, "m": text}, ...]}
+        if response.status_code == 200:
+            return "".join(str(entry.get("m", "")) for entry in response.json().get("entries") or [])
+        response = await self._request("GET", "/internal/logs")  # older ComfyUI: the log as one JSON string
+        if response.status_code != 200:
+            raise ComfyError(f"ComfyUI /internal/logs failed ({response.status_code})")
+        data = response.json()
+        return data if isinstance(data, str) else json.dumps(data)
+
     async def object_info(self, node_class: str) -> dict:
         response = await self._request("GET", f"/object_info/{node_class}")
         return response.json().get(node_class, {}) if response.status_code == 200 else {}

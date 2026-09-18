@@ -20,6 +20,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .auth import bearer, signature_valid, split_path_token, token_matches
+from .comfy_client import ComfyError
 from .config import Settings
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
@@ -256,6 +257,18 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                              size=body.size, n=body.n, seed=body.seed, engine=body.engine,
                                              loras=[l.model_dump() for l in body.loras], steps=body.steps,
                                              max_adult_loras=body.max_adult_loras, ref_boost=body.ref_boost)
+
+    @app.get("/v1/debug/comfy-logs", tags=["system"])
+    async def comfy_logs(lines: int = 200, grep: str = ""):
+        """The tail of ComfyUI's log (optionally only lines containing `grep`), to diagnose node errors."""
+        try:
+            text = await service.comfy.logs()
+        except ComfyError as exc:
+            raise Unavailable(str(exc)) from exc
+        rows = text.splitlines()
+        if grep:
+            rows = [row for row in rows if grep.lower() in row.lower()]
+        return {"lines": rows[-max(1, min(2000, lines)):]}
 
     @app.get("/v1/images/options", tags=["assets"])
     async def image_options():

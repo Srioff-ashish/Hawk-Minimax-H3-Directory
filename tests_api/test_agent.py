@@ -617,6 +617,21 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((patch["ref_boost"], patch["source_latent_b"]), (6.0, ["enc2", 0]))
         seeds = [next(n["inputs"]["seed"] for n in g.values() if n["class_type"] == "KSampler") for g in graphs]
         self.assertEqual(seeds[1], seeds[0] + 1, "n edits run as separate prompts")
+        # Blackwell cuDNN has no plan for the likeness boost's attention mask: retry the edit at 1.0
+        def cudnn(prompt):
+            patch = next((n["inputs"] for n in prompt.values() if n["class_type"] == "Krea2EditModelPatch"), None)
+            return "cuDNN Frontend error: No valid execution plans built." if patch and patch["ref_boost"] != 1.0 else None
+        self.fake.fail_image = cudnn
+        retried = (await self.http.post("/v1/images", json={"prompt": "Red raincoat", "reference_asset_ids": [character]})).json()
+        self.assertEqual(retried["engine"], "krea2-edit")
+        self.assertIn("likeness boost (4) failed", retried["note"])
+        self.fake.fail_image = lambda prompt: "CUDA out of memory"
+        oom = await self.http.post("/v1/images", json={"prompt": "Red raincoat", "engine": "local", "reference_asset_ids": [character]})
+        self.assertEqual(oom.status_code, 422)
+        self.assertIn("in KSampler (node 7): CUDA out of memory", oom.text)
+        self.fake.fail_image = None
+        logs = (await self.http.get("/v1/debug/comfy-logs", params={"grep": "cudnn"})).json()
+        self.assertEqual(logs["lines"], ["Hawk H3: masked attention skips cuDNN on this Blackwell GPU"])
         three = (await self.http.post("/v1/images", json={"prompt": "Group shot", "reference_asset_ids": [character, person, character]})).json()
         self.assertEqual(three["model"], "bytedance/seedream-v5.0-pro/edit")
 
