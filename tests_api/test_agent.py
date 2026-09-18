@@ -236,6 +236,52 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             self.assertIn("extra/style-alpha-minimax-h3.safetensors", tool_result_text(last, tool), tool)
         self.assertIn("- list_loras:", self.atlas.requests[0]["messages"][0]["content"])
 
+    async def test_persona_picture_becomes_the_chat_avatar(self):
+        agent_module.WAIT_POLL_SECONDS = 0.05
+
+        def reply(body):
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "Ek second, apni photo bana rahi hoon.", "actions": [{"tool": "generate_image", "args": {
+                    "prompt": "Portrait of Maya, a warm 45-year-old Indian woman, soft window light"}}]})
+            if turn == 1:
+                asset = tool_result(body, "generate_image")["assets"][0]["id"]
+                return json.dumps({"say": "", "actions": [{"tool": "set_avatar", "args": {"asset_id": asset}}]})
+            return json.dumps({"say": "Yeh main hoon.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(persona="You are Maya, a warm, witty Delhi fashion stylist.")
+        other = await self.new_chat(persona="A Bollywood ad-film director")
+        listed = {s["id"]: s for s in (await self.http.get("/v1/agent/sessions")).json()["sessions"]}
+        self.assertEqual((listed[chat]["persona_name"], listed[chat]["avatar_url"]), ("Maya", None))
+        self.assertEqual(listed[other]["persona_name"], "")
+
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo dikhao"})
+        view = await self.settle(chat)
+        session = view["session"]
+        avatar = next(m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "set_avatar")["content"]
+        self.assertTrue(avatar["ok"], avatar)
+        generated = next(m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "generate_image")["content"]
+        self.assertEqual(session["avatar_asset_id"], generated["result"]["assets"][0]["id"])
+        self.assertEqual(session["persona_name"], "Maya")
+        async with httpx.AsyncClient() as browser:
+            self.assertEqual((await browser.get(session["avatar_url"])).status_code, 200)
+
+        first_system = self.atlas.requests[0]["messages"][0]["content"]
+        self.assertIn("Your name in this chat: Maya.", first_system)
+        self.assertIn("You have no avatar yet", first_system)
+        self.assertIn("- set_avatar:", first_system)
+        last_system = self.atlas.requests[-1]["messages"][0]["content"]
+        self.assertIn(f"Your avatar (a picture of you): asset {session['avatar_asset_id']}", last_system)
+        self.assertEqual((await self.http.get(f"/v1/agent/sessions/{other}")).json()["session"]["avatar_url"], None, "per chat")
+
+        renamed = (await self.http.patch(f"/v1/agent/sessions/{chat}", json={"name": "Maya Ji"})).json()
+        self.assertEqual(renamed["persona_name"], "Maya Ji")
+        audio = (await self.http.post("/v1/assets", files={"files": ("beat.mp3", b"ID3" + b"1" * 64, "audio/mpeg")})).json()["assets"][0]["id"]
+        self.assertEqual((await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": audio})).status_code, 422)
+        cleared = (await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": ""})).json()
+        self.assertEqual((cleared["avatar_url"], cleared["persona_name"]), (None, "Maya Ji"))
+
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
         created = (await self.http.post("/v1/images", json={"prompt": "A fit model in her forties, studio portrait", "n": 2, "size": "1536x2048"})).json()

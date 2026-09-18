@@ -146,6 +146,8 @@ class AgentSessionIn(BaseModel):
     title: str | None = Field(None, description="Chat title; the agent renames it once the task is clear.")
     persona: str | None = Field(None, description="Who the agent should be, e.g. 'Bollywood ad-film director'.")
     model: str | None = Field(None, description="Atlas chat model id; default HAWK_AGENT_MODEL (xai/grok-4.6).")
+    name: str | None = Field(None, description="The persona's display name, e.g. Maya. Empty: taken from the persona text.")
+    avatar_asset_id: str | None = Field(None, description="An image asset shown as the agent's avatar in this chat; empty removes it.")
 
 
 class AgentMessageIn(BaseModel):

@@ -47,8 +47,17 @@ AGENT_TOOLS = [
     },
     {
         "name": "set_persona",
-        "description": "Replace your persona when the user asks you to be or act like someone.",
-        "args": {"persona": "string (required)"},
+        "description": "Replace your persona when the user asks you to be or act like someone. name is the persona's "
+        "display name shown in the chat (e.g. Maya); omit it to keep the current one.",
+        "args": {"persona": "string (required)", "name": "string, optional"},
+    },
+    {
+        "name": "set_avatar",
+        "description": "Make an image your avatar in this chat: it is shown with your name next to every reply. When the "
+        "user asks for a picture of you or your persona, generate it with generate_image, then call set_avatar with the "
+        "new asset_id. Later pictures or videos of yourself should use your avatar as a reference (role picture). "
+        "asset_id \"\" removes the avatar.",
+        "args": {"asset_id": "string (required)", "name": "string, optional"},
     },
     {
         "name": "rename_chat",
@@ -62,6 +71,18 @@ SUMMARY_PROMPT = (
     "Summarise the conversation so far for your own future context. Keep: the user's goals and preferences, the persona, "
     "decisions made, every asset id, job id and video link, what is finished and what is still open. Plain text, at most 400 words."
 )
+
+
+_NAME = re.compile(r"(?i:\b(?:you are|you're|your name is|i am|i'm|named|called|name\s*[:=-]))\s+([A-Z][\w'-]{1,30})")
+_NOT_NAMES = {"A", "An", "The", "Your", "My", "Our", "This", "That"}
+
+
+def persona_name(persona: str) -> str:
+    """The name a persona gives itself: "You are Maya, a …" -> "Maya"."""
+    for match in _NAME.finditer(persona or ""):
+        if match.group(1) not in _NOT_NAMES:
+            return match.group(1)
+    return ""
 
 
 def _now() -> float:
@@ -231,6 +252,8 @@ class AgentService:
             "id": str(uuid.uuid4()),
             "title": (title or "").strip() or "New chat",
             "persona": (persona or "").strip(),
+            "name": "",
+            "avatar_asset_id": "",
             "model": (model or "").strip() or self.service.settings.agent_model,
             "status": "idle",
             "summary": "",
@@ -250,7 +273,7 @@ class AgentService:
     def list_sessions(self) -> list[dict]:
         return self.store.list_sessions()
 
-    def update_session(self, session_id: str, *, title=None, persona=None, model=None) -> dict:
+    def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None) -> dict:
         session = self.get_session(session_id)
         if title is not None:
             session["title"] = title.strip() or session["title"]
@@ -258,7 +281,29 @@ class AgentService:
             session["persona"] = persona.strip()
         if model is not None and model.strip():
             session["model"] = model.strip()
+        if name is not None:
+            session["name"] = name.strip()[:40]
+        if avatar_asset_id is not None:
+            avatar_asset_id = avatar_asset_id.strip()
+            if avatar_asset_id:
+                asset = self.service.store.get_asset(avatar_asset_id)
+                if asset is None:
+                    raise RequestError(f"Unknown asset {avatar_asset_id!r}.")
+                if asset["kind"] != "image":
+                    raise RequestError(f"Asset {avatar_asset_id} is {asset['kind']}; an avatar must be an image.")
+            session["avatar_asset_id"] = avatar_asset_id
         return self.store.save_session(session)
+
+    def public(self, session: dict) -> dict:
+        """A session for clients: the persona's display name and a signed avatar thumbnail."""
+        view = dict(session)
+        view["persona_name"] = session.get("name") or persona_name(session.get("persona", ""))
+        view["avatar_url"] = view["avatar_file_url"] = None
+        asset = self.service.store.get_asset(session["avatar_asset_id"]) if session.get("avatar_asset_id") else None
+        if asset:
+            links = self.service.asset_view(asset)
+            view["avatar_url"], view["avatar_file_url"] = links.get("thumb_url"), links.get("file_url")
+        return view
 
     async def delete_session(self, session_id: str) -> None:
         self.get_session(session_id)
@@ -276,7 +321,7 @@ class AgentService:
                 asset = self.service.store.get_asset(attachment.get("asset_id", ""))
                 if asset:
                     attachment.update({k: v for k, v in self.service.asset_view(asset).items() if k in ("thumb_url", "file_url")})
-        return {"session": session, "messages": messages}
+        return {"session": self.public(session), "messages": messages}
 
     # ------------------------------------------------------------ runs
 
@@ -395,8 +440,17 @@ class AgentService:
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
             elif name == "set_persona":
-                self.update_session(session_id, persona=str(args.get("persona") or ""))
-                result = {"persona": self.get_session(session_id)["persona"]}
+                new_name = args.get("name")
+                self.update_session(session_id, persona=str(args.get("persona") or ""),
+                                    name=str(new_name) if new_name is not None else None)
+                session = self.public(self.get_session(session_id))
+                result = {"persona": session["persona"], "name": session["persona_name"]}
+            elif name == "set_avatar":
+                new_name = args.get("name")
+                self.update_session(session_id, avatar_asset_id=str(args.get("asset_id") or ""),
+                                    name=str(new_name) if new_name is not None else None)
+                session = self.public(self.get_session(session_id))
+                result = {"avatar_asset_id": session["avatar_asset_id"], "name": session["persona_name"], "thumb_url": session["avatar_url"]}
             elif name == "rename_chat":
                 self.update_session(session_id, title=str(args.get("title") or ""))
                 result = {"title": self.get_session(session_id)["title"]}
@@ -468,10 +522,24 @@ class AgentService:
                 push("user", f"NOTE: {content.get('text', '')}")
         return chat
 
+    def _persona_text(self, session: dict) -> str:
+        persona = session.get("persona") or ""
+        view = self.public(session)
+        facts = []
+        if view["persona_name"]:
+            facts.append(f"Your name in this chat: {view['persona_name']}.")
+        if view["avatar_url"]:
+            facts.append(f"Your avatar (a picture of you): asset {session['avatar_asset_id']}. Use it as the picture reference "
+                         "whenever you make an image or video of yourself.")
+        elif persona:
+            facts.append("You have no avatar yet. When the user asks to see you, generate_image a picture of your persona, "
+                         "then set_avatar with it.")
+        return f"{persona}\n\n{' '.join(facts)}".strip() if persona or facts else ""
+
     async def _build_messages(self, session: dict) -> list[dict]:
         system = render_agent_prompt(
             self.service.prompts.get("agent"),
-            persona=session.get("persona") or "",
+            persona=self._persona_text(session),
             pipeline=INSTRUCTIONS.strip(),
             tools=await self._catalog(),
         )

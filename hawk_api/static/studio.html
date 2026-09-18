@@ -328,6 +328,13 @@
   .msg-meta.user { align-self: flex-end; }
   .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
   .who svg { width: 18px; height: 18px; border-radius: 5px; }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; background: var(--surface-2); border: 1px solid var(--line); }
+  .avatar.sm { width: 22px; height: 22px; }
+  .avatar.lg { width: 72px; height: 72px; }
+  .who .avatar { width: 26px; height: 26px; }
+  .who-name { font-weight: 650; color: var(--ink); }
+  .persona-avatar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .agent-session .row-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .tool-card { align-self: flex-start; width: min(760px, 92%); border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; overflow: hidden; }
   .tool-card summary { cursor: pointer; padding: 7px 12px; display: flex; align-items: center; gap: 8px; list-style: none; color: var(--ink-2); }
   .tool-card summary::-webkit-details-marker { display: none; }
@@ -677,6 +684,7 @@
         </aside>
         <section class="card agent-chat" aria-label="Conversation">
           <div class="agent-head">
+            <img class="avatar" id="agentHeadAvatar" alt="" hidden>
             <input class="agent-title" id="agentTitle" aria-label="Chat title" placeholder="New chat">
             <span class="badge" id="agentStatus" hidden></span>
             <div class="spacer"></div>
@@ -688,6 +696,13 @@
           <div class="agent-persona" id="agentPersonaPanel" hidden>
             <label class="label" for="agentPersona">Who should the agent be? It shapes its tone and creative choices; safety rules always apply.</label>
             <textarea class="textarea" id="agentPersona" rows="3" style="min-height:70px" placeholder="e.g. A Bollywood ad-film director who loves warm colours, quick cuts and witty Hinglish lines"></textarea>
+            <div class="persona-avatar">
+              <img class="avatar lg" id="agentAvatarPreview" alt="Avatar" hidden>
+              <div class="field" style="flex:1;min-width:180px"><label class="label" for="agentName">Name shown in chat</label>
+                <input class="input" id="agentName" maxlength="40" placeholder="Taken from the persona, e.g. Maya"></div>
+              <div class="row"><button class="btn btn-sm" id="agentAvatarPick" type="button">Choose avatar</button><button class="btn btn-sm btn-ghost" id="agentAvatarClear" type="button" hidden>Remove avatar</button></div>
+            </div>
+            <span class="hint">Tip: ask the agent "show me a picture of you". It generates one and makes it its avatar here.</span>
             <div class="row" id="personaChips"></div>
             <div class="row"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
           </div>
@@ -2621,8 +2636,9 @@
     $("agentBusy").hidden = !running;
     $("agentSessions").innerHTML = agent.sessions.length ? agent.sessions.map((s) => `
       <button class="agent-session" type="button" data-session="${s.id}" aria-current="${s.id === agent.current}">
+        <div class="row-line">${s.avatar_url ? `<img class="avatar sm" src="${esc(s.avatar_url)}" alt="" loading="lazy">` : ""}<div style="display:grid;gap:2px;min-width:0">
         <strong>${s.status === "running" || s.status === "stopping" ? '<span class="dot ok" style="box-shadow:none"></span>' : ""}${esc(s.title)}</strong>
-        <span>${esc((s.model || "").replace(/^[^/]+\//, ""))} · ${ago(s.updated_at)}</span>
+        <span>${s.persona_name ? `${esc(s.persona_name)} · ` : ""}${esc((s.model || "").replace(/^[^/]+\//, ""))} · ${ago(s.updated_at)}</span></div></div>
       </button>`).join("") : `<p class="hint" style="padding:10px;margin:0">No chats yet.</p>`;
   }
   $("agentSessions").addEventListener("click", (event) => {
@@ -2681,6 +2697,8 @@
       restoreAgentDraft(id);
       togglePersona(false);
       $("agentPersona").value = agent.sessions.find((s) => s.id === id)?.persona || "";
+      delete $("agentThread").dataset.who;
+      paintAgentIdentity(agent.sessions.find((s) => s.id === id));
     }
     agent.current = id;
     agent.lastId = 0;
@@ -2697,6 +2715,7 @@
     if (index >= 0) agent.sessions[index] = session; else agent.sessions.unshift(session);
     if (document.activeElement !== $("agentTitle")) $("agentTitle").value = session.title;
     if (session.id === agent.current && $("agentPersonaPanel").hidden) $("agentPersona").value = session.persona || "";
+    if (session.id === agent.current) paintAgentIdentity(session);
     const running = session.status === "running" || session.status === "stopping";
     const status = $("agentStatus");
     status.hidden = session.status === "idle";
@@ -2742,6 +2761,31 @@
     if (open) openDrawer(open.dataset.openJob);
   });
 
+  // The persona's face and name on every reply: "Maya" with her avatar, else the Hawk logo and "Agent".
+  function agentWho(session = currentSession()) {
+    const name = esc(session?.persona_name || "Agent");
+    const face = session?.avatar_url
+      ? `<a href="${esc(session.avatar_file_url || session.avatar_url)}" target="_blank" rel="noopener"><img class="avatar" src="${esc(session.avatar_url)}" alt="${name}"></a>`
+      : `<svg viewBox="0 0 32 32"><use href="#i-logo"/></svg>`;
+    return `<span class="who">${face}<span class="who-name">${name}</span></span>`;
+  }
+  function paintAgentIdentity(session) {
+    const head = $("agentHeadAvatar");
+    head.hidden = !session?.avatar_url;
+    if (session?.avatar_url && head.dataset.src !== session.avatar_url) { head.src = session.avatar_url; head.dataset.src = session.avatar_url; }
+    head.title = session?.persona_name || "";
+    const who = agentWho(session);
+    if ($("agentThread").dataset.who !== who) {  // avatar or name changed: update earlier replies too
+      $("agentThread").dataset.who = who;
+      $("agentThread").querySelectorAll(".msg-meta:not(.user) .who").forEach((el) => { el.outerHTML = who; });
+    }
+    const preview = $("agentAvatarPreview");
+    preview.hidden = !session?.avatar_url;
+    if (session?.avatar_url) preview.src = session.avatar_url;
+    $("agentAvatarClear").hidden = !session?.avatar_url;
+    if ($("agentPersonaPanel").hidden) { $("agentName").value = session?.name || ""; $("agentName").placeholder = session?.persona_name ? `${session.persona_name} (from the persona)` : "Taken from the persona, e.g. Maya"; }
+  }
+
   function renderAgentMessage(message) {
     if (agent.rendered.has(message.id)) return;
     agent.rendered.add(message.id);
@@ -2758,7 +2802,7 @@
       add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
-      if (c.say) add(`<div class="msg-meta"><span class="who"><svg viewBox="0 0 32 32"><use href="#i-logo"/></svg>Agent</span>· ${time}</div><div class="bubble agent">${linkify(c.say)}</div>`);
+      if (c.say) add(`<div class="msg-meta">${agentWho()}· ${time}</div><div class="bubble agent">${linkify(c.say)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
       const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;
@@ -2840,8 +2884,14 @@
     const text = $("agentPersona").value;
     if (!agent.current) { if (!(await newAgentChat())) return; agent.personaFor = agent.current; }
     if (agent.personaFor !== agent.current) { togglePersona(false); return toast("Chat changed", "Open Persona again to edit this chat's persona.", "warn"); }
-    if (await patchSession({ persona: text })) { togglePersona(false); toast("Persona saved", "For this chat only."); }
+    if (await patchSession({ persona: text, name: $("agentName").value.trim() })) { togglePersona(false); toast("Persona saved", "For this chat only."); }
   };
+  $("agentAvatarPick").onclick = async () => {
+    if (!agent.current) return toast("Start a chat first", "", "warn");
+    const [asset] = await pickAssets({ kinds: ["image"], multiple: false, title: "Choose an avatar" });
+    if (asset && (await patchSession({ avatar_asset_id: asset.id }))) toast("Avatar set", "For this chat only.");
+  };
+  $("agentAvatarClear").onclick = async () => { if (await patchSession({ avatar_asset_id: "" })) toast("Avatar removed"); };
 
   function renderAttachments() {
     const box = $("agentAttachments");

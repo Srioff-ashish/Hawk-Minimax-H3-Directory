@@ -332,13 +332,15 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | Method | Path | |
 |---|---|---|
 | GET | `/v1/agent/models` | Chat models on the Atlas account |
-| POST | `/v1/agent/sessions` | `{title?, persona?, model?}` → new chat |
+| POST | `/v1/agent/sessions` | `{title?, persona?, model?, name?, avatar_asset_id?}` → new chat |
 | GET | `/v1/agent/sessions` | Chats, most recent first |
 | GET | `/v1/agent/sessions/<id>?after=<message id>` | The chat and its messages after that id |
-| PATCH | `/v1/agent/sessions/<id>` | Change `title`, `persona` or `model` |
+| PATCH | `/v1/agent/sessions/<id>` | Change `title`, `persona`, `model`, `name` or `avatar_asset_id` (`""` removes the avatar) |
 | POST | `/v1/agent/sessions/<id>/messages` | `{text, attachments: [asset_id]}` → 202, the agent starts working; 409 while it is still working |
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
+
+**Persona name and avatar.** Each chat has its own. `persona_name` is `name` when set, otherwise the name the persona gives itself ("You are Maya, …" → Maya). Ask the agent for a picture of itself: it runs `generate_image`, then `set_avatar` with the new image, and Studio shows that face and name on every reply, in the chat header and in the chat list. The agent is told its avatar's asset id and uses it as the picture reference for later images or videos of itself. Sessions include `avatar_url` (a signed thumbnail) and `avatar_file_url`.
 
 ### Media library and Google Drive import
 

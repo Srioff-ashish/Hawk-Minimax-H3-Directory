@@ -375,11 +375,14 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.post("/v1/agent/sessions", tags=["agent"], status_code=201)
     async def agent_create(body: AgentSessionIn):
-        return agent.create_session(body.title, body.persona, body.model)
+        session = agent.create_session(body.title, body.persona, body.model)
+        if body.name is not None or body.avatar_asset_id is not None:
+            session = agent.update_session(session["id"], name=body.name, avatar_asset_id=body.avatar_asset_id)
+        return agent.public(session)
 
     @app.get("/v1/agent/sessions", tags=["agent"])
     async def agent_list():
-        return {"sessions": agent.list_sessions()}
+        return {"sessions": [agent.public(session) for session in agent.list_sessions()]}
 
     @app.get("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_get(session_id: str, after: int = 0):
@@ -387,15 +390,17 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.patch("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_update(session_id: str, body: AgentSessionIn):
-        return agent.update_session(session_id, title=body.title, persona=body.persona, model=body.model)
+        return agent.public(agent.update_session(session_id, title=body.title, persona=body.persona, model=body.model,
+                                                 name=body.name, avatar_asset_id=body.avatar_asset_id))
 
     @app.post("/v1/agent/sessions/{session_id}/messages", tags=["agent"], status_code=202)
     async def agent_send(session_id: str, body: AgentMessageIn):
-        return await agent.send(session_id, body.text, body.attachments)
+        sent = await agent.send(session_id, body.text, body.attachments)
+        return {**sent, "session": agent.public(sent["session"])}
 
     @app.post("/v1/agent/sessions/{session_id}/stop", tags=["agent"])
     async def agent_stop(session_id: str):
-        return agent.request_stop(session_id)
+        return agent.public(agent.request_stop(session_id))
 
     @app.delete("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_delete(session_id: str):
