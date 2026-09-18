@@ -71,6 +71,7 @@ class FakeComfy:
         self.stack_cache: set[str] = set()
         self.output_dir: str | None = None  # also write outputs to disk, like real ComfyUI
         self.final_bytes = b"FINAL VIDEO BYTES"
+        self.missing_nodes: set[str] = set()  # custom node classes this ComfyUI doesn't have
         self.model_files = {
             "loras": [TURBO, REALISM],
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
@@ -135,7 +136,7 @@ class FakeComfy:
         by_class = lambda cls: [(i, n) for i, n in prompt.items() if n["class_type"] == cls]
         for node_id, node in by_class("SaveImage"):  # an image graph (local Krea 2)
             await asyncio.sleep(0.05)
-            batch = next(n for _, n in by_class("EmptyLatentImage"))["inputs"]["batch_size"]
+            batch = next(n for _, n in by_class("EmptyLatentImage") + by_class("EmptySD3LatentImage"))["inputs"]["batch_size"]
             prefix = node["inputs"]["filename_prefix"]
             folder, stem = prefix.rsplit("/", 1)
             images = []
@@ -236,6 +237,8 @@ class FakeComfy:
 
     async def object_info(self, request):
         node = request.match_info["node"]
+        if node in self.missing_nodes:
+            return web.json_response({})
         return web.json_response({node: {"input": {"required": {
             "sampler_name": ["COMBO", {"options": ["euler", "res_multistep"]}],
             "scheduler": [["simple", "beta"], {}],

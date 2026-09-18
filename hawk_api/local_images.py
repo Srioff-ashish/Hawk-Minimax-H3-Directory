@@ -36,6 +36,22 @@ MODEL_FAMILIES = {
 }
 _PRECISION = ("bf16", "fp16", "fp8", "")
 
+# Krea 2 Identity Edit (conradlocke/krea2-identity-edit): a LoRA plus the comfyui-krea2edit node pack,
+# which feeds the reference image in as context tokens and grounds the text encoder on it.
+EDIT_NODES = ("Krea2EditModelPatch", "Krea2EditGroundedEncode")
+EDIT_LORA = re.compile(r"krea[-_ ]?2[-_ ]?identity[-_ ]?edit", re.IGNORECASE)
+EDIT_STEPS = 10  # 8 favours the instruction, 12 face detail
+EDIT_REF_BOOST = 4.0  # likeness dial; >10 breaks removals, <1 frees the model
+EDIT_GROUNDING_PX = 768
+EDIT_MEGAPIXELS = 1.0  # the LoRA's sweet spot
+
+# Edits of uploaded photos may show real people: no nudity or sexual edits of them, whatever the engine.
+_SEXUAL = re.compile(
+    r"\b(nude|nudes|nudity|naked|topless|bottomless|undress\w*|nsfw|sex|sexy|sexual\w*|explicit|porn\w*|erotic\w*|"
+    r"genitals?|nipples?|remove (?:her|his|their|the) (?:clothes|clothing|top|shirt|dress|bra))\b",
+    re.IGNORECASE,
+)
+
 
 def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:
     """The configured file if present, else the best file of the same model family."""
@@ -106,6 +122,28 @@ def check_prompt(prompt: str) -> None:
         )
 
 
+def check_edit(prompt: str, sources: list[dict], loras: list) -> None:
+    """Uploaded photos can be real people: edits of them stay non-sexual and use no adult LoRA.
+    Pictures made here (generated assets) are fictional characters and follow the normal rules."""
+    real = [a for a in sources if (a.get("source") or {}).get("type") != "generated"]
+    if not real:
+        return
+    names = ", ".join(a.get("filename") or a.get("id", "") for a in real)
+    if any(getattr(item, "kind", "") == "adult" for item in loras):
+        raise LocalImageError(f"Refused: adult LoRAs can't be used to edit uploaded photos ({names}); they may show real people. "
+                              "Generate a fictional character first and edit that.", fatal=True)
+    match = _SEXUAL.search(prompt or "")
+    if match:
+        raise LocalImageError(f"Refused: {match.group(0)!r} edits of uploaded photos ({names}) aren't allowed; they may show "
+                              "real people.", fatal=True)
+
+
+def edit_size(width: int, height: int, megapixels: float = EDIT_MEGAPIXELS) -> tuple[int, int]:
+    """The source's aspect ratio at about 1 MP, in multiples of 16."""
+    scale = (megapixels * 1_000_000 / max(1, width * height)) ** 0.5
+    return tuple(max(512, min(2048, round(v * scale / 16) * 16)) for v in (width, height))
+
+
 def load_catalogue(path: str) -> list[ImageLora]:
     if not os.path.isfile(path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -171,6 +209,44 @@ def krea_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras
     return graph
 
 
+def krea_edit_graph(prompt: str, *, images: list[str], width: int, height: int, seed: int, loras: list[tuple[str, float]],
+                    unet: str, clip: str, vae: str, steps: int, ref_boost: float, prefix: str,
+                    grounding_px: int = EDIT_GROUNDING_PX) -> dict:
+    """Krea 2 Identity Edit, wired like the node pack's krea2_identity_edit.json workflow.
+    images: 1 or 2 ComfyUI input paths; with 2, the first is the scene and the second the subject."""
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "krea2", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "lat": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+    }
+    model = ["1", 0]
+    for index, (name, strength) in enumerate(loras):  # the identity-edit LoRA comes first
+        node = f"l{index}"
+        graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
+        model = [node, 0]
+    for index, path in enumerate(images[:2], 1):
+        graph[f"img{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
+        graph[f"enc{index}"] = {"class_type": "VAEEncode", "inputs": {"pixels": [f"img{index}", 0], "vae": ["3", 0]}}
+    patch = {"model": model, "source_latent": ["enc1", 0], "vae": ["3", 0], "source_image": ["img1", 0],
+             "target_latent": ["lat", 0], "ref_boost": ref_boost, "ref_boost_a": 1.0, "fit_mode": "fit"}
+    grounded = {"clip": ["2", 0], "image": ["img1", 0], "grounding_px": grounding_px, "system_prompt": ""}
+    if len(images) > 1:
+        patch.update(source_latent_b=["enc2", 0], source_image_b=["img2", 0])
+        grounded["image_b"] = ["img2", 0]
+    graph.update({
+        "patch": {"class_type": "Krea2EditModelPatch", "inputs": patch},
+        "pos": {"class_type": "Krea2EditGroundedEncode", "inputs": {**grounded, "prompt": prompt}},
+        "neg": {"class_type": "Krea2EditGroundedEncode", "inputs": {**grounded, "prompt": ""}},
+        "7": {"class_type": "KSampler", "inputs": {
+            "model": ["patch", 0], "positive": ["pos", 0], "negative": ["neg", 0], "latent_image": ["lat", 0], "seed": seed,
+            "steps": steps, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": prefix}},
+    })
+    return graph
+
+
 class LocalImageEngine:
     def __init__(self, service):
         self.service = service
@@ -195,7 +271,22 @@ class LocalImageEngine:
         except Exception as exc:  # ComfyUI down
             return {"installed": False, "busy": False, "reachable": False, "missing": [], "error": str(exc), "loras": []}
         return {"installed": not missing, "busy": busy, "queue": queue, "reachable": reachable, "missing": missing,
-                "model": files.get("unet", s.krea_unet), "files": files, "loras": [lora.view() for lora in await self.catalogue()]}
+                "model": files.get("unet", s.krea_unet), "files": files, "edit": await self.edit_status(),
+                "loras": [lora.view() for lora in await self.catalogue()]}
+
+    async def edit_status(self) -> dict:
+        """Krea 2 Identity Edit: the comfyui-krea2edit nodes and the identity-edit LoRA."""
+        missing = [f"custom node {node} (comfyui-krea2edit)" for node in EDIT_NODES if not await self.service.comfy.object_info(node)]
+        lora = self._edit_lora(await self.service.available_models("loras"))
+        if not lora:
+            missing.append("loras/krea2_identity_edit_v1_2.safetensors")
+        return {"installed": not missing, "missing": missing, "lora": lora}
+
+    @staticmethod
+    def _edit_lora(files: list[str]) -> str | None:
+        matches = [name for name in files if EDIT_LORA.search(name.rsplit("/", 1)[-1])]
+        # the full-rank file first, then the r128 / r64 low-VRAM variants; newest version first
+        return min(matches, key=lambda n: ("_r64" in n, "_r128" in n, [-int(x) for x in re.findall(r"\d+", n)])) if matches else None
 
     async def busy(self) -> tuple[bool, int]:
         running, pending = await self.service.comfy.queue_state()
@@ -210,7 +301,7 @@ class LocalImageEngine:
             item.installed = item.file in files or any(f.endswith("/" + item.file) for f in files)
         for name in files:
             base = name.rsplit("/", 1)[-1]
-            if base not in known and "krea" in base.lower():
+            if base not in known and "krea" in base.lower() and not EDIT_LORA.search(base):  # the edit LoRA is used by edit()
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True))
         return items
 
@@ -284,6 +375,53 @@ class LocalImageEngine:
             raise LocalImageError(f"ComfyUI rejected the Krea 2 graph: {exc}") from exc
         images = await self._collect(prompt_id)
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
+
+    async def edit(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1, seed: int | None = None,
+                   loras: list[dict] | None = None, steps: int | None = None, ref_boost: float | None = None,
+                   wait_if_busy: bool = False, max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
+        """Edit one image (or put the person from a second image into the first) with Krea 2 Identity Edit."""
+        check_prompt(prompt)
+        if not 1 <= len(sources) <= 2:
+            raise LocalImageError("Krea 2 edit takes 1 image, or 2 (scene first, then the person).")
+        status = await self.status()
+        if not status.get("reachable"):
+            raise LocalImageError(f"ComfyUI is not reachable: {status.get('error')}")
+        if not status["installed"]:
+            raise LocalImageError("Krea 2 is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
+        if not status["edit"]["installed"]:
+            raise LocalImageError("Krea 2 edit is not installed (missing " + ", ".join(status["edit"]["missing"]) + ").")
+        if status["busy"] and not wait_if_busy:
+            raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)))
+        check_edit(prompt, sources, used)
+        if size:
+            width, height = parse_size(size)
+        else:
+            width, height = edit_size(*(await self.service.image_dimensions(sources[0]) or (1024, 1024)))
+        text = prompt.strip()
+        for item in used:
+            if item.trigger and item.trigger.lower() not in text.lower():
+                text = f"{text}, {item.trigger}"
+        files = status["files"]
+        seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
+        boost = EDIT_REF_BOOST if ref_boost is None else max(0.0, min(20.0, float(ref_boost)))
+        started = time.monotonic()
+        ids = []
+        for index in range(max(1, min(4, n))):  # the edit patch takes one target at a time
+            graph = krea_edit_graph(
+                text, images=[a["path"] for a in sources], width=width, height=height, seed=seed + index,
+                loras=[(status["edit"]["lora"], 1.0)] + chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                steps=steps or EDIT_STEPS, ref_boost=boost, prefix="hawk_images/krea2_edit",
+            )
+            prompt_id = str(uuid.uuid4())
+            try:
+                await self.service.comfy.submit(graph, prompt_id)
+            except ComfyError as exc:
+                raise LocalImageError(f"ComfyUI rejected the Krea 2 edit graph: {exc}") from exc
+            ids.append(prompt_id)
+        images = [image for prompt_id in ids for image in await self._collect(prompt_id)]
+        applied = [{"file": status["edit"]["lora"], "strength": 1.0}] + [{"file": f, "strength": v} for f, v in chosen]
+        return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings)
 
     async def _collect(self, prompt_id: str) -> list[bytes]:
         deadline = time.monotonic() + WAIT_SECONDS

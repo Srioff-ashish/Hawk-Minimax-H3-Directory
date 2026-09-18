@@ -574,9 +574,64 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})).status_code, 422)
         self.fake.running.pop("render")
 
-        edit = (await self.http.post("/v1/images", json={"prompt": "Same, red dress", "engine": "local", "reference_asset_ids": [made["assets"][0]["id"]]})).json()
+        # Krea 2 Identity Edit: needs the comfyui-krea2edit nodes and the LoRA; auto falls back to Seedream edit
+        character = made["assets"][0]["id"]
+        edit = (await self.http.post("/v1/images", json={"prompt": "Same, red dress", "reference_asset_ids": [character]})).json()
         self.assertEqual(edit["model"], "bytedance/seedream-v5.0-pro/edit")
-        self.assertIn("can't use reference images", edit["note"])
+        self.assertIn("krea2_identity_edit", edit["tried"][0]["skipped"])
+        self.assertEqual((await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "reference_asset_ids": [character]})).status_code, 422)
+        files["loras"] += ["Krea2/krea2_identity_edit_v1_2_r128.safetensors", "Krea2/krea2_identity_edit_v1_2.safetensors"]
+        self.fake.missing_nodes = {"Krea2EditGroundedEncode"}
+        options = (await self.http.get("/v1/images/options")).json()["local"]
+        self.assertEqual(options["edit"]["missing"], ["custom node Krea2EditGroundedEncode (comfyui-krea2edit)"])
+        self.assertNotIn("krea2_identity_edit", json.dumps(options["loras"]), "the edit LoRA isn't offered for text-to-image")
+        self.fake.missing_nodes = set()
+        options = (await self.http.get("/v1/images/options")).json()["local"]
+        self.assertEqual((options["edit"]["installed"], options["edit"]["lora"]), (True, "Krea2/krea2_identity_edit_v1_2.safetensors"))
+
+        edit = await self.http.post("/v1/images", json={"prompt": "Change her outfit to a red raincoat", "reference_asset_ids": [character],
+                                                        "loras": [{"name": "realism_v1"}]})
+        self.assertEqual(edit.status_code, 201, edit.text)
+        edit = edit.json()
+        self.assertEqual((edit["engine"], edit["model"]), ("krea2-edit", "krea2/identity-edit"))
+        self.assertEqual([l["file"] for l in edit["loras"]], ["Krea2/krea2_identity_edit_v1_2.safetensors", "krea2_realism_v1.safetensors"])
+        graph = list(self.fake.prompts.values())[-1]
+        by = {n["class_type"]: n["inputs"] for n in graph.values()}
+        chain = [n["inputs"] for n in graph.values() if n["class_type"] == "LoraLoaderModelOnly"]
+        self.assertEqual((chain[0]["lora_name"], chain[0]["strength_model"]), ("Krea2/krea2_identity_edit_v1_2.safetensors", 1.0))
+        self.assertEqual(by["LoadImage"]["image"], made["assets"][0]["path"])
+        self.assertEqual((by["Krea2EditModelPatch"]["ref_boost"], by["Krea2EditModelPatch"]["fit_mode"]), (4.0, "fit"))
+        self.assertEqual(by["Krea2EditModelPatch"]["model"], [f"l{len(chain) - 1}", 0])
+        self.assertNotIn("source_latent_b", by["Krea2EditModelPatch"])
+        encodes = [n["inputs"] for n in graph.values() if n["class_type"] == "Krea2EditGroundedEncode"]
+        self.assertEqual(sorted(e["prompt"] for e in encodes), ["", "Change her outfit to a red raincoat"])
+        self.assertEqual((by["KSampler"]["steps"], by["KSampler"]["cfg"], by["KSampler"]["model"]), (10, 1.0, ["patch", 0]))
+        self.assertEqual((by["EmptySD3LatentImage"]["width"], by["EmptySD3LatentImage"]["height"]), (992, 992), "about 1 MP")
+
+        person = (await self.http.post("/v1/images", json={"prompt": "A woman", "engine": "local"})).json()["assets"][0]["id"]
+        both = (await self.http.post("/v1/images", json={"prompt": "Place this person at the cafe table", "ref_boost": 6,
+                                                         "reference_asset_ids": [character, person], "n": 2})).json()
+        self.assertEqual(both["engine"], "krea2-edit")
+        graphs = list(self.fake.prompts.values())[-2:]
+        patch = next(n["inputs"] for n in graphs[-1].values() if n["class_type"] == "Krea2EditModelPatch")
+        self.assertEqual((patch["ref_boost"], patch["source_latent_b"]), (6.0, ["enc2", 0]))
+        seeds = [next(n["inputs"]["seed"] for n in g.values() if n["class_type"] == "KSampler") for g in graphs]
+        self.assertEqual(seeds[1], seeds[0] + 1, "n edits run as separate prompts")
+        three = (await self.http.post("/v1/images", json={"prompt": "Group shot", "reference_asset_ids": [character, person, character]})).json()
+        self.assertEqual(three["model"], "bytedance/seedream-v5.0-pro/edit")
+
+        # uploaded photos may show real people: no sexual edits, no adult LoRAs; generated characters follow the normal rules
+        photo = (await self.http.post("/v1/assets", files={"files": ("me.png", tiny_png(color=(10, 20, 30)), "image/png")})).json()["assets"][0]["id"]
+        for body in ({"prompt": "Make her naked"}, {"prompt": "Beach photo", "loras": [{"name": "mystic"}]}):
+            refused = await self.http.post("/v1/images", json={**body, "reference_asset_ids": [photo]})
+            self.assertEqual(refused.status_code, 422, body)
+            self.assertIn("Refused", refused.text)
+        fine = await self.http.post("/v1/images", json={"prompt": "Change the background to a beach", "reference_asset_ids": [photo]})
+        self.assertEqual(fine.json()["engine"], "krea2-edit")
+        adult = await self.http.post("/v1/images", json={"prompt": "Same woman, evening", "reference_asset_ids": [character], "loras": [{"name": "mystic"}]})
+        self.assertEqual(adult.status_code, 201, "generated (fictional) characters can use adult LoRAs")
+        turbo = (await self.http.post("/v1/images", json={"prompt": "x", "engine": "turbo", "reference_asset_ids": [character]})).json()
+        self.assertEqual(turbo["model"], "bytedance/seedream-v5.0-pro/edit")
 
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05

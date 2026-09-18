@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. When this example's version goes up, the copy is replaced (the old one is kept as image_loras.json.bak). kind: realism, detail, style, adult. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
     {
@@ -92,6 +92,17 @@
         1.0
       ],
       "notes": "Adult content tuned for Turbo. Add as a third adult LoRA only when SNOFS + Mystic XXX aren't enough. Fictional adults only."
+    },
+    {
+      "file": "krea2_nsfw_v4.safetensors",
+      "kind": "adult",
+      "label": "Krea 2 NSFW v4",
+      "strength": 0.8,
+      "range": [
+        0.5,
+        1.0
+      ],
+      "notes": "Adult content LoRA (Civitai 2725430). Alternative third adult LoRA when SNOFS + Mystic XXX aren't enough. Fictional adults only."
     },
     {
       "file": "krea2_darkbrush.safetensors",

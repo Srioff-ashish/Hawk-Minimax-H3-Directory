@@ -590,6 +590,17 @@ class HawkService:
         path = os.path.join(input_dir, asset["path"]) if input_dir else ""
         return path if path and os.path.isfile(path) else None
 
+    async def image_dimensions(self, asset: dict) -> tuple[int, int] | None:
+        """Width and height of an image asset, or None when Pillow can't read it."""
+        try:
+            from PIL import Image
+
+            data = await self.asset_bytes(asset)
+            with Image.open(io.BytesIO(data)) as image:
+                return image.size
+        except Exception:
+            return None
+
     async def asset_bytes(self, asset: dict) -> bytes:
         local = self.local_asset_path(asset)
         if local:
@@ -683,23 +694,24 @@ class HawkService:
         loras: list[dict] | None = None,
         steps: int | None = None,
         max_adult_loras: int = 3,
+        ref_boost: float | None = None,
     ) -> dict:
         """Make images and store them as assets, ready to use as picture references.
 
         engine "auto" (text only): local Krea 2 on this GPU when it is installed and idle, else
-        Atlas z-image/turbo, else Seedream. "local" / "turbo" / "seedream" pick one. Anything with
-        reference images uses Seedream edit (Krea 2 and z-image can't edit)."""
+        Atlas z-image/turbo, else Seedream. "local" / "turbo" / "seedream" pick one. With reference
+        images, "auto" / "local" edit with Krea 2 Identity Edit when it is installed and idle (1 image,
+        or 2: scene then person), else Seedream edit; z-image can't edit."""
         if not (prompt or "").strip():
             raise RequestError("Describe the image to generate.")
-        references = []
+        sources = []
         for asset_id in reference_asset_ids or []:
             asset = self.store.get_asset(asset_id)
             if asset is None:
                 raise RequestError(f"Unknown asset_id {asset_id!r}.")
             if asset["kind"] != "image":
                 raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
-            mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
-            references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
+            sources.append(asset)
 
         model = (model or "").strip()
         engine = (engine or "").strip().lower()
@@ -712,11 +724,26 @@ class HawkService:
         if engine not in ("auto", "local", "turbo", "seedream", "atlas"):
             raise RequestError(f"engine {engine!r} should be auto, local, turbo or seedream.")
         notes, tried = [], []
-        if references and engine in ("local", "turbo"):
-            notes.append(f"{'Krea 2' if engine == 'local' else 'z-image/turbo'} can't use reference images, so Seedream edit made this one.")
+        if sources and engine == "turbo":
+            notes.append("z-image/turbo can't use reference images, so Seedream edit made this one.")
             engine, model = "atlas", IMAGE_EDIT_MODEL
 
-        if not references and engine in ("auto", "local"):
+        if sources and engine in ("auto", "local"):
+            try:
+                if len(sources) > 2:
+                    raise LocalImageError(f"Krea 2 edit takes at most 2 images; {len(sources)} were given.")
+                local = await self.local_images.edit(prompt, sources, size=size, n=n, seed=seed, loras=loras, steps=steps,
+                                                     ref_boost=ref_boost, max_adult_loras=max_adult_loras)
+            except LocalImageError as exc:
+                if engine == "local" or exc.fatal:
+                    raise RequestError(str(exc)) from None
+                tried.append({"engine": "krea2-edit", "skipped": str(exc)})
+            else:
+                notes.extend(local.warnings)
+                return await self._image_result(prompt, local.images, "krea2/identity-edit", "krea2-edit", notes, tried,
+                                                reference_asset_ids, extra={"loras": local.loras, "seconds": local.seconds})
+
+        if not sources and engine in ("auto", "local"):
             try:
                 local = await self.local_images.generate(prompt, size=size, n=n, seed=seed, loras=loras, steps=steps,
                                                          max_adult_loras=max_adult_loras)
@@ -728,8 +755,12 @@ class HawkService:
                 notes.extend(local.warnings)
                 return await self._image_result(prompt, local.images, "krea2/turbo", "krea2", notes, tried, reference_asset_ids,
                                           extra={"loras": local.loras, "seconds": local.seconds})
-        if loras and not references and engine in ("turbo", "seedream", "atlas"):
+        if loras:
             notes.append("Image LoRAs only apply to local Krea 2; ignored here.")
+        references = []
+        for asset in sources:
+            mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
+            references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
 
         if engine == "auto" and not references:
             chain = [self.settings.image_model, IMAGE_MODEL] if self.settings.image_model != IMAGE_MODEL else [IMAGE_MODEL]

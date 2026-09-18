@@ -104,8 +104,12 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         "'seedream' picks one; the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
         "[{name, strength}] from image_options, e.g. a realism or detail LoRA for photo portraits, a style LoRA for a look; follow "
         "the GO-TO / AVOID notes; up to 3 adult LoRAs, only for fictional adults the user explicitly asked for. "
-        "Krea 2 and z-image can't edit: with reference_asset_ids, Seedream edit always changes or combines those images (keep a "
-        "face, change outfit or scene, make variations). Returns new image assets (asset_id, thumb_url) that work as picture "
+        "Edits: with reference_asset_ids, 'auto' / 'local' use Krea 2 Identity Edit on this GPU when installed and idle (free; "
+        "1 image, or 2: the scene first, then the person to place in it; plain-English instructions like 'Change her outfit "
+        "to a red raincoat', 'Place this person at the cafe table'; ref_boost is the likeness dial: 4 default, 1 looser, "
+        "keep it under 10), else Seedream edit (up to 10 images; also 'seedream'). z-image can't edit. Keep a face, change "
+        "outfit, pose, scene, light or style, make variations. Krea 2 edits of uploaded photos (not images made here) are "
+        "refused if sexual or with adult LoRAs. Returns new image assets (asset_id, thumb_url) that work as picture "
         "references in plan_film and render_film, e.g. to lock a character's identity across segments. size like 1024x1536 "
         "or 1536x1536 (z-image: 512-2048 a side; Seedream also 2048x2048, 2048x1152) is optional; n is 1-4. Write rich, "
         "specific prompts: subject, face, hair, expression, outfit, setting, light, camera and lens, mood, style. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
@@ -120,10 +124,12 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         engine: str | None = None,
         loras: list[ImageLoraIn] | None = None,
         steps: int | None = None,
+        ref_boost: float | None = None,
     ) -> dict:
         return await run(service.generate_images(prompt, model=model, reference_asset_ids=reference_asset_ids or [],
                                                  size=size, n=max(1, min(4, n)), seed=seed, engine=engine,
-                                                 loras=[l.model_dump() for l in loras or []], steps=steps))
+                                                 loras=[l.model_dump() for l in loras or []], steps=steps,
+                                                 ref_boost=None if ref_boost is None else max(0.0, min(20.0, ref_boost))))
 
     @mcp.tool(description=(
         "Image engines and Krea 2 LoRAs: whether local Krea 2 is installed and busy (a video render is using ComfyUI), and "

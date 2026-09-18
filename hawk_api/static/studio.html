@@ -969,8 +969,11 @@
         <div class="field"><label class="label" for="genSeed">Seed</label><input class="input" id="genSeed" type="number" min="0" placeholder="Random"></div>
         <div class="field"><label class="label" for="genSteps">Steps (Krea)</label><input class="input" id="genSteps" type="number" min="1" max="50" placeholder="8"></div>
       </div>
-      <div class="field" id="genRefsField"><span class="label">Reference images</span><span class="hint">Optional: edit or remix these with Seedream.</span>
-        <div class="row" id="genRefs"></div></div>
+      <div class="field" id="genRefsField"><span class="label">Reference images</span><span class="hint">Optional: edit these. Krea 2 edit takes 1 image, or 2 (the scene first, then the person to place in it); Seedream takes up to 10.</span>
+        <div class="row" id="genRefs"></div>
+        <div class="field" id="genBoostField" hidden style="margin-top:6px"><label class="label" for="genBoost">Likeness (Krea 2 edit)</label>
+          <div class="range"><input type="range" id="genBoost" min="0.5" max="10" step="0.5" value="4"><output id="genBoostOut">4.0</output></div>
+          <span class="hint">4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.</span></div></div>
       <div class="field" id="genLoraField"><span class="label">Krea 2 LoRAs</span><span class="hint">Local only. Trigger words are added for you. Stack as many as you like, up to 3 adult LoRAs. SNOFS + Mystic XXX is the go-to pair.</span>
         <div class="lora-list" id="genLoras"></div><div class="gen-status warn" id="genLoraWarn" hidden></div></div>
       <div id="genResult" hidden style="display:grid;gap:8px"></div>
@@ -2322,10 +2325,20 @@
     const local = gen.options?.local || {};
     const engine = genEngine();
     const refs = gen.refs.length > 0;
+    const edit = local.edit || {};
+    const kreaEdit = refs && gen.refs.length <= 2 && (engine === "auto" || engine === "local") && local.installed && edit.installed;
     const status = $("genStatus");
     let text, tone = "";
-    if (refs) { text = "Reference images are edited with Seedream (Krea 2 and Z-Image Turbo make new images only)."; tone = "warn"; }
-    else if (!gen.options) text = "Could not read the image options; Generate still works.";
+    if (refs && kreaEdit) {
+      text = local.busy ? `Krea 2 edit is ready, but the GPU is busy. Auto will use Seedream edit now; pick Krea 2 to wait.`
+        : `Krea 2 edit runs on this GPU${gen.refs.length === 2 ? ": image 1 is the scene, image 2 the person to place in it" : ""}. Write the change as an instruction, e.g. “Change her outfit to a red raincoat”.`;
+      tone = local.busy ? "warn" : "ok";
+    } else if (refs) {
+      text = gen.refs.length > 2 ? "More than 2 images: Seedream edit combines them."
+        : engine === "seedream" || engine === "turbo" ? "Reference images are edited with Seedream."
+        : `Seedream edit will be used: Krea 2 edit isn't installed${edit.missing?.length ? ` (missing ${edit.missing.join(", ")})` : ""}.`;
+      tone = "warn";
+    } else if (!gen.options) text = "Could not read the image options; Generate still works.";
     else if (!local.reachable) { text = "ComfyUI isn't reachable, so Krea 2 is unavailable. Auto uses Z-Image Turbo."; tone = "warn"; }
     else if (!local.installed) { text = `Krea 2 isn't installed on the pod (missing ${(local.missing || []).join(", ")}). Run the Krea 2 install cell in the notebook. Auto uses Z-Image Turbo.`; tone = "warn"; }
     else if (local.busy) { text = `Krea 2 is ready, but the GPU is busy (${local.queue} job${local.queue === 1 ? "" : "s"} in the queue). Auto will use Z-Image Turbo now; pick Krea 2 to wait.`; tone = "warn"; }
@@ -2333,7 +2346,11 @@
     if (!refs && engine === "turbo") text += " Z-Image Turbo: about $0.01 an image.";
     status.textContent = text;
     status.className = `gen-status ${tone}`;
-    const showLoras = !refs && (engine === "auto" || engine === "local") && local.installed;
+    const showLoras = (kreaEdit || (!refs && (engine === "auto" || engine === "local"))) && local.installed;
+    $("genBoostField").hidden = !kreaEdit;
+    const sizeDefault = $("genSize").querySelector('option[value=""]');
+    if (sizeDefault) sizeDefault.textContent = refs ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
+    $("genSteps").placeholder = kreaEdit ? "10" : "8";
     $("genLoraField").hidden = !showLoras;
     const installed = (local.loras || []).filter((l) => l.installed);
     const html = installed.length ? installed.map((l) => {
@@ -2359,6 +2376,7 @@
     warn.textContent = `${adult.length} adult LoRAs at a combined ${total.toFixed(2)}. Above about 1.0 they tend to over-cook (melted anatomy, plastic skin); try around ${(1 / adult.length).toFixed(2)} each.`;
   }
   $("genOpen").onclick = () => openGenerate([]);
+  $("genBoost").addEventListener("input", () => { $("genBoostOut").textContent = Number($("genBoost").value).toFixed(1); });
   $("genClose").onclick = $("genCancel").onclick = () => $("genDialog").close();
   document.querySelectorAll('input[name="genEngine"]').forEach((input) => input.addEventListener("change", renderGenOptions));
   $("genRefs").addEventListener("click", async (event) => {
@@ -2396,10 +2414,11 @@
     if (!prompt) return $("genPrompt").focus();
     const engine = genEngine();
     const refs = gen.refs.map((a) => a.id);
-    const body = { prompt, n: Number($("genCount").value), engine: refs.length ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
+    const body = { prompt, n: Number($("genCount").value), engine: refs.length && engine === "turbo" ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
     if ($("genSize").value) body.size = $("genSize").value;
     if ($("genSeed").value !== "") body.seed = Number($("genSeed").value);
-    if (!refs.length && (engine === "auto" || engine === "local")) {
+    if (refs.length && !$("genBoostField").hidden) body.ref_boost = Number($("genBoost").value);
+    if (!$("genLoraField").hidden) {
       body.loras = Object.entries(gen.loras).map(([name, v]) => ({ name, strength: v.strength }));
       if ($("genSteps").value) body.steps = Number($("genSteps").value);
     }
@@ -2411,7 +2430,7 @@
     try {
       const result = await post("/v1/images", body);
       const seconds = ((performance.now() - started) / 1000).toFixed(0);
-      const names = { krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo", seedream: "Seedream" };
+      const names = { "krea2-edit": "Krea 2 edit (local)", krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo", seedream: "Seedream" };
       const box = $("genResult");
       box.hidden = false;
       box.innerHTML = `<div class="row"><strong>${esc(names[result.engine] || result.model)}</strong><span class="hint">${seconds} s · ${result.assets.length} image${result.assets.length === 1 ? "" : "s"} in Generated${result.loras?.length ? ` · LoRAs: ${esc(result.loras.map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", "))}` : ""}</span></div>`

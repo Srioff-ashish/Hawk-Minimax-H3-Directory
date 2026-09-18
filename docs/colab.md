@@ -162,6 +162,15 @@ Studio and the agent can make images on the Colab GPU with **Krea 2 Turbo** and 
 | `vae` | `qwen_image_vae.safetensors` |
 | `loras` | Your Krea 2 LoRAs, e.g. `krea2_realism_v2`, `krea2_realistic_snapshot`, `snofs_photodetail_slider`, `krea2_darkbrush`, `krea2_sunsetblur` |
 
+**Krea 2 edit** (keep a face, change outfit, pose, scene or style, or put a person into a scene) also needs, in the same cell:
+
+```python
+!git -C /content/ComfyUI/custom_nodes clone -q https://github.com/lbouaraba/comfyui-krea2edit 2>/dev/null || git -C /content/ComfyUI/custom_nodes/comfyui-krea2edit pull -q
+hf_hub_download("conradlocke/krea2-identity-edit", "krea2_identity_edit_v1_2.safetensors", local_dir="/content/ComfyUI/models/loras")
+```
+
+ComfyUI loads custom nodes only when it starts, so run this before the cell that starts ComfyUI (or restart it). On a tight GPU use the `_r128` (0.9 GB) or `_r64` file instead. Then select images in **Media → ✨ Edit / remix**, or ask the agent to change a picture.
+
 Keep Civitai downloads authenticated with a Colab secret (🔑 in the sidebar, e.g. `CIVITAI_TOKEN`, read with `userdata.get`). Never paste the token into a cell. Save LoRAs with the file names in [deploy/image_loras.example.json](../deploy/image_loras.example.json) so their recommended strengths, trigger words and step counts apply; other files with "krea" in the name still show up. No ComfyUI restart is needed: the API re-reads the model folders. Any precision of the three base files works (fp8_scaled, bf16, fp16); the API picks the one it finds, preferring higher precision, and **Media → ✨ Generate** shows which files are in use.
 
 Use it from **Media → ✨ Generate** (engine *Auto* or *Krea 2 (local)*, tick LoRAs, set strengths), or just ask the agent for an image. *Auto* uses Krea 2 when the GPU is idle, **Z-Image Turbo** on Atlas while a video is rendering, and **Seedream** if both fail; the agent also moves to Seedream when it isn't happy with a result. Editing reference images always uses Seedream.
