@@ -15,10 +15,13 @@ __version__ = "0.1.0"
 
 
 def _avoid_cudnn_attention() -> None:
-    """On Blackwell GPUs PyTorch's scaled-dot-product attention can pick the cuDNN backend, which has
-    no execution plan for some masked attention (Krea 2 Identity Edit, the Qwen3-VL vision encoder)
-    and fails with "cuDNN Frontend error: No valid execution plans built". Switch off only that
-    backend; flash and memory-efficient attention stay. HAWK_CUDNN_SDP=1 keeps it on."""
+    """On Blackwell GPUs the cuDNN attention backend has no execution plan for masked attention
+    (Krea 2 Identity Edit's reference tokens) and fails with "cuDNN Frontend error: No valid execution
+    plans built". ComfyUI's comfy.ops.scaled_dot_product_attention runs every call inside
+    sdpa_kernel(SDPA_BACKEND_PRIORITY) with cuDNN in the list, which overrides the global switch, so
+    masked calls go through a copy of that list without cuDNN. Unmasked calls (text to image, video)
+    keep ComfyUI's order. The global switch still covers code that calls PyTorch directly.
+    HAWK_CUDNN_SDP=1 leaves everything as it is."""
     import os
 
     if os.environ.get("HAWK_CUDNN_SDP", "").strip().lower() in ("1", "true", "on", "yes"):
@@ -26,10 +29,34 @@ def _avoid_cudnn_attention() -> None:
     try:
         import torch
 
-        if (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10
-                and hasattr(torch.backends.cuda, "enable_cudnn_sdp")):
+        if not (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10):
+            return
+        if hasattr(torch.backends.cuda, "enable_cudnn_sdp"):
             torch.backends.cuda.enable_cudnn_sdp(False)
-            logger.info("Hawk H3: cuDNN attention off on this Blackwell GPU (HAWK_CUDNN_SDP=1 keeps it)")
+        import comfy.ops
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        original = getattr(comfy.ops, "scaled_dot_product_attention", None)
+        priority = getattr(comfy.ops, "SDPA_BACKEND_PRIORITY", None)
+        if original is None or priority is None or getattr(original, "_hawk_masked", False):
+            logger.info("Hawk H3: cuDNN attention off on this Blackwell GPU")
+            return
+        safe = [backend for backend in priority if backend != SDPBackend.CUDNN_ATTENTION]
+        repeat_kv = getattr(comfy.ops, "repeat_kv_for_gqa", None)
+
+        def scaled_dot_product_attention(q, k, v, *args, **kwargs):
+            mask = args[0] if args else kwargs.get("attn_mask")
+            if mask is None:
+                return original(q, k, v, *args, **kwargs)
+            if kwargs.get("enable_gqa") and q.shape[-3] != k.shape[-3] and repeat_kv is not None:
+                k, v = repeat_kv(k, v, q.shape[-3], -3)
+                kwargs["enable_gqa"] = False
+            with sdpa_kernel(safe, set_priority=True):
+                return torch.nn.functional.scaled_dot_product_attention(q, k, v, *args, **kwargs)
+
+        scaled_dot_product_attention._hawk_masked = True
+        comfy.ops.scaled_dot_product_attention = scaled_dot_product_attention
+        logger.info("Hawk H3: masked attention skips cuDNN on this Blackwell GPU (HAWK_CUDNN_SDP=1 keeps it)")
     except Exception as exc:  # pragma: no cover -- never block loading the nodes
         logger.warning("Hawk H3: could not adjust cuDNN attention: %s", exc)
 
