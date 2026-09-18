@@ -433,9 +433,10 @@
   .viewer .icon-btn, .viewer .btn { color: #f1f3f7; background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.12); }
   .viewer .icon-btn:hover, .viewer .btn:hover { background: rgba(255,255,255,.16); }
   .viewer-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; }
-  .viewer-stage { position: relative; display: grid; place-items: center; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; min-height: 0; }
-  .viewer-slide { max-width: 100%; max-height: 100%; display: grid; place-items: center; padding: 16px; width: 100%; height: 100%; box-sizing: border-box; will-change: transform; }
-  .viewer-slide img, .viewer-slide video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; -webkit-user-drag: none; }
+  .viewer-stage { position: relative; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; min-height: 0; min-width: 0; }
+  /* the slide is pinned to the stage, so the picture always scales to fit the screen */
+  .viewer-slide { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; will-change: transform; }
+  .viewer-slide img, .viewer-slide video { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; }
   .viewer-slide audio { width: min(520px, 90%); }
   .viewer-audio { display: grid; place-items: center; gap: 18px; color: #9aa3b2; }
   .viewer-audio svg { width: 72px; height: 72px; }
@@ -457,7 +458,7 @@
     .viewer-info[data-collapsed="true"] dl { display: none; }
     #viewerMore { display: inline-flex; }
     .viewer-nav { display: none; }
-    .viewer-slide { padding: 6px; }
+    .viewer-slide { padding: 4px; }
   }
   .gen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 640px) { .gen-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .gen-engine { flex-wrap: wrap; } }
@@ -2316,7 +2317,7 @@
     slide.style.transition = "none";
     slide.style.transform = direction ? `translateX(${direction * 40}px)` : "";
     slide.style.opacity = direction ? "0" : "1";
-    const big = Math.min(2048, Math.round(Math.max(window.innerWidth, window.innerHeight) * (window.devicePixelRatio || 1)));
+    const big = Math.max(window.innerWidth, window.innerHeight) * (window.devicePixelRatio || 1) > 1400 ? 2048 : 1280;
     slide.innerHTML = asset.kind === "image" ? `<img src="${esc(viewerSrc(asset, big))}" alt="${esc(asset.filename)}" draggable="false">`
       : asset.kind === "video" ? `<video src="${esc(asset.file_url)}" controls playsinline preload="metadata" ${asset.thumb_url ? `poster="${esc(asset.thumb_url)}"` : ""}></video>`
       : `<div class="viewer-audio"><svg><use href="#i-music"/></svg><audio src="${esc(asset.file_url)}" controls preload="metadata"></audio></div>`;

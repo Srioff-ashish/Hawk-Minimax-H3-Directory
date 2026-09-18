@@ -13,6 +13,29 @@ logger = logging.getLogger("HawkH3")
 
 __version__ = "0.1.0"
 
+
+def _avoid_cudnn_attention() -> None:
+    """On Blackwell GPUs PyTorch's scaled-dot-product attention can pick the cuDNN backend, which has
+    no execution plan for some masked attention (Krea 2 Identity Edit, the Qwen3-VL vision encoder)
+    and fails with "cuDNN Frontend error: No valid execution plans built". Switch off only that
+    backend; flash and memory-efficient attention stay. HAWK_CUDNN_SDP=1 keeps it on."""
+    import os
+
+    if os.environ.get("HAWK_CUDNN_SDP", "").strip().lower() in ("1", "true", "on", "yes"):
+        return
+    try:
+        import torch
+
+        if (torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 10
+                and hasattr(torch.backends.cuda, "enable_cudnn_sdp")):
+            torch.backends.cuda.enable_cudnn_sdp(False)
+            logger.info("Hawk H3: cuDNN attention off on this Blackwell GPU (HAWK_CUDNN_SDP=1 keeps it)")
+    except Exception as exc:  # pragma: no cover -- never block loading the nodes
+        logger.warning("Hawk H3: could not adjust cuDNN attention: %s", exc)
+
+
+_avoid_cudnn_attention()
+
 try:
     from comfy_api.latest import ComfyExtension
     from comfy_extras import nodes_minimax_h3  # noqa: F401 -- MiniMax H3 support check

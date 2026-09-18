@@ -75,7 +75,7 @@ def _star_size(size: str) -> str:
     if not (512 <= width <= 2048 and 512 <= height <= 2048):
         raise RequestError("z-image/turbo sizes run 512-2048 on each side, e.g. 1024x1536 or 1536x1536.")
     return f"{width}*{height}"
-THUMB_WIDTHS = (160, 320, 640)
+THUMB_WIDTHS = (160, 320, 640, 1280, 2048)  # 1280 / 2048: the full-screen viewer
 #: models folder -> (file-name family the Director can use, label for errors)
 MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders": ("qwen3vl", "Text encoder")}
 
@@ -639,7 +639,7 @@ class HawkService:
                 image = Image.open(io.BytesIO(data))
                 image.thumbnail((width, width * 4))
                 buffer = io.BytesIO()
-                image.convert("RGB").save(buffer, format="JPEG", quality=82)
+                image.convert("RGB").save(buffer, format="JPEG", quality=82 if width <= 640 else 90)
             except Exception:
                 return None
             os.makedirs(os.path.dirname(cache), exist_ok=True)

@@ -433,9 +433,10 @@ class LocalImageEngine:
             if history:
                 status = history.get("status") or {}
                 if status.get("status_str") == "error":
-                    message = next((str(data.get("exception_message", "")).strip() for name, data in status.get("messages", [])
-                                    if name == "execution_error"), "ComfyUI reported an error.")
-                    raise LocalImageError(f"Krea 2 failed: {message}")
+                    error = next((data for name, data in status.get("messages", []) if name == "execution_error"), {})
+                    message = str(error.get("exception_message") or "ComfyUI reported an error.").strip()
+                    where = f" in {error['node_type']} (node {error.get('node_id')})" if error.get("node_type") else ""
+                    raise LocalImageError(f"Krea 2 failed{where}: {message}")
                 files = [image for output in (history.get("outputs") or {}).values() for image in output.get("images") or []]
                 if files:
                     return [await self._read(image) for image in files]
