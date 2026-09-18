@@ -45,8 +45,8 @@ def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | N
     matches = [name for name in files if family.search(name.rsplit("/", 1)[-1])]
     rank = lambda name: next(i for i, tag in enumerate(_PRECISION) if tag in name.lower())
     return min(matches, key=lambda name: (rank(name), name)) if matches else None
-MAX_ADULT_LORAS = 3  # the most a manual (Studio) request may stack; the agent stays at 1
-ADULT_STRENGTH_WARN = 1.0  # combined adult LoRA strength above this tends to over-cook Turbo
+MAX_ADULT_LORAS = 3  # adult LoRAs one image may stack (SNOFS + Mystic XXX is the go-to pair)
+ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to over-cook Turbo
 
 # Local generation has no provider-side moderation, so refuse prompts that point at minors.
 _MINOR = re.compile(
@@ -112,6 +112,13 @@ def load_catalogue(path: str) -> list[ImageLora]:
         shutil.copyfile(EXAMPLE_LORAS, path)
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
+    if os.path.abspath(path) != os.path.abspath(EXAMPLE_LORAS):
+        with open(EXAMPLE_LORAS, "r", encoding="utf-8") as handle:
+            example = json.load(handle)
+        if int(data.get("version") or 1) < int(example.get("version") or 1):  # a newer catalogue ships with the code
+            shutil.copyfile(path, path + ".bak")
+            shutil.copyfile(EXAMPLE_LORAS, path)
+            data = example
     entries = [e for e in data.get("loras", []) if isinstance(e, dict)]
     if os.path.abspath(path) != os.path.abspath(EXAMPLE_LORAS):  # LoRAs added to the example later still show up
         with open(EXAMPLE_LORAS, "r", encoding="utf-8") as handle:
@@ -207,7 +214,7 @@ class LocalImageEngine:
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True))
         return items
 
-    async def resolve_loras(self, requested: list[dict] | None, max_adult: int = 1
+    async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:
         if not requested:
             return [], [], []
@@ -245,7 +252,7 @@ class LocalImageEngine:
 
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
                        loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False,
-                       max_adult_loras: int = 1) -> LocalResult:
+                       max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
         check_prompt(prompt)
         status = await self.status()
         if not status.get("reachable"):

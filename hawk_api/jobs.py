@@ -682,7 +682,7 @@ class HawkService:
         engine: str | None = None,
         loras: list[dict] | None = None,
         steps: int | None = None,
-        max_adult_loras: int = 1,
+        max_adult_loras: int = 3,
     ) -> dict:
         """Make images and store them as assets, ready to use as picture references.
 

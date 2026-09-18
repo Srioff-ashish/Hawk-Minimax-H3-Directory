@@ -160,7 +160,7 @@ Studio and the agent can make images on the Colab GPU with **Krea 2 Turbo** and 
 | `diffusion_models` | `krea2_turbo_fp8_scaled.safetensors` |
 | `text_encoders` | `qwen3vl_4b_fp8_scaled.safetensors`, or `qwen3vl_4b_bf16.safetensors` from `Comfy-Org/Qwen3-VL` |
 | `vae` | `qwen_image_vae.safetensors` |
-| `loras` | Your Krea 2 LoRAs, e.g. `krea2_realism_v1`, `krea2_realistic_snapshot`, `krea2_enhancer`, `snofs_photodetail_slider`, `krea2_darkbrush`, `krea2_sunsetblur` |
+| `loras` | Your Krea 2 LoRAs, e.g. `krea2_realism_v2`, `krea2_realistic_snapshot`, `snofs_photodetail_slider`, `krea2_darkbrush`, `krea2_sunsetblur` |
 
 Keep Civitai downloads authenticated with a Colab secret (🔑 in the sidebar, e.g. `CIVITAI_TOKEN`, read with `userdata.get`). Never paste the token into a cell. Save LoRAs with the file names in [deploy/image_loras.example.json](../deploy/image_loras.example.json) so their recommended strengths, trigger words and step counts apply; other files with "krea" in the name still show up. No ComfyUI restart is needed: the API re-reads the model folders. Any precision of the three base files works (fp8_scaled, bf16, fp16); the API picks the one it finds, preferring higher precision, and **Media → ✨ Generate** shows which files are in use.
 

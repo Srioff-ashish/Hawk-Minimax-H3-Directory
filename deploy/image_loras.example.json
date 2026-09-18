@@ -1,26 +1,121 @@
 {
-  "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. kind: realism, detail, style, adult. Use at most one adult LoRA per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically.",
+  "version": 2,
+  "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. When this example's version goes up, the copy is replaced (the old one is kept as image_loras.json.bak). kind: realism, detail, style, adult. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
-    {"file": "krea2_realism_v1.safetensors", "kind": "realism", "label": "Realism v1", "strength": 0.8, "range": [0.5, 1.0],
-     "notes": "General photorealism: skin, light, lens character. Good default for photo portraits."},
-    {"file": "krea2_realism_v2.safetensors", "kind": "realism", "label": "Realism v2", "strength": 0.8, "range": [0.5, 1.0],
-     "notes": "Newer photorealism LoRA: skin, light, lens character. Good default for photo portraits; use instead of v1."},
-    {"file": "krea2_realistic_snapshot.safetensors", "kind": "realism", "label": "Realistic snapshot", "strength": 1.2, "range": [1.0, 2.0],
-     "notes": "Candid phone-snapshot look: natural flash, casual framing, less polish."},
-    {"file": "krea2_enhancer.safetensors", "kind": "detail", "label": "Enhancer", "strength": 0.7, "range": [0.4, 1.0],
-     "notes": "Adds fine detail and crispness; stack with a realism LoRA."},
-    {"file": "snofs_photodetail_slider.safetensors", "kind": "detail", "label": "Photo-detail slider", "strength": 1.0, "range": [0.5, 2.0],
-     "notes": "Pulls images back to photographic detail; raise towards 2 if results drift anime or plastic."},
-    {"file": "krea2_mystic_xxx_v3.safetensors", "kind": "adult", "label": "Mystic XXX v3", "strength": 0.5, "range": [0.4, 0.7],
-     "steps": 12, "scheduler": "beta", "sampler": "euler",
-     "notes": "All-in-one adult content for fictional adults. Use one adult LoRA at a time."},
-    {"file": "snofs_krea2.safetensors", "kind": "adult", "label": "SNOFS", "strength": 0.8, "range": [0.5, 1.0],
-     "notes": "All-in-one adult content for fictional adults; alternative to Mystic XXX, not with it."},
-    {"file": "krea2_nsfw_master_turbo.safetensors", "kind": "adult", "label": "NSFW Master Turbo", "strength": 0.8, "range": [0.5, 1.0],
-     "notes": "Adult content tuned for Turbo; alternative to Mystic XXX, not with it."},
-    {"file": "krea2_darkbrush.safetensors", "kind": "style", "label": "Dark brush", "strength": 0.8, "range": [0.6, 1.0],
-     "trigger": "muted minimalist sketch style", "notes": "Official Krea 2 style LoRA: muted minimalist ink sketch."},
-    {"file": "krea2_sunsetblur.safetensors", "kind": "style", "label": "Sunset blur", "strength": 1.0, "range": [0.8, 1.0],
-     "trigger": "ethereal motion blur style", "notes": "Official Krea 2 style LoRA: dreamy motion blur, sunset tones."}
+    {
+      "file": "krea2_realism_v1.safetensors",
+      "kind": "realism",
+      "label": "Realism v1",
+      "strength": 0.8,
+      "range": [
+        0.5,
+        1.0
+      ],
+      "notes": "Older photorealism LoRA; prefer Realism v2 when installed."
+    },
+    {
+      "file": "krea2_realism_v2.safetensors",
+      "kind": "realism",
+      "label": "Realism v2",
+      "strength": 0.8,
+      "range": [
+        0.5,
+        1.0
+      ],
+      "notes": "Newer photorealism LoRA: skin, light, lens character. Good default for photo portraits; use instead of v1."
+    },
+    {
+      "file": "krea2_realistic_snapshot.safetensors",
+      "kind": "realism",
+      "label": "Realistic snapshot",
+      "strength": 1.2,
+      "range": [
+        1.0,
+        2.0
+      ],
+      "notes": "Candid phone-snapshot look: natural flash, casual framing, less polish."
+    },
+    {
+      "file": "krea2_enhancer.safetensors",
+      "kind": "detail",
+      "label": "Enhancer",
+      "strength": 0.7,
+      "range": [
+        0.4,
+        1.0
+      ],
+      "notes": "AVOID: gives poor results on this setup. Don't use it unless the user asks by name; use the photo-detail slider for crispness."
+    },
+    {
+      "file": "snofs_photodetail_slider.safetensors",
+      "kind": "detail",
+      "label": "Photo-detail slider",
+      "strength": 1.0,
+      "range": [
+        0.5,
+        2.0
+      ],
+      "notes": "Pulls images back to photographic detail; raise towards 2 if results drift anime or plastic."
+    },
+    {
+      "file": "krea2_mystic_xxx_v3.safetensors",
+      "kind": "adult",
+      "label": "Mystic XXX v3",
+      "strength": 0.5,
+      "range": [
+        0.4,
+        0.7
+      ],
+      "steps": 12,
+      "scheduler": "beta",
+      "sampler": "euler",
+      "notes": "GO-TO adult LoRA, together with SNOFS: the best adult results so far. Fictional adults only."
+    },
+    {
+      "file": "snofs_krea2.safetensors",
+      "kind": "adult",
+      "label": "SNOFS",
+      "strength": 0.8,
+      "range": [
+        0.5,
+        1.0
+      ],
+      "notes": "GO-TO adult LoRA, together with Mystic XXX: the best adult results so far. Fictional adults only."
+    },
+    {
+      "file": "krea2_nsfw_master_turbo.safetensors",
+      "kind": "adult",
+      "label": "NSFW Master Turbo",
+      "strength": 0.8,
+      "range": [
+        0.5,
+        1.0
+      ],
+      "notes": "Adult content tuned for Turbo. Add as a third adult LoRA only when SNOFS + Mystic XXX aren't enough. Fictional adults only."
+    },
+    {
+      "file": "krea2_darkbrush.safetensors",
+      "kind": "style",
+      "label": "Dark brush",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "trigger": "muted minimalist sketch style",
+      "notes": "Official Krea 2 style LoRA: muted minimalist ink sketch."
+    },
+    {
+      "file": "krea2_sunsetblur.safetensors",
+      "kind": "style",
+      "label": "Sunset blur",
+      "strength": 1.0,
+      "range": [
+        0.8,
+        1.0
+      ],
+      "trigger": "ethereal motion blur style",
+      "notes": "Official Krea 2 style LoRA: dreamy motion blur, sunset tones."
+    }
   ]
 }

@@ -550,17 +550,18 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         await self.http.post("/v1/images", json={"prompt": "Portrait", "engine": "local", "loras": [{"name": "mystic"}]})
         sampler = next(n["inputs"] for n in list(self.fake.prompts.values())[-1].values() if n["class_type"] == "KSampler")
         self.assertEqual((sampler["steps"], sampler["scheduler"]), (12, "beta"), "the LoRA's recommended sampler settings")
-        two_adult = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
-        self.assertEqual(two_adult.status_code, 422)
-        auto_two = await self.http.post("/v1/images", json={"prompt": "x", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
-        self.assertEqual(auto_two.status_code, 422, "a LoRA error is not hidden by falling back to another engine")
-        manual = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "max_adult_loras": 3,
-                                                          "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
-        self.assertEqual(manual.status_code, 201, manual.text)
-        self.assertIn("combined strength of 1.30", manual.json()["note"])
-        quiet = (await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "max_adult_loras": 3,
-                                                          "loras": [{"name": "mystic", "strength": 0.4}, {"name": "snofs_krea2", "strength": 0.5}]})).json()
-        self.assertNotIn("note", quiet)
+        pair = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
+        self.assertEqual(pair.status_code, 201, "the go-to pair works by default (agent and MCP too)")
+        self.assertNotIn("note", pair.json())
+        sampler = next(n["inputs"] for n in list(self.fake.prompts.values())[-1].values() if n["class_type"] == "KSampler")
+        self.assertEqual((sampler["steps"], sampler["scheduler"]), (12, "beta"), "Mystic's settings apply to the pair")
+        strict = await self.http.post("/v1/images", json={"prompt": "x", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}], "max_adult_loras": 1})
+        self.assertEqual(strict.status_code, 422, "a LoRA error is not hidden by falling back to another engine")
+        files["loras"].append("krea2_nsfw_master_turbo.safetensors")
+        three = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "loras": [
+            {"name": "mystic", "strength": 0.7}, {"name": "snofs_krea2", "strength": 0.8}, {"name": "nsfw_master", "strength": 0.8}]})
+        self.assertEqual(three.status_code, 201, three.text)
+        self.assertIn("combined strength of 2.30", three.json()["note"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "x", "max_adult_loras": 4})).status_code, 422)
         refused = await self.http.post("/v1/images", json={"prompt": "a 16 year old girl on a beach"})
         self.assertEqual(refused.status_code, 422, "refused outright, not passed to another engine")
@@ -723,6 +724,22 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
 
 class Pieces(unittest.IsolatedAsyncioTestCase):
+    def test_image_lora_catalogue_upgrades(self):
+        from hawk_api.local_images import load_catalogue
+        path = os.path.join(tempfile.mkdtemp(), "image_loras.json")
+        with open(path, "w") as handle:  # a pod's copy of an older catalogue
+            json.dump({"loras": [{"file": "krea2_enhancer.safetensors", "kind": "detail", "notes": "old"}]}, handle)
+        items = {item.file: item for item in load_catalogue(path)}
+        self.assertTrue(items["krea2_enhancer.safetensors"].notes.startswith("AVOID"))
+        self.assertTrue(items["snofs_krea2.safetensors"].notes.startswith("GO-TO"))
+        self.assertTrue(os.path.exists(path + ".bak"))
+        with open(path) as handle:
+            data = json.load(handle)
+        data["loras"][0]["strength"] = 0.33
+        with open(path, "w") as handle:
+            json.dump(data, handle)
+        self.assertEqual(load_catalogue(path)[0].strength, 0.33, "edits to a current copy are kept")
+
     def test_parse_reply(self):
         self.assertEqual(parse_reply('```json\n{"say": "a", "actions": [{"tool": "x"}]}\n```'),
                          {"say": "a", "actions": [{"tool": "x", "args": {}}], "done": False})
