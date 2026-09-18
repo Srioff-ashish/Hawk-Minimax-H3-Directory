@@ -3047,6 +3047,7 @@
     } else if (message.role === "note") {
       if (c.kind === "repair") return;
       if (c.kind === "talk") { add(`<div class="note-line talk">💬 Talking · round ${esc(c.round)} of ${esc(c.of)}</div>`); return; }
+      if (c.kind === "grow-merge") { add(`<div class="note-line grow" title="Adaptive: older notes folded together; nothing in the chat is deleted">🌱 ${esc(c.text || "")}</div>`); return; }
       if (c.kind === "grow") { add(`<div class="note-line grow" title="Adaptive: remembered in this chat">🌱 ${c.speaker ? `${esc(c.speaker)}: ` : ""}${esc(c.text || "")}</div>`); return; }
       add(`<div class="note-line ${esc(c.kind || "")}">${linkify(c.text || "")}</div>`);
     }

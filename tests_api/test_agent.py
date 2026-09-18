@@ -373,6 +373,26 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             {"id": edited[1]["id"], "name": "Riya", "persona": "director", "growth": []}]})).json()
         self.assertEqual([m["growth"] for m in kept["cast"]], [["Calls the user 'boss' now."], []])
 
+        # at 8 notes the model folds them into a few; a failed or empty merge keeps them
+        counter = iter(range(100))
+
+        def merging(body):
+            if body["messages"][0]["content"].startswith("You keep a character's memory"):
+                self.assertIn("- Riya note 0", body["messages"][1]["content"])
+                return json.dumps({"notes": ["Feels sidelined by the user.", "Softening towards Maya.", "", "x", "y", "z"]})
+            return json.dumps({"lines": [{"speaker": "Riya", "say": "hm"}], "actions": [], "done": True,
+                               "grow": [{"speaker": "Riya", "note": f"Riya note {next(counter)}"}]})
+        self.atlas.reply = merging
+        for _ in range(8):
+            await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "next"})
+            view = await self.settle(chat["id"])
+        riya = view["session"]["cast"][1]["growth"]
+        self.assertEqual(riya, ["Feels sidelined by the user.", "Softening towards Maya.", "x", "y"], "merged at 8 into at most 4")
+        merges = [m for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "grow-merge"]
+        self.assertEqual(len(merges), 1)
+        self.assertEqual(view["session"]["cast"][0]["growth"], ["Calls the user 'boss' now."], "other characters untouched")
+        self.assertIn("not what happened", self.atlas.requests[-2]["messages"][0]["content"])
+
         solo = await self.new_chat(persona="You are Maya.")
         await self.http.patch(f"/v1/agent/sessions/{solo}", json={"adaptive": True})
         self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": [], "done": True, "grow": [{"note": "Prefers Hinglish."}]})

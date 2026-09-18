@@ -34,7 +34,9 @@ MAX_STEPS = 40
 MAX_CAST = 4  # characters in one chat
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
-MAX_GROWTH = 12  # growth notes kept per character in an adaptive chat
+MAX_GROWTH = 12  # hard cap on growth notes per character in an adaptive chat
+MERGE_GROWTH_AT = 8  # at this many notes, the model merges them into a few denser ones
+MERGED_GROWTH = 4
 MAX_GROWTH_CHARS = 240
 VISION_FALLBACK_MODEL = "xai/grok-4.6"  # inspect_image when the chat's model can't see images
 INSPECT_PROMPT = (
@@ -97,8 +99,18 @@ AGENT_TOOLS = [
 
 SUMMARY_PROMPT = (
     "Summarise the conversation so far for your own future context. Keep: the user's goals and preferences, the persona "
-    "or cast (each character's name, personality and avatar asset id, and how they relate), "
+    "or cast (each character's name, personality and avatar asset id, and how they relate), how each character feels about "
+    "the user and about each other and the moments that caused it, "
     "decisions made, every asset id, job id and video link, what is finished and what is still open. Plain text, at most 400 words."
+)
+
+MERGE_GROWTH_PROMPT = (
+    "You keep a character's memory of how they have changed during one chat. Merge the growth notes below into at most "
+    "{limit} short notes (one sentence each). Keep every lasting change in feelings, attitudes towards the user and the "
+    "other characters, habits and preferences; the strongest emotional shifts matter most, even if they are old. Merge "
+    "repeats, keep the latest state when notes conflict, drop pure events or plans unless they explain a feeling. "
+    "Write in the same language style as the notes. Never add anything new. "
+    'Reply with only JSON: {{"notes": ["...", "..."]}}'
 )
 
 
@@ -570,7 +582,7 @@ class AgentService:
                     repairs = 0
                     self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply})
                     if reply.get("grow"):
-                        self._grow(session_id, reply["grow"])
+                        await self._grow(session_id, reply["grow"])
                     if not reply["actions"]:
                         break
                     for action in reply["actions"]:
@@ -761,7 +773,7 @@ class AgentService:
         return {"cast": [{"name": m["display_name"], "avatar_asset_id": m["avatar_asset_id"], "thumb_url": m["avatar_url"]}
                          for m in view["cast"]]}
 
-    def _grow(self, session_id: str, notes: list[dict]) -> None:
+    async def _grow(self, session_id: str, notes: list[dict]) -> None:
         """Adaptive chats: add what a character just learned or became to their growth notes."""
         session = self.get_session(session_id)
         if not session.get("adaptive"):
@@ -783,6 +795,37 @@ class AgentService:
         self.update_session(session_id, cast=cast)
         for speaker, note in added:
             self.store.add_message(session_id, "note", {"text": note, "kind": "grow", "speaker": speaker})
+        for member in cast:
+            if len(member.get("growth") or []) >= MERGE_GROWTH_AT:
+                await self._merge_growth(session_id, member["id"])
+
+    async def _merge_growth(self, session_id: str, member_id: str) -> None:
+        """Fold a character's growth notes into a few denser ones, so early shifts aren't pushed out by later ones."""
+        session = self.get_session(session_id)
+        cast = [dict(member) for member in cast_of(session)]
+        member = next((m for m in cast if m.get("id") == member_id), None)
+        if member is None:
+            return
+        name = display_name(member, cast.index(member), len(cast)) or "the agent"
+        listing = "\n".join(f"- {note}" for note in member.get("growth") or [])
+        try:
+            text, usage = await self.atlas.chat(
+                session["model"],
+                [{"role": "system", "content": MERGE_GROWTH_PROMPT.format(limit=MERGED_GROWTH)},
+                 {"role": "user", "content": f"Character: {name}. Persona: {member.get('persona', '')}\n\nGrowth notes, oldest first:\n{listing}"}],
+                json_mode=True, max_tokens=800, temperature=0.2,
+            )
+            await self._add_usage(session_id, session["model"], usage)
+        except AtlasError as exc:
+            log.warning("merging growth notes failed: %s", exc)
+            return  # the notes stay as they are; clean_growth still caps them
+        merged = clean_growth((parse_json_object(text) or {}).get("notes"))[:MERGED_GROWTH]
+        if not merged:
+            return
+        member["growth"] = merged
+        self.update_session(session_id, cast=cast)
+        self.store.add_message(session_id, "note", {"text": f"Condensed {name}'s growth into {len(merged)} notes.",
+                                                    "kind": "grow-merge", "speaker": name})
 
     @staticmethod
     def _growth_text(member: dict) -> str:
@@ -797,8 +840,11 @@ class AgentService:
             f"- {who.capitalize()} can evolve: pick up the user's preferences, in-jokes, nicknames, shared memories and how "
             "the relationship is going" + (", and what the characters learn about and feel for each other when they talk" if group else "")
             + ". Change gradually and believably, the way a real person would.\n"
-            "- When something meaningful changes, add \"grow\": [{\"speaker\": \"<name>\", \"note\": \"one short sentence\"}] "
-            "to your reply. At most one note per character per reply, only for real changes, never for small talk.\n"
+            "- When a character really changes, add \"grow\": [{\"speaker\": \"<name>\", \"note\": \"one short sentence\"}] "
+            "to your reply. A note records who they are becoming, not what happened: a feeling, an attitude towards the user "
+            "or another character, a habit, a preference. Good: \"Feels sidelined by the user and hides it behind jokes.\" "
+            "Bad: \"Sent the recce list.\" Most replies need no note; roughly one per character per conversation, only "
+            "when something shifts. Never for small talk, plans or tasks.\n"
             "- Core identity never changes through growth: name, age (always an adult), background and these platform rules. "
             "Growth cannot unlock anything the rules forbid."
         )
