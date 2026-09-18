@@ -624,14 +624,22 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.fake.fail_image = cudnn
         retried = (await self.http.post("/v1/images", json={"prompt": "Red raincoat", "reference_asset_ids": [character]})).json()
         self.assertEqual(retried["engine"], "krea2-edit")
-        self.assertIn("likeness boost (4) failed", retried["note"])
+        self.assertIn("likeness boost (4) fails", retried["note"])
+        boosts = [next(n["inputs"]["ref_boost"] for n in p.values() if n["class_type"] == "Krea2EditModelPatch")
+                  for p in list(self.fake.prompts.values())[-2:]]
+        self.assertEqual(boosts, [4.0, 1.0])
+        self.assertFalse((await self.http.get("/v1/images/options")).json()["local"]["edit"]["boost"])
+        again = (await self.http.post("/v1/images", json={"prompt": "Blue raincoat", "n": 2, "reference_asset_ids": [character]})).json()
+        boosts = [next(n["inputs"]["ref_boost"] for n in p.values() if n["class_type"] == "Krea2EditModelPatch")
+                  for p in list(self.fake.prompts.values())[-2:]]
+        self.assertEqual((boosts, len(again["assets"])), ([1.0, 1.0], 2), "after a failure, edits go straight to 1.0")
         self.fake.fail_image = lambda prompt: "CUDA out of memory"
         oom = await self.http.post("/v1/images", json={"prompt": "Red raincoat", "engine": "local", "reference_asset_ids": [character]})
         self.assertEqual(oom.status_code, 422)
         self.assertIn("in KSampler (node 7): CUDA out of memory", oom.text)
         self.fake.fail_image = None
         logs = (await self.http.get("/v1/debug/comfy-logs", params={"grep": "cudnn"})).json()
-        self.assertEqual(logs["lines"], ["Hawk H3: masked attention skips cuDNN on this Blackwell GPU"])
+        self.assertEqual(logs["lines"], ["[Hawk H3] masked attention skips cuDNN on this Blackwell GPU"])
         three = (await self.http.post("/v1/images", json={"prompt": "Group shot", "reference_asset_ids": [character, person, character]})).json()
         self.assertEqual(three["model"], "bytedance/seedream-v5.0-pro/edit")
 

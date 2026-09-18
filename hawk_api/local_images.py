@@ -267,6 +267,7 @@ class LocalImageEngine:
         self.service = service
         self.settings = service.settings
         self.path = os.path.join(self.settings.data_dir, "image_loras.json")
+        self.boost_broken = False  # the likeness boost hit the Blackwell cuDNN error: edits run at 1.0 until restart
 
     # ------------------------------------------------------------ status
 
@@ -295,7 +296,7 @@ class LocalImageEngine:
         lora = self._edit_lora(await self.service.available_models("loras"))
         if not lora:
             missing.append("loras/krea2_identity_edit_v1_2.safetensors")
-        return {"installed": not missing, "missing": missing, "lora": lora}
+        return {"installed": not missing, "missing": missing, "lora": lora, "boost": not self.boost_broken}
 
     @staticmethod
     def _edit_lora(files: list[str]) -> str | None:
@@ -420,35 +421,41 @@ class LocalImageEngine:
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         boost = EDIT_REF_BOOST if ref_boost is None else max(0.0, min(20.0, float(ref_boost)))
         started = time.monotonic()
-        try:
-            images = await self._run_edits(text, sources, width, height, seed, n, status, chosen, steps, boost)
-        except LocalImageError as exc:
-            # Blackwell: cuDNN attention has no plan for the likeness boost's attention mask. Without the
-            # boost there is no mask, so run once more at 1.0 rather than failing the edit.
-            if boost == 1.0 or "cudnn" not in str(exc).lower():
-                raise
-            images = await self._run_edits(text, sources, width, height, seed, n, status, chosen, steps, 1.0)
-            warnings.append(f"The likeness boost ({boost:g}) failed on this GPU (cuDNN), so this edit ran at 1.0. "
-                            "Restart ComfyUI after updating the Hawk nodes to enable it.")
+        wanted = boost
+        if boost != 1.0 and self.boost_broken:
+            boost = 1.0
+        images = []
+        # One prompt at a time: after a cuDNN failure the next queued masked prompt can segfault ComfyUI.
+        for index in range(max(1, min(4, n))):
+            try:
+                images += await self._run_edit(text, sources, width, height, seed + index, status, chosen, steps, boost)
+            except LocalImageError as exc:
+                # Blackwell: cuDNN attention has no plan for the likeness boost's attention mask. Without the
+                # boost there is no mask, so run at 1.0 rather than failing, and stay at 1.0 from now on.
+                if boost == 1.0 or "cudnn" not in str(exc).lower():
+                    raise
+                self.boost_broken = True
+                boost = 1.0
+                images += await self._run_edit(text, sources, width, height, seed + index, status, chosen, steps, boost)
+        if boost != wanted:
+            warnings.append(f"The likeness boost ({wanted:g}) fails on this GPU (cuDNN), so this edit ran at 1.0. Update the "
+                            "Hawk nodes and restart ComfyUI, then restart the API, to use it.")
         applied = [{"file": status["edit"]["lora"], "strength": 1.0}] + [{"file": f, "strength": v} for f, v in chosen]
         return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings)
 
-    async def _run_edits(self, text, sources, width, height, seed, n, status, chosen, steps, boost) -> list[bytes]:
+    async def _run_edit(self, text, sources, width, height, seed, status, chosen, steps, boost) -> list[bytes]:
         files = status["files"]
-        ids = []
-        for index in range(max(1, min(4, n))):  # the edit patch takes one target at a time
-            graph = krea_edit_graph(
-                text, images=[a["path"] for a in sources], width=width, height=height, seed=seed + index,
-                loras=[(status["edit"]["lora"], 1.0)] + chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
-                steps=steps or EDIT_STEPS, ref_boost=boost, prefix="hawk_images/krea2_edit",
-            )
-            prompt_id = str(uuid.uuid4())
-            try:
-                await self.service.comfy.submit(graph, prompt_id)
-            except ComfyError as exc:
-                raise LocalImageError(f"ComfyUI rejected the Krea 2 edit graph: {exc}") from exc
-            ids.append(prompt_id)
-        return [image for prompt_id in ids for image in await self._collect(prompt_id)]
+        graph = krea_edit_graph(
+            text, images=[a["path"] for a in sources], width=width, height=height, seed=seed,
+            loras=[(status["edit"]["lora"], 1.0)] + chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
+            steps=steps or EDIT_STEPS, ref_boost=boost, prefix="hawk_images/krea2_edit",
+        )
+        prompt_id = str(uuid.uuid4())
+        try:
+            await self.service.comfy.submit(graph, prompt_id)
+        except ComfyError as exc:
+            raise LocalImageError(f"ComfyUI rejected the Krea 2 edit graph: {exc}") from exc
+        return await self._collect(prompt_id)
 
     async def _collect(self, prompt_id: str) -> list[bytes]:
         deadline = time.monotonic() + WAIT_SECONDS

@@ -39,7 +39,7 @@ def _avoid_cudnn_attention() -> None:
         original = getattr(comfy.ops, "scaled_dot_product_attention", None)
         priority = getattr(comfy.ops, "SDPA_BACKEND_PRIORITY", None)
         if original is None or priority is None or getattr(original, "_hawk_masked", False):
-            logger.info("Hawk H3: cuDNN attention off on this Blackwell GPU")
+            print("[Hawk H3] cuDNN attention off on this Blackwell GPU", flush=True)
             return
         safe = [backend for backend in priority if backend != SDPBackend.CUDNN_ATTENTION]
         repeat_kv = getattr(comfy.ops, "repeat_kv_for_gqa", None)
@@ -56,9 +56,9 @@ def _avoid_cudnn_attention() -> None:
 
         scaled_dot_product_attention._hawk_masked = True
         comfy.ops.scaled_dot_product_attention = scaled_dot_product_attention
-        logger.info("Hawk H3: masked attention skips cuDNN on this Blackwell GPU (HAWK_CUDNN_SDP=1 keeps it)")
+        print("[Hawk H3] masked attention skips cuDNN on this Blackwell GPU (HAWK_CUDNN_SDP=1 keeps it)", flush=True)
     except Exception as exc:  # pragma: no cover -- never block loading the nodes
-        logger.warning("Hawk H3: could not adjust cuDNN attention: %s", exc)
+        print(f"[Hawk H3] could not adjust cuDNN attention: {exc!r}", flush=True)
 
 
 _avoid_cudnn_attention()

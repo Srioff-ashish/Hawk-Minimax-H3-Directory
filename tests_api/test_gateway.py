@@ -73,7 +73,7 @@ class FakeComfy:
         self.final_bytes = b"FINAL VIDEO BYTES"
         self.missing_nodes: set[str] = set()  # custom node classes this ComfyUI doesn't have
         self.fail_image = None  # callable(prompt) -> error message for an image graph, or None
-        self.log_lines = ["Starting server\n", "Hawk H3: masked attention skips cuDNN on this Blackwell GPU\n"]
+        self.log_lines = ["Starting server\n", "[Hawk H3] masked attention skips cuDNN on this Blackwell GPU\n"]
         self.model_files = {
             "loras": [TURBO, REALISM],
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],

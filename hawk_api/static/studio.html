@@ -2531,6 +2531,10 @@
     status.className = `gen-status ${tone}`;
     const showLoras = (kreaEdit || (!refs && (engine === "auto" || engine === "local"))) && local.installed;
     $("genBoostField").hidden = !kreaEdit;
+    $("genBoost").disabled = edit.boost === false;
+    $("genBoostField").querySelector(".hint").textContent = edit.boost === false
+      ? "The likeness boost fails on this GPU until ComfyUI is restarted with the updated Hawk nodes; edits run at 1.0."
+      : "4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.";
     const sizeDefault = $("genSize").querySelector('option[value=""]');
     if (sizeDefault) sizeDefault.textContent = refs ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
     $("genSteps").placeholder = kreaEdit ? "10" : "8";
