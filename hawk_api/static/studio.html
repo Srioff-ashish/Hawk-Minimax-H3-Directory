@@ -411,6 +411,7 @@
   .media-thumb .play { position: absolute; inset: auto 8px 8px auto; width: 30px; height: 30px; border-radius: 50%; border: 0; background: rgba(0,0,0,.65); color: #fff; display: grid; place-items: center; cursor: pointer; font-size: 12px; }
   .media-check { position: absolute; top: 8px; left: 8px; width: 22px; height: 22px; border-radius: 6px; background: rgba(255,255,255,.92); border: 1px solid var(--line-strong); display: grid; place-items: center; }
   .media-check input { width: 15px; height: 15px; margin: 0; accent-color: var(--brand); }
+  @media (pointer: coarse) { .media-check { width: 32px; height: 32px; top: 6px; left: 6px; } .media-check input { width: 20px; height: 20px; } }
   .media-kind { position: absolute; top: 8px; right: 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; padding: 2px 6px; border-radius: 5px; background: rgba(0,0,0,.6); color: #fff; }
   .media-meta { padding: 8px 10px 10px; display: grid; gap: 3px; min-width: 0; }
   .media-name { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -422,6 +423,42 @@
   .import-item .progress { grid-column: 1 / -1; }
   .drop-overlay { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--brand) 18%, transparent); border: 3px dashed var(--brand); display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--brand); pointer-events: none; }
   dialog.modal.wide { width: min(940px, calc(100vw - 24px)); }
+  dialog.viewer { width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: #0b0d12; color: #f1f3f7; overflow: hidden; }
+  dialog.viewer::backdrop { background: #0b0d12; }
+  .viewer-wrap { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; }
+  .viewer-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: rgba(255,255,255,.04); border-bottom: 1px solid rgba(255,255,255,.08); min-width: 0; }
+  .viewer-title { min-width: 0; flex: 1; }
+  .viewer-title strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .viewer-title span { font-size: 12px; color: #9aa3b2; }
+  .viewer .icon-btn, .viewer .btn { color: #f1f3f7; background: rgba(255,255,255,.08); border-color: rgba(255,255,255,.12); }
+  .viewer .icon-btn:hover, .viewer .btn:hover { background: rgba(255,255,255,.16); }
+  .viewer-body { display: grid; grid-template-columns: minmax(0, 1fr) 300px; min-height: 0; }
+  .viewer-stage { position: relative; display: grid; place-items: center; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; min-height: 0; }
+  .viewer-slide { max-width: 100%; max-height: 100%; display: grid; place-items: center; padding: 16px; width: 100%; height: 100%; box-sizing: border-box; will-change: transform; }
+  .viewer-slide img, .viewer-slide video { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; -webkit-user-drag: none; }
+  .viewer-slide audio { width: min(520px, 90%); }
+  .viewer-audio { display: grid; place-items: center; gap: 18px; color: #9aa3b2; }
+  .viewer-audio svg { width: 72px; height: 72px; }
+  .viewer-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(255,255,255,.12); color: #fff; font-size: 24px; line-height: 1; cursor: pointer; display: grid; place-items: center; z-index: 2; }
+  .viewer-nav:hover { background: rgba(255,255,255,.24); }
+  .viewer-nav[disabled] { opacity: .25; cursor: default; }
+  .viewer-nav.prev { left: 14px; } .viewer-nav.next { right: 14px; }
+  .viewer-info { border-left: 1px solid rgba(255,255,255,.08); padding: 14px; overflow: auto; font-size: 13px; display: grid; align-content: start; gap: 12px; }
+  .viewer-info dt { color: #9aa3b2; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  .viewer-info dd { margin: 0; overflow-wrap: anywhere; }
+  .viewer-info dl { display: grid; gap: 10px; margin: 0; }
+  .viewer-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+  .viewer-count { font-variant-numeric: tabular-nums; }
+  .viewer-stage:focus { outline: none; }
+  #viewerMore { display: none; }
+  @media (max-width: 760px) {
+    .viewer-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+    .viewer-info { border-left: 0; border-top: 1px solid rgba(255,255,255,.08); max-height: 34vh; }
+    .viewer-info[data-collapsed="true"] dl { display: none; }
+    #viewerMore { display: inline-flex; }
+    .viewer-nav { display: none; }
+    .viewer-slide { padding: 6px; }
+  }
   .gen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
   @media (max-width: 640px) { .gen-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .gen-engine { flex-wrap: wrap; } }
   .gen-engine { display: flex; max-width: 100%; }
@@ -948,6 +985,29 @@
   <div class="modal-foot"><span class="hint" id="driveSelected" style="margin-right:auto">Nothing selected</span><button class="btn" type="button" id="driveCancel">Cancel</button><button class="btn btn-primary" type="button" id="driveImport" disabled>Import</button></div>
 </dialog>
 <datalist id="collectionOptions"></datalist>
+
+<dialog class="viewer" id="viewer" aria-labelledby="viewerName">
+  <div class="viewer-wrap">
+    <div class="viewer-bar">
+      <div class="viewer-title"><strong id="viewerName"></strong><span><span class="viewer-count" id="viewerCount"></span> · swipe or use ← →</span></div>
+      <a class="icon-btn" id="viewerDownload" download title="Download" aria-label="Download"><svg><use href="#i-download"/></svg></a>
+      <a class="icon-btn" id="viewerOpen" target="_blank" rel="noopener" title="Open the original in a new tab" aria-label="Open original"><svg><use href="#i-external"/></svg></a>
+      <button class="icon-btn" type="button" id="viewerClose" aria-label="Close"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="viewer-body">
+      <div class="viewer-stage" id="viewerStage" tabindex="-1">
+        <button class="viewer-nav prev" type="button" id="viewerPrev" aria-label="Previous">‹</button>
+        <div class="viewer-slide" id="viewerSlide"></div>
+        <button class="viewer-nav next" type="button" id="viewerNext" aria-label="Next">›</button>
+      </div>
+      <aside class="viewer-info" id="viewerInfo" data-collapsed="true">
+        <div class="viewer-actions" id="viewerActions"></div>
+        <button class="btn btn-sm btn-ghost" type="button" id="viewerMore" style="justify-self:start">Details</button>
+        <dl id="viewerMeta"></dl>
+      </aside>
+    </div>
+  </div>
+</dialog>
 
 <dialog class="modal wide" id="genDialog" aria-labelledby="genTitle">
   <form class="modal-body" id="genForm" style="gap:12px">
@@ -2222,7 +2282,10 @@
     const card = event.target.closest(".media-card");
     if (!card) return;
     const asset = media.assets.find((a) => a.id === card.dataset.asset);
-    if (event.target.closest("[data-play]")) { event.preventDefault(); return playAsset(asset); }
+    if (event.target.closest("[data-play]") && asset.kind === "audio") { event.preventDefault(); return playAsset(asset); }
+    if (event.target.closest(".media-check") && !event.target.matches("[data-check]")) return;  // the label forwards a click to its checkbox
+    const selecting = event.target.closest(".media-check") || event.shiftKey || event.metaKey || event.ctrlKey || media.selected.size > 0;
+    if (!selecting) { event.preventDefault(); return openViewer(media.assets, media.assets.indexOf(asset)); }
     const ids = media.assets.map((a) => a.id);
     if (event.shiftKey && media.last) {
       const [from, to] = [ids.indexOf(media.last), ids.indexOf(asset.id)].sort((a, b) => a - b);
@@ -2236,10 +2299,129 @@
     if (event.target.matches("[data-check]")) event.preventDefault();
     renderSelection();
   });
-  $("mediaGrid").addEventListener("dblclick", (event) => {
-    const card = event.target.closest(".media-card");
-    const asset = card && media.assets.find((a) => a.id === card.dataset.asset);
-    if (asset) window.open(asset.file_url, "_blank", "noopener");
+  // ---------------------------------------------------------------- viewer (click a card; swipe, ← → or the side buttons)
+  const viewer = { list: [], index: 0, drag: null };
+  const viewerSrc = (asset, width) => asset.file_url + (asset.file_url.includes("?") ? "&" : "?") + `w=${width}`;
+  function openViewer(list, index) {
+    if (!list.length || index < 0) return;
+    if (media.audio) { media.audio.pause(); media.audio = null; media.audioId = null; }
+    viewer.list = list; viewer.index = index;
+    renderViewer();
+    if (!$("viewer").open) { $("viewer").showModal(); $("viewerStage").focus({ preventScroll: true }); }
+  }
+  function renderViewer(direction = 0) {
+    const asset = viewer.list[viewer.index];
+    if (!asset) return $("viewer").close();
+    const slide = $("viewerSlide");
+    slide.style.transition = "none";
+    slide.style.transform = direction ? `translateX(${direction * 40}px)` : "";
+    slide.style.opacity = direction ? "0" : "1";
+    const big = Math.min(2048, Math.round(Math.max(window.innerWidth, window.innerHeight) * (window.devicePixelRatio || 1)));
+    slide.innerHTML = asset.kind === "image" ? `<img src="${esc(viewerSrc(asset, big))}" alt="${esc(asset.filename)}" draggable="false">`
+      : asset.kind === "video" ? `<video src="${esc(asset.file_url)}" controls playsinline preload="metadata" ${asset.thumb_url ? `poster="${esc(asset.thumb_url)}"` : ""}></video>`
+      : `<div class="viewer-audio"><svg><use href="#i-music"/></svg><audio src="${esc(asset.file_url)}" controls preload="metadata"></audio></div>`;
+    if (direction) requestAnimationFrame(() => { slide.style.transition = "transform .18s ease, opacity .18s ease"; slide.style.transform = ""; slide.style.opacity = "1"; });
+    $("viewerName").textContent = asset.filename;
+    $("viewerCount").textContent = `${viewer.index + 1} / ${viewer.list.length}`;
+    $("viewerDownload").href = asset.file_url; $("viewerDownload").setAttribute("download", asset.filename);
+    $("viewerOpen").href = asset.file_url;
+    $("viewerPrev").disabled = viewer.index === 0;
+    $("viewerNext").disabled = viewer.index === viewer.list.length - 1;
+    const source = asset.source || {};
+    const meta = [
+      ["Kind", asset.kind], ["Collection", asset.collection || "Uploads"], ["Size", bytes(asset.size)],
+      ["Added", asset.created_at ? new Date(asset.created_at * 1000).toLocaleString() : ""],
+      ["Tags", (asset.tags || []).map((t) => `#${t}`).join(" ")],
+      ["Made with", source.type === "generated" ? source.generator : ""],
+      ["LoRAs", (source.loras || []).map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", ")],
+      ["Prompt", source.prompt || ""], ["Asset id", asset.id],
+    ].filter(([, value]) => value);
+    $("viewerMeta").innerHTML = meta.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(String(value))}</dd></div>`).join("");
+    $("viewerActions").innerHTML = (asset.kind === "image" ? `<button class="btn btn-sm" type="button" data-view="remix">✨ Edit / remix</button>` : "")
+      + `<button class="btn btn-sm" type="button" data-view="create">Use in Create</button><button class="btn btn-sm" type="button" data-view="agent">Attach to agent</button>`
+      + `<button class="btn btn-sm" type="button" data-view="select">${media.selected.has(asset.id) ? "Unselect" : "Select"}</button>`
+      + `<button class="btn btn-sm" type="button" data-view="delete" style="color:#f87171">Delete</button>`;
+    for (const step of [-1, 1]) {  // warm the neighbours so swiping feels instant
+      const next = viewer.list[viewer.index + step];
+      if (next?.kind === "image") new Image().src = viewerSrc(next, big);
+    }
+  }
+  function viewerStep(step) {
+    const index = viewer.index + step;
+    if (index < 0 || index >= viewer.list.length) { snapViewer(); return; }
+    viewer.index = index;
+    renderViewer(step);
+  }
+  function snapViewer() {
+    const slide = $("viewerSlide");
+    slide.style.transition = "transform .18s ease"; slide.style.transform = "";
+  }
+  $("viewerPrev").onclick = () => viewerStep(-1);
+  $("viewerNext").onclick = () => viewerStep(1);
+  $("viewerClose").onclick = () => $("viewer").close();
+  $("viewer").addEventListener("close", () => { $("viewerSlide").innerHTML = ""; renderSelection(); });
+  $("viewerMore").onclick = () => { const info = $("viewerInfo"); info.dataset.collapsed = String(info.dataset.collapsed !== "true"); };
+  $("viewer").addEventListener("keydown", (event) => {
+    if (event.target.closest("input, textarea, select")) return;
+    if (event.key === "ArrowLeft") { event.preventDefault(); viewerStep(-1); }
+    else if (event.key === "ArrowRight") { event.preventDefault(); viewerStep(1); }
+  });
+  const stage = $("viewerStage");
+  stage.addEventListener("pointerdown", (event) => {
+    if ((event.pointerType === "mouse" && event.button !== 0) || event.target.closest("button, video, audio")) return;
+    viewer.drag = { x: event.clientX, y: event.clientY, dx: 0, id: event.pointerId, horizontal: null };
+  });
+  stage.addEventListener("pointermove", (event) => {
+    const drag = viewer.drag;
+    if (!drag || drag.id !== event.pointerId) return;
+    drag.dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (drag.horizontal === null && Math.hypot(drag.dx, dy) > 8) {
+      drag.horizontal = Math.abs(drag.dx) > Math.abs(dy);
+      if (drag.horizontal) stage.setPointerCapture(event.pointerId);
+    }
+    if (drag.horizontal) {
+      const edge = (viewer.index === 0 && drag.dx > 0) || (viewer.index === viewer.list.length - 1 && drag.dx < 0);
+      const slide = $("viewerSlide");
+      slide.style.transition = "none";
+      slide.style.transform = `translateX(${edge ? drag.dx / 3 : drag.dx}px)`;
+    }
+  });
+  const endDrag = (event) => {
+    const drag = viewer.drag;
+    if (!drag || drag.id !== event.pointerId) return;
+    viewer.drag = null;
+    if (!drag.horizontal) return;
+    const threshold = Math.min(90, stage.clientWidth * 0.18);
+    if (drag.dx <= -threshold) viewerStep(1);
+    else if (drag.dx >= threshold) viewerStep(-1);
+    else snapViewer();
+  };
+  stage.addEventListener("pointerup", endDrag);
+  stage.addEventListener("pointercancel", endDrag);
+  $("viewerActions").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-view]");
+    const asset = viewer.list[viewer.index];
+    if (!button || !asset) return;
+    const action = button.dataset.view;
+    if (action === "remix") { $("viewer").close(); openGenerate([asset]); }
+    else if (action === "create") { $("viewer").close(); useAssetsInCreate([asset]); location.hash = "#create"; }
+    else if (action === "agent") { $("viewer").close(); attachToAgent([asset]); location.hash = "#agent"; }
+    else if (action === "select") {
+      if (media.selected.has(asset.id)) media.selected.delete(asset.id); else media.selected.add(asset.id);
+      renderViewer();
+    } else if (action === "delete") {
+      if (!(await confirmAction(`Delete ${asset.filename}?`, "It is removed from the library and the GPU server.", "Delete"))) return;
+      try {
+        await post("/v1/assets/bulk", { ids: [asset.id], action: "delete" });
+        media.selected.delete(asset.id);
+        viewer.list = viewer.list.filter((a) => a.id !== asset.id);
+        viewer.index = Math.min(viewer.index, viewer.list.length - 1);
+        toast("Deleted", asset.filename, "warn");
+        loadMedia();
+        if (viewer.list.length) renderViewer(); else $("viewer").close();
+      } catch (error) { toast("Could not delete", error.message, "bad"); }
+    }
   });
   $("mediaCollections").addEventListener("click", (event) => {
     const item = event.target.closest("[data-collection]");

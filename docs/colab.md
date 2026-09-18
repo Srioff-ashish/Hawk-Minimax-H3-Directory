@@ -134,7 +134,7 @@ from google.colab import drive
 drive.mount('/content/drive')
 ```
 
-The same mount turns on **fast video delivery** (next section). Then *Import → From Google Drive* browses My Drive; pick files or folders, a collection and tags. Drive imports are copied on the Colab machine, so they're fast and have no 100 MB limit. Select media to use it in Create, attach it to an agent chat, or set a music bed; Create and the agent chat also have a *From media* picker.
+The same mount turns on **fast video delivery** (next section). Then *Import → From Google Drive* browses My Drive; pick files or folders, a collection and tags. Drive imports are copied on the Colab machine, so they're fast and have no 100 MB limit. Click any item to open it full screen, then swipe (or use ← → and the side arrows) to move through the others; the viewer also downloads, edits or remixes images, sends them to Create or the agent, and deletes. Tick the checkboxes to select several (once something is selected, clicks add to the selection) and use them in Create, attach them to an agent chat, or set a music bed; Create and the agent chat also have a *From media* picker.
 
 ### Videos play from Google Drive
 
