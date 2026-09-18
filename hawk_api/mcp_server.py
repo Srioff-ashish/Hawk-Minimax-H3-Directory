@@ -99,11 +99,13 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         return {"assets": updated}
 
     @mcp.tool(description=(
-        "Generate or edit images with Atlas Cloud (default ByteDance Seedream v5.0 Pro). Text only: text-to-image. "
-        "With reference_asset_ids: the edit model changes or combines those images (keep a face, change outfit or scene, "
-        "make variations). Returns new image assets (asset_id, thumb_url) that work as picture references in plan_film and "
-        "render_film, e.g. to lock a character's identity across segments. size like 2048x2048, 1536x2048 or 2048x1152 is optional; "
-        "n is 1-4. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
+        "Generate or edit images with Atlas Cloud. Text only: z-image/turbo by default (model 'turbo': fast, about $0.01 an "
+        "image, good for base images and drafts; it cannot edit). model 'seedream' (Seedream v5.0 Pro, about 4x the cost) is "
+        "the quality choice. With reference_asset_ids, Seedream edit always changes or combines those images (keep a face, "
+        "change outfit or scene, make variations). Returns new image assets (asset_id, thumb_url) that work as picture "
+        "references in plan_film and render_film, e.g. to lock a character's identity across segments. size like 1024x1536 "
+        "or 1536x1536 (z-image: 512-2048 a side; Seedream also 2048x2048, 2048x1152) is optional; n is 1-4. Write rich, "
+        "specific prompts: subject, face, hair, expression, outfit, setting, light, camera and lens, mood, style. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
     ))
     async def generate_image(
         prompt: str,

@@ -13,6 +13,7 @@ Hawk H3 tasks end to end -- plan, render, wait, fix, report.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -33,6 +34,14 @@ MAX_STEPS = 40
 MAX_CAST = 4  # characters in one chat
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
+VISION_FALLBACK_MODEL = "xai/grok-4.6"  # inspect_image when the chat's model can't see images
+INSPECT_PROMPT = (
+    "You are a demanding photo editor. Check each image (in the order given) against the brief. Look for: match with the "
+    "brief (subject, age, look, outfit, setting, mood); natural face and eyes; correct hands and fingers; body proportions and "
+    "extra or missing limbs; garbled text, logos or watermarks; plastic skin, blur or other AI artefacts; composition. "
+    'Reply with only JSON: {"images": [{"asset_id": "...", "score": 1-10, "issues": ["..."], "verdict": "keep" or "retry"}], '
+    '"best": "<asset_id>", "advice": "one or two sentences: how to fix (prompt changes), and whether a higher-quality model is worth it"}'
+)
 MAX_RUN_SECONDS = 3 * 3600
 RECENT_MESSAGES = 30
 SUMMARY_TOKEN_LIMIT = 150_000
@@ -69,6 +78,14 @@ AGENT_TOOLS = [
         "args": {"asset_id": "string (required)", "name": "string, optional", "speaker": "string, optional"},
     },
     {
+        "name": "inspect_image",
+        "description": "Look at up to 4 image assets with a vision model and check them against a brief: does each match "
+        "(subject, face, outfit, setting, mood), are face, eyes, hands and anatomy natural, any garbled text or artefacts? "
+        "Returns a score, issues and keep/retry per image, the best one, and advice (e.g. a sharper prompt, or switch to "
+        "seedream). Use it after generate_image before showing, using or setting an avatar.",
+        "args": {"asset_ids": "list of asset ids (required, 1-4)", "brief": "string: what the images should show"},
+    },
+    {
         "name": "rename_chat",
         "description": "Give this chat a short, descriptive title (do it once the task is clear).",
         "args": {"title": "string (required)"},
@@ -93,6 +110,19 @@ def persona_name(persona: str) -> str:
         if match.group(1) not in _NOT_NAMES:
             return match.group(1)
     return ""
+
+
+def parse_json_object(text: str) -> dict | None:
+    text = (text or "").strip()
+    start, end = text.find("{"), text.rfind("}")
+    for candidate in (text, text[start : end + 1] if 0 <= start < end else ""):
+        try:
+            data = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def cast_of(session: dict) -> list[dict]:
@@ -570,6 +600,8 @@ class AgentService:
         try:
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
+            elif name == "inspect_image":
+                result = await self._inspect_images(session_id, args)
             elif name in ("set_persona", "set_avatar", "remove_character"):
                 result = self._edit_character(session_id, name, args)
             elif name == "rename_chat":
@@ -646,6 +678,33 @@ class AgentService:
             elif role == "note" and content.get("kind") in ("repair", "error", "warn"):
                 push("user", f"NOTE: {content.get('text', '')}")
         return chat
+
+    async def _inspect_images(self, session_id: str, args: dict) -> dict:
+        ids = args.get("asset_ids") or ([args["asset_id"]] if args.get("asset_id") else [])
+        if isinstance(ids, str):
+            ids = [ids]
+        ids = [str(i) for i in ids][:4]
+        if not ids:
+            raise RequestError("Give asset_ids to inspect.")
+        brief = str(args.get("brief") or args.get("question") or "").strip()
+        parts: list[dict] = [{"type": "text", "text": f"{INSPECT_PROMPT}\n\nBRIEF: {brief or '(none given: judge overall quality)'}"}]
+        for asset_id in ids:
+            asset = self.service.store.get_asset(asset_id)
+            if asset is None or asset["kind"] != "image":
+                raise RequestError(f"{asset_id} is not an image asset.")
+            data, mime = await self.service.asset_file(asset_id, 640)  # a 640 px copy is plenty to judge
+            parts.append({"type": "text", "text": f"Image asset_id {asset_id}:"})
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
+        session = self.get_session(session_id)
+        model = session["model"]
+        if not ((await self.atlas.model_info(model)) or {}).get("vision"):
+            model = VISION_FALLBACK_MODEL
+        text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True, max_tokens=1500, temperature=0.2)
+        await self._add_usage(session_id, model, usage)
+        verdict = parse_json_object(text)
+        if verdict is None:
+            return {"model": model, "review": text.strip()[:2000]}
+        return {"model": model, **verdict}
 
     def _edit_character(self, session_id: str, tool: str, args: dict) -> dict:
         session = self.get_session(session_id)

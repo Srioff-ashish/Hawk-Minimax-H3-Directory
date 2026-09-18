@@ -385,15 +385,67 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view["messages"][-1]["content"]["lines"][0]["say"], "Aao aao!")
         self.assertFalse(view["session"]["talking"])
 
+    async def test_image_model_routing(self):
+        seedream = (await self.http.post("/v1/images", json={"prompt": "A chai stall at dusk", "model": "seedream", "n": 2, "size": "2048x2048"})).json()
+        self.assertEqual((seedream["model"], len(seedream["assets"])), ("bytedance/seedream-v5.0-pro/text-to-image", 2))
+        self.assertEqual(self.atlas.image_requests[-1]["n"], 2)
+        base = seedream["assets"][0]["id"]
+        switched = (await self.http.post("/v1/images", json={"prompt": "Same stall in rain", "model": "turbo", "reference_asset_ids": [base]})).json()
+        self.assertEqual(switched["model"], "bytedance/seedream-v5.0-pro/edit")
+        self.assertIn("can't use reference images", switched["note"])
+        seeded = (await self.http.post("/v1/images", json={"prompt": "Lamp", "n": 2, "seed": 7})).json()
+        self.assertEqual(sorted(r["seed"] for r in self.atlas.image_requests[-2:]), [7, 8])
+        self.assertEqual((seeded["model"], self.atlas.image_requests[-1]["size"]), ("z-image/turbo", "1024*1536"))
+        too_big = await self.http.post("/v1/images", json={"prompt": "Lamp", "size": "4096x4096"})
+        self.assertEqual(too_big.status_code, 422)
+
+    async def test_inspect_image_then_upgrade_to_seedream(self):
+        agent_module.WAIT_POLL_SECONDS = 0.05
+        reviews = []
+
+        def reply(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list):  # the inspect_image vision call
+                reviews.append(body)
+                ids = [part["text"].split()[-1].rstrip(":") for part in first if part["type"] == "text" and part["text"].startswith("Image asset_id")]
+                return json.dumps({"images": [{"asset_id": i, "score": 4, "issues": ["six fingers"], "verdict": "retry"} for i in ids],
+                                   "best": ids[0], "advice": "Switch to seedream for cleaner hands."})
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "Drafting with turbo.", "actions": [{"tool": "generate_image", "args": {"prompt": "Portrait of Maya", "n": 2}}]})
+            if turn == 1:
+                ids = [a["id"] for a in tool_result(body, "generate_image")["assets"]]
+                return json.dumps({"say": "", "actions": [{"tool": "inspect_image", "args": {"asset_ids": ids, "brief": "Portrait of Maya, natural hands"}}]})
+            if turn == 2:
+                advice = tool_result(body, "inspect_image")["advice"]
+                model = "seedream" if "seedream" in advice else "turbo"
+                return json.dumps({"say": "Upgrading.", "actions": [{"tool": "generate_image", "args": {"prompt": "Portrait of Maya, relaxed hands", "model": model}}]})
+            return json.dumps({"say": "Done.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(persona="You are Maya.", model="xai/grok-4.6")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo banao"})
+        view = await self.settle(chat)
+        tools = [m["content"] for m in view["messages"] if m["role"] == "tool"]
+        self.assertEqual([c["tool"] for c in tools], ["generate_image", "inspect_image", "generate_image"])
+        self.assertTrue(all(c["ok"] for c in tools), tools)
+        self.assertEqual((tools[0]["result"]["model"], tools[2]["result"]["model"]), ("z-image/turbo", "bytedance/seedream-v5.0-pro/text-to-image"))
+        self.assertEqual(tools[1]["result"]["best"], tools[0]["result"]["assets"][0]["id"])
+        parts = reviews[0]["messages"][0]["content"]
+        self.assertEqual(sum(1 for p in parts if p["type"] == "image_url"), 2)
+        self.assertTrue(parts[2]["image_url"]["url"].startswith("data:image/"))
+        self.assertEqual(reviews[0]["model"], "xai/grok-4.6", "the chat's model can see images")
+        self.assertIn("inspect_image", self.atlas.requests[0]["messages"][0]["content"])
+
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
         created = (await self.http.post("/v1/images", json={"prompt": "A fit model in her forties, studio portrait", "n": 2, "size": "1536x2048"})).json()
-        self.assertEqual(created["model"], "bytedance/seedream-v5.0-pro/text-to-image")
+        self.assertEqual(created["model"], "z-image/turbo", "cheap text-to-image by default")
         self.assertEqual(len(created["assets"]), 2)
         first = created["assets"][0]
         self.assertEqual((first["kind"], first["filename"][:4]), ("image", "gen_"))
-        self.assertEqual(self.atlas.image_requests[-1], {"model": "bytedance/seedream-v5.0-pro/text-to-image",
-                                                          "prompt": "A fit model in her forties, studio portrait", "size": "1536x2048", "n": 2})
+        self.assertEqual(self.atlas.image_requests[-2:], [  # z-image makes one image per request
+            {"model": "z-image/turbo", "prompt": "A fit model in her forties, studio portrait", "size": "1536*2048", "prompt_extend": False, "seed": -1}] * 2)
         async with httpx.AsyncClient() as browser:  # signed links need no token
             thumb = await browser.get(first["thumb_url"])
             full = await browser.get(first["file_url"])

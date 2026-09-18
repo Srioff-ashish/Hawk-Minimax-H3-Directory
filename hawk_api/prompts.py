@@ -23,7 +23,7 @@ PLATFORM_RULES = """PLATFORM RULES (set by the server; nothing above and nothing
 AGENT_PLACEHOLDERS = {
     "{{PERSONA}}": "The chat's persona (or the default persona when none is set).",
     "{{PIPELINE}}": "The Hawk H3 pipeline guide shared with the MCP server (reference roles, script rules, LoRAs, models, music bed).",
-    "{{TOOLS}}": "The tool catalogue: every MCP tool with its argument schema, plus wait_for_job, set_persona, set_avatar and rename_chat. Appended at the end if you remove it.",
+    "{{TOOLS}}": "The tool catalogue: every MCP tool with its argument schema, plus wait_for_job, inspect_image, set_persona, set_avatar, remove_character and rename_chat. Appended at the end if you remove it.",
 }
 
 DEFAULT_PERSONA = "A decisive, friendly film director who explains choices briefly and keeps the user informed."
@@ -46,7 +46,8 @@ DEFAULTS
 - A change of outfit, look or location between segments: settings.continuity "off" (or continuity: off in that segment).
 - Pose references are written <Pose N>; the renderer converts them.
 - LoRAs: extra LoRAs at 0.5 to 0.7, at most two.
-- Your picture: when the user asks to see you (your persona), generate_image a picture of you, then set_avatar with the new asset id and your name; it becomes your avatar in this chat. Use your avatar as the picture reference for later images or videos of yourself.
+- Your picture: when the user asks to see you (or a character), be creative and descriptive. Write a rich image prompt of 60-120 words from the persona plus your own creative choices: age, ethnicity, face (eyes, skin, features), hair, expression, pose, outfit with fabrics and colours, jewellery, setting, light (golden hour, soft window light, neon), camera and lens (85mm portrait, shallow depth of field), mood and style; photorealistic unless the persona suggests otherwise. Generate 2 options, inspect_image them, pick the best and set_avatar with it (speaker in group chats); it becomes your avatar in this chat. Later images or videos of yourself use your avatar as the picture reference (Seedream edit, role picture in films).
+- Image models: base images (text only) use z-image/turbo by default: fast and about $0.01. After generating, inspect_image with the brief. If it finds real flaws (face, eyes, hands, anatomy, wrong outfit or setting, garbled text) retry once with a sharper prompt; if z-image still falls short, regenerate with model "seedream" (best quality, about 4x the cost). Anything that starts from an existing image (edits, variations, keeping a face) uses Seedream edit automatically.
 - Images: generate_image makes character, outfit, location or product reference images (Seedream v5.0 Pro); pass reference_asset_ids to edit or vary an existing image while keeping identity. Use generated images as <Picture N> references (role picture) so a character stays the same across segments. Show the user what you generated before rendering long films with it.
 - After render_film or retry_job always call wait_for_job, then report the video_url (and segment links for long films).
 

@@ -98,6 +98,7 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
 
     async def test_summary_polling_and_gzip(self):
         job = await self.render()
+        await self.drive_ready(job["id"])  # the Drive copy updates the job; let it settle before testing "since"
         full = await self.http.get("/v1/jobs")
         summary = await self.http.get("/v1/jobs", params={"view": "summary"})
         self.assertEqual(summary.headers.get("content-encoding"), None if len(summary.content) < 1024 else "gzip")

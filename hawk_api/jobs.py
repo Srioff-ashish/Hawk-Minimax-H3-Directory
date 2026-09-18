@@ -53,6 +53,27 @@ LOST_AFTER_SECONDS = 20.0
 DEFAULT_COLLECTION = "Uploads"
 IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
 IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
+IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
+IMAGE_ALIASES = {
+    "turbo": IMAGE_FAST_MODEL, "z-image": IMAGE_FAST_MODEL, "zimage": IMAGE_FAST_MODEL, "z-image-turbo": IMAGE_FAST_MODEL,
+    "fast": IMAGE_FAST_MODEL, "cheap": IMAGE_FAST_MODEL,
+    "seedream": IMAGE_MODEL, "quality": IMAGE_MODEL, "best": IMAGE_MODEL,
+}
+
+
+def _text_only_image_model(model: str) -> bool:
+    return model.startswith("z-image/")
+
+
+def _star_size(size: str) -> str:
+    """z-image takes "W*H", each side 512-2048."""
+    match = re.fullmatch(r"\s*(\d+)\s*[x*×]\s*(\d+)\s*", size or "")
+    if not match:
+        raise RequestError(f"size {size!r} should look like 1024x1536.")
+    width, height = int(match.group(1)), int(match.group(2))
+    if not (512 <= width <= 2048 and 512 <= height <= 2048):
+        raise RequestError("z-image/turbo sizes run 512-2048 on each side, e.g. 1024x1536 or 1536x1536.")
+    return f"{width}*{height}"
 THUMB_WIDTHS = (160, 320, 640)
 #: models folder -> (file-name family the Director can use, label for errors)
 MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders": ("qwen3vl", "Text encoder")}
@@ -657,8 +678,9 @@ class HawkService:
         n: int = 1,
         seed: int | None = None,
     ) -> dict:
-        """Atlas image generation (Seedream v5.0 Pro by default). The results become image
-        assets, ready to use as picture references."""
+        """Atlas image generation. Text only: z-image/turbo by default (fast, ~$0.01); with
+        reference images: Seedream v5.0 Pro edit. The results become image assets, ready to use
+        as picture references."""
         if not (prompt or "").strip():
             raise RequestError("Describe the image to generate.")
         references = []
@@ -670,24 +692,37 @@ class HawkService:
                 raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
             mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
             references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
-        model = (model or "").strip() or (IMAGE_EDIT_MODEL if references else IMAGE_MODEL)
+        note = None
+        model = (model or "").strip()
+        model = IMAGE_ALIASES.get(model.lower(), model) or (IMAGE_EDIT_MODEL if references else self.settings.image_model)
+        if references and _text_only_image_model(model):
+            note = f"{model} can't use reference images, so Seedream edit made this one."
+            model = IMAGE_EDIT_MODEL
         if references and model.endswith("/text-to-image"):
             model = model[: -len("/text-to-image")] + "/edit"
         if not references and model.endswith("/edit"):
             raise RequestError(f"{model} edits images: pass reference_asset_ids, or use a text-to-image model.")
         payload: dict = {"model": model, "prompt": prompt.strip()}
-        if size:
-            payload["size"] = size
-        if seed is not None:
-            payload["seed"] = seed
-        if n and n > 1:
-            payload["n"] = n
-        if references:
-            payload["images"] = references
+        if _text_only_image_model(model):
+            # z-image: "W*H" sizes and one image per request, so n runs as parallel requests.
+            payload["size"] = _star_size(size) if size else "1024*1536"
+            payload["prompt_extend"] = False
+            payloads = [{**payload, "seed": (seed + index) if seed is not None else -1} for index in range(max(1, n))]
+        else:
+            if size:
+                payload["size"] = size
+            if seed is not None:
+                payload["seed"] = seed
+            if n and n > 1:
+                payload["n"] = n
+            if references:
+                payload["images"] = references
+            payloads = [payload]
         try:
-            images = await self.atlas.generate_image(payload)
+            batches = await asyncio.gather(*(self.atlas.generate_image(body) for body in payloads))
         except AtlasError as exc:
             raise RequestError(str(exc)) from None
+        images = [image for batch in batches for image in batch]
         stem = re.sub(r"[^a-z0-9]+", "_", prompt.lower()).strip("_")[:40] or "image"
         assets = []
         for number, data in enumerate(images, 1):
@@ -697,7 +732,10 @@ class HawkService:
                 source={"type": "generated", "generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])},
             )
             assets.append(self.asset_view(asset))
-        return {"model": model, "assets": assets}
+        result = {"model": model, "assets": assets}
+        if note:
+            result["note"] = note
+        return result
 
     def _refs(self, references: list[ReferenceIn]) -> list[graphs.Ref]:
         refs = []

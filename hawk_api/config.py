@@ -40,6 +40,8 @@ class Settings:
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     agent_model: str = "xai/grok-4.6"
+    #: Text-to-image default: fast and cheap. Edits (reference images) always use Seedream edit.
+    image_model: str = "z-image/turbo"
     #: ComfyUI's input folder on this machine; imports copy files straight into it when set.
     comfy_input_dir: str = ""
     #: ComfyUI's output folder on this machine; videos are then served straight from disk (with byte ranges).
@@ -85,6 +87,7 @@ class Settings:
             atlas_url=_env("ATLAS_API_URL", cls.atlas_url).rstrip("/"),
             atlas_api_key=_env("ATLAS_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
+            image_model=_env("HAWK_IMAGE_MODEL", cls.image_model),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),
             drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),

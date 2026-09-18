@@ -369,7 +369,17 @@ The server always appends a short, non-editable **platform rules** block (no sex
 
 ### Images
 
-`POST /v1/images` (and the MCP / agent tool `generate_image`) creates images with Atlas Cloud's `generateImage` API: `{prompt, reference_asset_ids?, model?, size?, n (1-4), seed?}`. Without references it uses `bytedance/seedream-v5.0-pro/text-to-image`; with references it switches to `bytedance/seedream-v5.0-pro/edit` and sends those images, so you can keep a face and change the outfit, scene or style. Results are stored as image assets and can be used right away as `picture` references in plans and renders.
+`POST /v1/images` (and the MCP / agent tool `generate_image`) creates images with Atlas Cloud's `generateImage` API: `{prompt, reference_asset_ids?, model?, size?, n (1-4), seed?}`.
+
+| Case | Model | Notes |
+|---|---|---|
+| Text only (default) | `z-image/turbo` (alias `turbo`) | Fast, about $0.01 an image; sizes 512–2048 a side (default 1024x1536); `n` runs as parallel requests. Change the default with `HAWK_IMAGE_MODEL`. |
+| Text only, best quality | `bytedance/seedream-v5.0-pro/text-to-image` (alias `seedream`) | About 4x the cost. |
+| With `reference_asset_ids` | `bytedance/seedream-v5.0-pro/edit` | Always: z-image can't edit, so asking for `turbo` with references switches to Seedream edit and the result says so in `note`. Keeps a face and changes outfit, scene or style. |
+
+Results are stored as image assets and can be used right away as `picture` references in plans and renders.
+
+The agent drafts base images with z-image/turbo, then checks them with **`inspect_image`**: a vision model (the chat's own model when it can see images, else Grok 4.6) scores each image against the brief and flags faces, hands, anatomy, wrong outfit or setting and garbled text. On real flaws it retries with a sharper prompt, and moves to Seedream when turbo still falls short. For a picture of itself or a character it writes a detailed 60–120 word prompt from the persona, makes 2 options, inspects them and sets the best as the avatar.
 
 Every asset in API responses carries a signed `file_url`, and images a `thumb_url` (a 320 px JPEG, via `GET /v1/assets/<id>/file?w=320`). Signed links open without the token, so Studio and the agent chat show thumbnails of uploaded and generated images.
 
