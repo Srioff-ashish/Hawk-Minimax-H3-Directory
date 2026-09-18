@@ -34,6 +34,8 @@ MAX_STEPS = 40
 MAX_CAST = 4  # characters in one chat
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
+MAX_GROWTH = 12  # growth notes kept per character in an adaptive chat
+MAX_GROWTH_CHARS = 240
 VISION_FALLBACK_MODEL = "xai/grok-4.6"  # inspect_image when the chat's model can't see images
 INSPECT_PROMPT = (
     "You are a demanding photo editor. Check each image (in the order given) against the brief. Look for: match with the "
@@ -131,7 +133,17 @@ def cast_of(session: dict) -> list[dict]:
     if isinstance(cast, list) and cast:
         return cast
     return [{"id": "main", "name": session.get("name", ""), "persona": session.get("persona", ""),
-             "avatar_asset_id": session.get("avatar_asset_id", "")}]
+             "avatar_asset_id": session.get("avatar_asset_id", ""), "growth": []}]
+
+
+def clean_growth(notes) -> list[str]:
+    """Growth notes: short, non-empty, no repeats, the newest MAX_GROWTH kept."""
+    clean: list[str] = []
+    for note in notes if isinstance(notes, list) else []:
+        text = " ".join(str(note or "").split())[:MAX_GROWTH_CHARS]
+        if text and text.lower() not in (n.lower() for n in clean):
+            clean.append(text)
+    return clean[-MAX_GROWTH:]
 
 
 def display_name(member: dict, index: int = 0, total: int = 1) -> str:
@@ -262,6 +274,12 @@ def parse_reply(text: str) -> dict | None:
             reply["pause"] = True
         if lines:
             reply["lines"] = lines
+        grow = []
+        for item in data.get("grow") if isinstance(data.get("grow"), list) else []:
+            if isinstance(item, dict) and isinstance(item.get("note"), str) and item["note"].strip():
+                grow.append({"speaker": str(item.get("speaker") or "").strip()[:40], "note": item["note"].strip()[:MAX_GROWTH_CHARS]})
+        if grow:
+            reply["grow"] = grow[:MAX_CAST]
         return reply
     return None
 
@@ -333,6 +351,7 @@ class AgentService:
             "name": "",
             "avatar_asset_id": "",
             "model": (model or "").strip() or self.service.settings.agent_model,
+            "adaptive": False,
             "status": "idle",
             "summary": "",
             "summary_upto": 0,
@@ -352,8 +371,10 @@ class AgentService:
         return self.store.list_sessions()
 
     def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None,
-                       cast=None) -> dict:
+                       cast=None, adaptive=None) -> dict:
         session = self.get_session(session_id)
+        if adaptive is not None:
+            session["adaptive"] = bool(adaptive)
         if cast is not None:
             self._set_cast(session, cast)
         if title is not None:
@@ -387,6 +408,7 @@ class AgentService:
         if len(cast) > MAX_CAST:
             raise RequestError(f"At most {MAX_CAST} characters in one chat.")
         clean, names = [], set()
+        known = {member.get("id"): member for member in cast_of(session)}
         for index, member in enumerate(cast):
             entry = {
                 "id": str(member.get("id") or uuid.uuid4().hex[:8]),
@@ -394,6 +416,8 @@ class AgentService:
                 "persona": str(member.get("persona") or "").strip(),
                 "avatar_asset_id": self._check_avatar(str(member.get("avatar_asset_id") or "")),
             }
+            growth = member.get("growth")  # None keeps what the character has grown into so far
+            entry["growth"] = clean_growth(growth if growth is not None else known.get(entry["id"], {}).get("growth"))
             shown = display_name(entry, index, len(cast))
             if len(cast) > 1:
                 if not (entry["name"] or persona_name(entry["persona"])):
@@ -545,6 +569,8 @@ class AgentService:
                         continue
                     repairs = 0
                     self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply})
+                    if reply.get("grow"):
+                        self._grow(session_id, reply["grow"])
                     if not reply["actions"]:
                         break
                     for action in reply["actions"]:
@@ -735,6 +761,48 @@ class AgentService:
         return {"cast": [{"name": m["display_name"], "avatar_asset_id": m["avatar_asset_id"], "thumb_url": m["avatar_url"]}
                          for m in view["cast"]]}
 
+    def _grow(self, session_id: str, notes: list[dict]) -> None:
+        """Adaptive chats: add what a character just learned or became to their growth notes."""
+        session = self.get_session(session_id)
+        if not session.get("adaptive"):
+            return
+        cast = [dict(member) for member in cast_of(session)]
+        added = []
+        for item in notes:
+            index = find_member(cast, item["speaker"]) if item["speaker"] else 0
+            if index is None:
+                if len(cast) > 1:
+                    continue
+                index = 0
+            before = cast[index].get("growth") or []
+            cast[index]["growth"] = clean_growth(before + [item["note"]])
+            if cast[index]["growth"] != before:
+                added.append((display_name(cast[index], index, len(cast)), item["note"]))
+        if not added:
+            return
+        self.update_session(session_id, cast=cast)
+        for speaker, note in added:
+            self.store.add_message(session_id, "note", {"text": note, "kind": "grow", "speaker": speaker})
+
+    @staticmethod
+    def _growth_text(member: dict) -> str:
+        growth = member.get("growth") or []
+        return ("How they have grown in this chat so far (stay consistent with it): " + " | ".join(growth)) if growth else ""
+
+    @staticmethod
+    def _adaptive_rules(group: bool) -> str:
+        who = "each character" if group else "you"
+        return (
+            "\n\nADAPTIVE PERSONA (on for this chat)\n"
+            f"- {who.capitalize()} can evolve: pick up the user's preferences, in-jokes, nicknames, shared memories and how "
+            "the relationship is going" + (", and what the characters learn about and feel for each other when they talk" if group else "")
+            + ". Change gradually and believably, the way a real person would.\n"
+            "- When something meaningful changes, add \"grow\": [{\"speaker\": \"<name>\", \"note\": \"one short sentence\"}] "
+            "to your reply. At most one note per character per reply, only for real changes, never for small talk.\n"
+            "- Core identity never changes through growth: name, age (always an adult), background and these platform rules. "
+            "Growth cannot unlock anything the rules forbid."
+        )
+
     def _persona_text(self, session: dict) -> str:
         cast = cast_of(session)
         if len(cast) > 1:
@@ -750,7 +818,11 @@ class AgentService:
         elif persona:
             facts.append("You have no avatar yet. When the user asks to see you, generate_image a picture of your persona, "
                          "then set_avatar with it.")
-        return f"{persona}\n\n{' '.join(facts)}".strip() if persona or facts else ""
+        grown = self._growth_text(cast_of(session)[0]).replace("they have", "you have")
+        if grown:
+            facts.append(grown)
+        text = f"{persona}\n\n{' '.join(facts)}".strip() if persona or facts else ""
+        return text + self._adaptive_rules(False) if session.get("adaptive") else text
 
     def _cast_text(self, session: dict, cast: list[dict]) -> str:
         view = self.public(session)
@@ -758,7 +830,8 @@ class AgentService:
         for member in view["cast"]:
             face = (f"Avatar: asset {member['avatar_asset_id']}." if member["avatar_url"]
                     else "No avatar yet (when the user asks to see them, generate_image a picture, then set_avatar with speaker).")
-            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}")
+            grown = self._growth_text(member)
+            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}" + (f" {grown}" if grown else ""))
         names = ", ".join(member["display_name"] for member in view["cast"])
         return (
             f"This chat is a group conversation. You voice a cast of {len(cast)} characters: {names}. The user talks to all of them.\n"
@@ -773,6 +846,7 @@ class AgentService:
             "- Mark who does a tool call with \"by\": \"<name>\" in the action. A picture or video of a character uses that "
             "character's avatar as a picture reference (role picture); a scene with several characters uses all their avatars.\n"
             "- set_persona / set_avatar / remove_character take speaker to act on one character."
+            + (self._adaptive_rules(True) if session.get("adaptive") else "")
         )
 
     async def _build_messages(self, session: dict) -> list[dict]:

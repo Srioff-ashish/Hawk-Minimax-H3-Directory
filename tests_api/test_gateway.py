@@ -133,6 +133,18 @@ class FakeComfy:
 
         await self.send(client, "execution_start", {"prompt_id": pid})
         by_class = lambda cls: [(i, n) for i, n in prompt.items() if n["class_type"] == cls]
+        for node_id, node in by_class("SaveImage"):  # an image graph (local Krea 2)
+            await asyncio.sleep(0.05)
+            batch = next(n for _, n in by_class("EmptyLatentImage"))["inputs"]["batch_size"]
+            prefix = node["inputs"]["filename_prefix"]
+            folder, stem = prefix.rsplit("/", 1)
+            images = []
+            for number in range(1, batch + 1):
+                name = f"{stem}_{len(self.outputs) + 1:05d}_.png"
+                self.save_output(f"{folder}/{name}", PNG)
+                images.append({"filename": name, "subfolder": folder, "type": "output"})
+            outputs[node_id] = {"images": images}
+            return await finish("success")
         script = None
         for node_id, node in by_class("HawkH3StoryPlanner"):
             script = PLAN_SCRIPT

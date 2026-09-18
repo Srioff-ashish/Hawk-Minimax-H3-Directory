@@ -253,7 +253,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.post("/v1/images", tags=["assets"], status_code=201)
     async def generate_images(body: ImageRequest):
         return await service.generate_images(body.prompt, model=body.model, reference_asset_ids=body.reference_asset_ids,
-                                             size=body.size, n=body.n, seed=body.seed)
+                                             size=body.size, n=body.n, seed=body.seed, engine=body.engine,
+                                             loras=[l.model_dump() for l in body.loras], steps=body.steps)
+
+    @app.get("/v1/images/options", tags=["assets"])
+    async def image_options():
+        """Image engines: local Krea 2 (installed? busy?) with its LoRA catalogue, and the Atlas models."""
+        return await service.image_options()
 
     @app.get("/studio", include_in_schema=False)
     async def studio_page():
@@ -376,9 +382,10 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.post("/v1/agent/sessions", tags=["agent"], status_code=201)
     async def agent_create(body: AgentSessionIn):
         session = agent.create_session(body.title, body.persona, body.model)
-        if body.name is not None or body.avatar_asset_id is not None or body.cast is not None:
+        if body.name is not None or body.avatar_asset_id is not None or body.cast is not None or body.adaptive is not None:
             session = agent.update_session(session["id"], name=body.name, avatar_asset_id=body.avatar_asset_id,
-                                           cast=[m.model_dump() for m in body.cast] if body.cast is not None else None)
+                                           cast=[m.model_dump() for m in body.cast] if body.cast is not None else None,
+                                           adaptive=body.adaptive)
         return agent.public(session)
 
     @app.get("/v1/agent/sessions", tags=["agent"])
@@ -393,7 +400,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def agent_update(session_id: str, body: AgentSessionIn):
         return agent.public(agent.update_session(session_id, title=body.title, persona=body.persona, model=body.model,
                                                  name=body.name, avatar_asset_id=body.avatar_asset_id,
-                                                 cast=[m.model_dump() for m in body.cast] if body.cast is not None else None))
+                                                 cast=[m.model_dump() for m in body.cast] if body.cast is not None else None,
+                                                 adaptive=body.adaptive))
 
     @app.post("/v1/agent/sessions/{session_id}/messages", tags=["agent"], status_code=202)
     async def agent_send(session_id: str, body: AgentMessageIn):

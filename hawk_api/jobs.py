@@ -30,6 +30,7 @@ from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
 from .config import ModelSettings, Settings
+from .local_images import LocalImageEngine, LocalImageError
 from .loras import (
     LoraError,
     LoraSpec,
@@ -306,6 +307,7 @@ class HawkService:
         self.prompts = PromptStore(settings.data_dir)
         #: Called with the job id when a render finishes (e.g. the Google Drive exporter).
         self.render_done_hooks: list = []
+        self.local_images = LocalImageEngine(self)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
 
@@ -677,10 +679,15 @@ class HawkService:
         size: str | None = None,
         n: int = 1,
         seed: int | None = None,
+        engine: str | None = None,
+        loras: list[dict] | None = None,
+        steps: int | None = None,
     ) -> dict:
-        """Atlas image generation. Text only: z-image/turbo by default (fast, ~$0.01); with
-        reference images: Seedream v5.0 Pro edit. The results become image assets, ready to use
-        as picture references."""
+        """Make images and store them as assets, ready to use as picture references.
+
+        engine "auto" (text only): local Krea 2 on this GPU when it is installed and idle, else
+        Atlas z-image/turbo, else Seedream. "local" / "turbo" / "seedream" pick one. Anything with
+        reference images uses Seedream edit (Krea 2 and z-image can't edit)."""
         if not (prompt or "").strip():
             raise RequestError("Describe the image to generate.")
         references = []
@@ -692,11 +699,70 @@ class HawkService:
                 raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
             mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
             references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
-        note = None
+
         model = (model or "").strip()
-        model = IMAGE_ALIASES.get(model.lower(), model) or (IMAGE_EDIT_MODEL if references else self.settings.image_model)
+        engine = (engine or "").strip().lower()
+        if model.lower() in ("krea", "krea2", "krea-2", "local"):
+            engine, model = "local", ""
+        elif model.lower() in IMAGE_ALIASES or model:
+            engine = engine or "atlas"
+        engine = {"krea": "local", "krea2": "local", "z-image": "turbo", "fast": "turbo", "quality": "seedream"}.get(engine, engine)
+        engine = engine or self.settings.image_engine
+        if engine not in ("auto", "local", "turbo", "seedream", "atlas"):
+            raise RequestError(f"engine {engine!r} should be auto, local, turbo or seedream.")
+        notes, tried = [], []
+        if references and engine in ("local", "turbo"):
+            notes.append(f"{'Krea 2' if engine == 'local' else 'z-image/turbo'} can't use reference images, so Seedream edit made this one.")
+            engine, model = "atlas", IMAGE_EDIT_MODEL
+
+        if not references and engine in ("auto", "local"):
+            try:
+                local = await self.local_images.generate(prompt, size=size, n=n, seed=seed, loras=loras, steps=steps)
+            except LocalImageError as exc:
+                if engine == "local" or str(exc).startswith("Refused"):
+                    raise RequestError(str(exc)) from None
+                tried.append({"engine": "krea2", "skipped": str(exc)})
+            else:
+                return await self._image_result(prompt, local.images, "krea2/turbo", "krea2", notes, tried, reference_asset_ids,
+                                          extra={"loras": local.loras, "seconds": local.seconds})
+        if loras and not references and engine in ("turbo", "seedream", "atlas"):
+            notes.append("Image LoRAs only apply to local Krea 2; ignored here.")
+
+        if engine == "auto" and not references:
+            chain = [self.settings.image_model, IMAGE_MODEL] if self.settings.image_model != IMAGE_MODEL else [IMAGE_MODEL]
+        elif engine == "turbo":
+            chain = [IMAGE_FAST_MODEL]
+        elif engine == "seedream":
+            chain = [IMAGE_EDIT_MODEL if references else IMAGE_MODEL]
+        else:
+            chain = [IMAGE_ALIASES.get(model.lower(), model) or (IMAGE_EDIT_MODEL if references else self.settings.image_model)]
+        last_error = None
+        for index, name in enumerate(chain):
+            try:
+                used, images = await self._atlas_images(prompt, name, references, size, n, seed, notes)
+            except RequestError as exc:
+                last_error = exc
+                if index + 1 < len(chain):
+                    tried.append({"engine": name, "skipped": str(exc)[:300]})
+                    continue
+                raise
+            tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
+            return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids)
+        raise last_error or RequestError("No image engine could make this image.")
+
+    async def image_options(self) -> dict:
+        local = await self.local_images.status()
+        return {
+            "default_engine": self.settings.image_engine,
+            "local": local,
+            "atlas": {"configured": self.atlas.configured, "text_to_image": self.settings.image_model,
+                      "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL},
+            "sizes": ["1024x1024", "1024x1536", "1536x1024", "896x1600", "1600x896"],
+        }
+
+    async def _atlas_images(self, prompt: str, model: str, references: list[str], size, n: int, seed, notes: list) -> tuple[str, list[bytes]]:
         if references and _text_only_image_model(model):
-            note = f"{model} can't use reference images, so Seedream edit made this one."
+            notes.append(f"{model} can't use reference images, so Seedream edit made this one.")
             model = IMAGE_EDIT_MODEL
         if references and model.endswith("/text-to-image"):
             model = model[: -len("/text-to-image")] + "/edit"
@@ -722,19 +788,29 @@ class HawkService:
             batches = await asyncio.gather(*(self.atlas.generate_image(body) for body in payloads))
         except AtlasError as exc:
             raise RequestError(str(exc)) from None
-        images = [image for batch in batches for image in batch]
+        return model, [image for batch in batches for image in batch]
+
+    async def _image_result(self, prompt: str, images: list[bytes], model: str, engine_tag: str, notes: list, tried: list,
+                            reference_asset_ids, extra: dict | None = None) -> dict:
         stem = re.sub(r"[^a-z0-9]+", "_", prompt.lower()).strip("_")[:40] or "image"
+        source = {"type": "generated", "generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
+        if extra and extra.get("loras"):
+            source["loras"] = extra["loras"]
         assets = []
         for number, data in enumerate(images, 1):
             extension, mime = _image_type(data)
             asset = await self.add_asset(
-                f"gen_{stem}_{number}.{extension}", io.BytesIO(data), mime, len(data), collection="Generated", tags=["generated"],
-                source={"type": "generated", "generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])},
+                f"gen_{stem}_{number}.{extension}", io.BytesIO(data), mime, len(data), collection="Generated",
+                tags=["generated", engine_tag], source=source,
             )
             assets.append(self.asset_view(asset))
-        result = {"model": model, "assets": assets}
-        if note:
-            result["note"] = note
+        result = {"model": model, "engine": engine_tag, "assets": assets}
+        if notes:
+            result["note"] = " ".join(notes)
+        if tried:
+            result["tried"] = tried
+        if extra:
+            result.update(extra)
         return result
 
     def _refs(self, references: list[ReferenceIn]) -> list[graphs.Ref]:

@@ -31,6 +31,11 @@ class LoraIn(BaseModel):
     strength: float = Field(1.0, ge=-10, le=10, description="0 removes the LoRA; use it to switch off a default.")
 
 
+class ImageLoraIn(BaseModel):
+    name: str = Field(description="A Krea 2 LoRA file from image_options, or a unique part of its name such as 'realism'.")
+    strength: float | None = Field(None, ge=-4, le=4, description="Omit for the LoRA's recommended strength; 0 leaves it out.")
+
+
 class PlannerOptions(BaseModel):
     story: str = Field(min_length=1, description="The brief: plot, characters, mood, locations, exact dialogue lines.")
     segment_count: int = Field(3, ge=0, le=40, description="Segments to write; 0 lets the planner decide.")
@@ -109,6 +114,9 @@ class ImageRequest(BaseModel):
     size: str | None = Field(None, description="e.g. 1024x1536 or 1536x1536 (z-image: 512-2048 a side); Seedream also 2048x2048, 2048x1152. Omit for the default.")
     n: int = Field(1, ge=1, le=4, description="How many images.")
     seed: int | None = Field(None, ge=0)
+    engine: str | None = Field(None, description="auto (default: local Krea 2 when idle, else z-image/turbo, else Seedream), local, turbo or seedream.")
+    loras: list[ImageLoraIn] = Field(default_factory=list, description="Krea 2 LoRAs for local generation (file name or a unique part, optional strength).")
+    steps: int | None = Field(None, ge=1, le=50, description="Local Krea 2 steps; default 8 (or the LoRA's recommendation).")
 
 
 class AssetUpdate(BaseModel):
@@ -148,6 +156,7 @@ class CastMemberIn(BaseModel):
     name: str | None = Field(None, description="Display name, e.g. Riya. Required when the chat has several characters (or taken from the persona).")
     persona: str = Field("", description="Who this character is.")
     avatar_asset_id: str | None = Field(None, description="An image asset shown as this character's face.")
+    growth: list[str] | None = Field(None, description="How the character has grown in this chat (adaptive chats). Omit to keep; [] resets.")
 
 
 class AgentTalkIn(BaseModel):
@@ -161,6 +170,7 @@ class AgentSessionIn(BaseModel):
     name: str | None = Field(None, description="The persona's display name, e.g. Maya. Empty: taken from the persona text.")
     avatar_asset_id: str | None = Field(None, description="An image asset shown as the agent's avatar in this chat; empty removes it.")
     cast: list[CastMemberIn] | None = Field(None, description="Several characters in one chat (up to 4); the first is the lead.")
+    adaptive: bool | None = Field(None, description="Characters adapt: they grow from the conversation with you and with each other.")
 
 
 class AgentMessageIn(BaseModel):

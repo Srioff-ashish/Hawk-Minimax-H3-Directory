@@ -42,6 +42,11 @@ class Settings:
     agent_model: str = "xai/grok-4.6"
     #: Text-to-image default: fast and cheap. Edits (reference images) always use Seedream edit.
     image_model: str = "z-image/turbo"
+    #: auto = local Krea 2 when installed and idle, else image_model, else Seedream.
+    image_engine: str = "auto"
+    krea_unet: str = "krea2_turbo_fp8_scaled.safetensors"
+    krea_clip: str = "qwen3vl_4b_fp8_scaled.safetensors"
+    krea_vae: str = "qwen_image_vae.safetensors"
     #: ComfyUI's input folder on this machine; imports copy files straight into it when set.
     comfy_input_dir: str = ""
     #: ComfyUI's output folder on this machine; videos are then served straight from disk (with byte ranges).
@@ -88,6 +93,10 @@ class Settings:
             atlas_api_key=_env("ATLAS_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             image_model=_env("HAWK_IMAGE_MODEL", cls.image_model),
+            image_engine=_env("HAWK_IMAGE_ENGINE", cls.image_engine),
+            krea_unet=_env("HAWK_KREA_UNET", cls.krea_unet),
+            krea_clip=_env("HAWK_KREA_CLIP", cls.krea_clip),
+            krea_vae=_env("HAWK_KREA_VAE", cls.krea_vae),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),
             drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),

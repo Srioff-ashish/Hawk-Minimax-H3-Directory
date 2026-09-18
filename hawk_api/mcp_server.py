@@ -13,7 +13,7 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
-from .schemas import LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
+from .schemas import ImageLoraIn, LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 INSTRUCTIONS = """\
 Hawk H3 Director renders MiniMax H3 videos with native audio on the user's GPU pod, one clip or a long film of joined segments.
@@ -99,10 +99,12 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         return {"assets": updated}
 
     @mcp.tool(description=(
-        "Generate or edit images with Atlas Cloud. Text only: z-image/turbo by default (model 'turbo': fast, about $0.01 an "
-        "image, good for base images and drafts; it cannot edit). model 'seedream' (Seedream v5.0 Pro, about 4x the cost) is "
-        "the quality choice. With reference_asset_ids, Seedream edit always changes or combines those images (keep a face, "
-        "change outfit or scene, make variations). Returns new image assets (asset_id, thumb_url) that work as picture "
+        "Generate or edit images. engine 'auto' (default, text only) tries local Krea 2 on this GPU (free; used when installed "
+        "and ComfyUI is idle), then Atlas z-image/turbo (about $0.01), then Seedream v5.0 Pro. engine 'local', 'turbo' or "
+        "'seedream' picks one; the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
+        "[{name, strength}] from image_options, e.g. a realism or detail LoRA for photo portraits, a style LoRA for a look. "
+        "Krea 2 and z-image can't edit: with reference_asset_ids, Seedream edit always changes or combines those images (keep a "
+        "face, change outfit or scene, make variations). Returns new image assets (asset_id, thumb_url) that work as picture "
         "references in plan_film and render_film, e.g. to lock a character's identity across segments. size like 1024x1536 "
         "or 1536x1536 (z-image: 512-2048 a side; Seedream also 2048x2048, 2048x1152) is optional; n is 1-4. Write rich, "
         "specific prompts: subject, face, hair, expression, outfit, setting, light, camera and lens, mood, style. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
@@ -114,9 +116,21 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         size: str | None = None,
         n: int = 1,
         seed: int | None = None,
+        engine: str | None = None,
+        loras: list[ImageLoraIn] | None = None,
+        steps: int | None = None,
     ) -> dict:
         return await run(service.generate_images(prompt, model=model, reference_asset_ids=reference_asset_ids or [],
-                                                 size=size, n=max(1, min(4, n)), seed=seed))
+                                                 size=size, n=max(1, min(4, n)), seed=seed, engine=engine,
+                                                 loras=[l.model_dump() for l in loras or []], steps=steps))
+
+    @mcp.tool(description=(
+        "Image engines and Krea 2 LoRAs: whether local Krea 2 is installed and busy (a video render is using ComfyUI), and "
+        "each LoRA's file, kind (realism, detail, style, adult), label, default strength and range, trigger and notes. Call it "
+        "before choosing loras for generate_image."
+    ))
+    async def image_options() -> dict:
+        return await run(service.image_options())
 
     @mcp.tool(description="Show what the pod can use: LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, ref2va base models and text encoders (with the defaults), planner model ids, samplers, schedulers, aspect ratios and continuity modes.")
     async def list_options() -> dict:

@@ -341,6 +341,17 @@
   .cast-card { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
   .cast-extra { display: grid; gap: 10px; }
   .note-line.talk { color: var(--brand); background: var(--brand-soft); }
+  .note-line.grow { color: var(--ok); background: var(--ok-soft); max-width: min(640px, 92%); text-align: center; }
+  .adaptive-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .adaptive-toggle input { accent-color: var(--ok); width: 15px; height: 15px; margin: 0; }
+  .adaptive-toggle:has(input:checked) { color: var(--ok); }
+  .growth { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; }
+  .growth-who { font-size: 13px; font-weight: 600; }
+  .growth ul { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+  .growth li { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; }
+  .growth li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .growth li button { flex: none; border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 4px; }
+  .growth li button:hover { color: var(--bad); }
   .mention-row .chip { cursor: pointer; }
   .tool-card { align-self: flex-start; width: min(760px, 92%); border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 13px; overflow: hidden; }
   .tool-card summary { cursor: pointer; padding: 7px 12px; display: flex; align-items: center; gap: 8px; list-style: none; color: var(--ink-2); }
@@ -411,6 +422,22 @@
   .import-item .progress { grid-column: 1 / -1; }
   .drop-overlay { position: fixed; inset: 0; z-index: 70; background: color-mix(in srgb, var(--brand) 18%, transparent); border: 3px dashed var(--brand); display: grid; place-items: center; font-size: 20px; font-weight: 700; color: var(--brand); pointer-events: none; }
   dialog.modal.wide { width: min(940px, calc(100vw - 24px)); }
+  .gen-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 640px) { .gen-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .gen-engine { flex-wrap: wrap; } }
+  .gen-engine { display: flex; max-width: 100%; }
+  .gen-engine label { padding: 6px 10px; }
+  .gen-status { font-size: 12.5px; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); color: var(--ink-2); }
+  .gen-status.ok { background: var(--ok-soft); color: var(--ok); }
+  .gen-status.warn { background: var(--warn-soft); color: var(--warn); }
+  .lora-list { display: grid; gap: 6px; }
+  .lora-row { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(120px, 200px); align-items: center; gap: 8px 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; }
+  .lora-row[data-on="true"] { border-color: var(--brand); background: var(--brand-soft); }
+  .lora-row .lora-name { font-size: 13px; font-weight: 600; }
+  .lora-row .hint { display: block; font-weight: 400; overflow-wrap: anywhere; }
+  .lora-row .range output { min-width: 36px; font-size: 12.5px; }
+  .lora-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); margin-left: 6px; }
+  .lora-kind.adult { color: var(--bad); }
+  @media (max-width: 560px) { .lora-row { grid-template-columns: auto minmax(0, 1fr); } .lora-row .range { grid-column: 1 / -1; } }
   .modal-scroll { max-height: min(60vh, 620px); overflow: auto; }
   .drive-row { display: grid; grid-template-columns: 24px 26px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px; }
   .drive-row:hover { background: var(--surface-2); }
@@ -698,6 +725,7 @@
             <label class="sr-only" for="agentModel">Model</label>
             <select class="select" id="agentModel" style="width:auto;max-width:220px;height:32px"></select>
             <button class="btn btn-sm" id="agentPersonaBtn" type="button" aria-expanded="false">Persona</button>
+            <label class="adaptive-toggle" title="Characters grow from your conversation and from talking to each other: new habits, nicknames, memories and feelings. Their core identity and the safety rules never change."><input type="checkbox" id="agentAdaptive"> 🌱 Adaptive</label>
             <span class="row" id="agentTalkBox" hidden style="gap:4px;flex-wrap:nowrap">
               <label class="sr-only" for="agentTalkRounds">Rounds</label>
               <select class="select" id="agentTalkRounds" style="width:auto;height:32px" title="How many rounds they talk"><option value="3">3 rounds</option><option value="5" selected>5 rounds</option><option value="8">8 rounds</option><option value="10">10 rounds</option></select>
@@ -715,6 +743,7 @@
               <div class="row"><button class="btn btn-sm" id="agentAvatarPick" type="button">Choose avatar</button><button class="btn btn-sm btn-ghost" id="agentAvatarClear" type="button" hidden>Remove avatar</button></div>
             </div>
             <span class="hint">Tip: ask the agent "show me a picture of you". It generates one and makes it its avatar here.</span>
+            <div class="growth" id="agentGrowth" hidden></div>
             <div class="cast-extra" id="castExtra"></div>
             <div class="row"><button class="btn btn-sm" id="castAdd" type="button">+ Add character</button><span class="hint">Up to 4 characters in one chat, like a group chat. Talk to one with @Name.</span></div>
             <div class="row" id="personaChips"></div>
@@ -805,6 +834,7 @@
             <div class="search"><svg><use href="#i-search"/></svg><input class="input" id="mediaSearch" placeholder="Search name, tag or id" aria-label="Search media"></div>
             <div class="spacer"></div>
             <span class="hint" id="mediaCount"></span>
+            <button class="btn btn-sm" id="genOpen" type="button" title="Create images from a prompt: local Krea 2 with LoRAs, Z-Image Turbo or Seedream">✨ Generate</button>
             <div class="menu">
               <button class="btn btn-primary btn-sm" id="importBtn" type="button" aria-haspopup="true" aria-expanded="false"><svg><use href="#i-upload"/></svg>Import ▾</button>
               <div class="menu-list" id="importMenu" role="menu" hidden style="left:auto;right:0">
@@ -823,6 +853,7 @@
             <strong id="mediaSelCount"></strong>
             <button class="btn btn-sm btn-primary" type="button" data-bulk="create">Use in Create</button>
             <button class="btn btn-sm" type="button" data-bulk="agent">Attach to agent</button>
+            <button class="btn btn-sm" type="button" data-bulk="generate" title="Make new images from these (Seedream edit)">✨ Edit / remix</button>
             <button class="btn btn-sm" type="button" data-bulk="music" id="bulkMusic">Set as music bed</button>
             <button class="btn btn-sm" type="button" data-bulk="move">Move…</button>
             <button class="btn btn-sm" type="button" data-bulk="tag">Add tags…</button>
@@ -917,6 +948,36 @@
   <div class="modal-foot"><span class="hint" id="driveSelected" style="margin-right:auto">Nothing selected</span><button class="btn" type="button" id="driveCancel">Cancel</button><button class="btn btn-primary" type="button" id="driveImport" disabled>Import</button></div>
 </dialog>
 <datalist id="collectionOptions"></datalist>
+
+<dialog class="modal wide" id="genDialog" aria-labelledby="genTitle">
+  <form class="modal-body" id="genForm" style="gap:12px">
+    <div class="row"><h3 id="genTitle">Generate images</h3><div class="spacer"></div><button class="icon-btn" type="button" id="genClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+    <div class="modal-scroll" style="display:grid;gap:12px;padding-right:2px">
+      <div class="field"><label class="label" for="genPrompt">Prompt</label>
+        <textarea class="textarea" id="genPrompt" rows="4" required placeholder="Describe the subject, outfit, setting, light, lens and mood. e.g. Candid portrait of a 28-year-old Delhi stylist on a rooftop at golden hour, linen kurta, 85mm, soft rim light"></textarea></div>
+      <div class="field"><span class="label" id="genEngineLabel">Engine</span>
+        <div class="segmented gen-engine" role="radiogroup" aria-labelledby="genEngineLabel">
+          <label title="Krea 2 on this GPU when idle, else Z-Image Turbo, else Seedream"><input type="radio" name="genEngine" value="auto" checked>Auto</label>
+          <label title="Krea 2 Turbo on this GPU, with LoRAs; free, no moderation"><input type="radio" name="genEngine" value="local">Krea 2 (local)</label>
+          <label title="Atlas z-image/turbo: fast, about $0.01 an image, no edits"><input type="radio" name="genEngine" value="turbo">Z-Image Turbo</label>
+          <label title="Atlas Seedream v5.0 Pro: best quality; edits reference images"><input type="radio" name="genEngine" value="seedream">Seedream</label>
+        </div></div>
+      <div class="gen-status" id="genStatus">Checking local Krea 2…</div>
+      <div class="gen-grid">
+        <div class="field"><label class="label" for="genSize">Size</label><select class="select" id="genSize"></select></div>
+        <div class="field"><label class="label" for="genCount">Images</label><select class="select" id="genCount"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+        <div class="field"><label class="label" for="genSeed">Seed</label><input class="input" id="genSeed" type="number" min="0" placeholder="Random"></div>
+        <div class="field"><label class="label" for="genSteps">Steps (Krea)</label><input class="input" id="genSteps" type="number" min="1" max="50" placeholder="8"></div>
+      </div>
+      <div class="field" id="genRefsField"><span class="label">Reference images</span><span class="hint">Optional: edit or remix these with Seedream.</span>
+        <div class="row" id="genRefs"></div></div>
+      <div class="field" id="genLoraField"><span class="label">Krea 2 LoRAs</span><span class="hint">Local only. Trigger words are added for you; one adult LoRA at a time.</span>
+        <div class="lora-list" id="genLoras"></div></div>
+      <div id="genResult" hidden style="display:grid;gap:8px"></div>
+    </div>
+  </form>
+  <div class="modal-foot"><span class="hint" id="genHint" style="margin-right:auto">Saved to the Generated collection.</span><button class="btn" type="button" id="genCancel">Close</button><button class="btn btn-primary" type="submit" form="genForm" id="genGo">Generate</button></div>
+</dialog>
 
 <dialog class="modal wide" id="pickerDialog" aria-labelledby="pickerTitle">
   <div class="modal-body" style="gap:12px">
@@ -2234,6 +2295,130 @@
     toast(`${assets.length} file${assets.length > 1 ? "s" : ""} attached`, "Write your message to the agent.");
   }
 
+  // ---------------------------------------------------------------- generate images
+  const gen = { options: null, refs: [], loras: {}, busy: false };
+  const genEngine = () => document.querySelector('input[name="genEngine"]:checked')?.value || "auto";
+  async function openGenerate(refs = []) {
+    gen.refs = refs.slice(0, 10);
+    $("genResult").hidden = true;
+    renderGenRefs();
+    $("genDialog").showModal();
+    $("genPrompt").focus();
+    try {
+      gen.options = await api("/v1/images/options");
+      const sizes = gen.options.sizes || [];
+      const keep = $("genSize").value;
+      $("genSize").innerHTML = `<option value="">Default (1024x1536)</option>` + sizes.map((size) => `<option>${esc(size)}</option>`).join("");
+      $("genSize").value = sizes.includes(keep) ? keep : "";
+    } catch (error) { gen.options = null; }
+    renderGenOptions();
+  }
+  function renderGenRefs() {
+    $("genRefs").innerHTML = gen.refs.map((a, i) => `<span class="chip">${a.thumb_url ? `<img src="${esc(a.thumb_url)}" alt="" style="width:22px;height:22px;border-radius:4px;object-fit:cover">` : ""}${esc(a.filename || a.id)}<button type="button" class="icon-btn" style="width:20px;height:20px" data-gen-unref="${i}" aria-label="Remove"><svg><use href="#i-x"/></svg></button></span>`).join("")
+      + `<button class="btn btn-sm" type="button" id="genAddRef">${gen.refs.length ? "+ Add" : "Choose images"}</button>`;
+    renderGenOptions();
+  }
+  function renderGenOptions() {
+    const local = gen.options?.local || {};
+    const engine = genEngine();
+    const refs = gen.refs.length > 0;
+    const status = $("genStatus");
+    let text, tone = "";
+    if (refs) { text = "Reference images are edited with Seedream (Krea 2 and Z-Image Turbo make new images only)."; tone = "warn"; }
+    else if (!gen.options) text = "Could not read the image options; Generate still works.";
+    else if (!local.reachable) { text = "ComfyUI isn't reachable, so Krea 2 is unavailable. Auto uses Z-Image Turbo."; tone = "warn"; }
+    else if (!local.installed) { text = `Krea 2 isn't installed on the pod (missing ${(local.missing || []).join(", ")}). Run the Krea 2 install cell in the notebook. Auto uses Z-Image Turbo.`; tone = "warn"; }
+    else if (local.busy) { text = `Krea 2 is ready, but the GPU is busy (${local.queue} job${local.queue === 1 ? "" : "s"} in the queue). Auto will use Z-Image Turbo now; pick Krea 2 to wait.`; tone = "warn"; }
+    else { text = `Krea 2 is ready on this GPU · ${(local.loras || []).filter((l) => l.installed).length} LoRAs installed.`; tone = "ok"; }
+    if (!refs && engine === "turbo") text += " Z-Image Turbo: about $0.01 an image.";
+    status.textContent = text;
+    status.className = `gen-status ${tone}`;
+    const showLoras = !refs && (engine === "auto" || engine === "local") && local.installed;
+    $("genLoraField").hidden = !showLoras;
+    const installed = (local.loras || []).filter((l) => l.installed);
+    const html = installed.length ? installed.map((l) => {
+      const pick = gen.loras[l.file];
+      const [lo, hi] = l.range?.length === 2 ? l.range : [0, 2];
+      const min = Math.min(0, lo), max = Math.max(2, hi), value = pick ? pick.strength : l.strength ?? 1;
+      return `<div class="lora-row" data-on="${!!pick}" data-lora="${esc(l.file)}">
+        <input type="checkbox" aria-label="Use ${esc(l.label || l.file)}" ${pick ? "checked" : ""}>
+        <div><span class="lora-name">${esc(l.label || l.file)}</span><span class="lora-kind ${l.kind === "adult" ? "adult" : ""}">${esc(l.kind || "")}</span>
+          <span class="hint">${esc(l.notes || l.file)}${l.trigger ? ` · trigger “${esc(l.trigger)}”` : ""}${l.range ? ` · works ${esc(lo)}–${esc(hi)}` : ""}</span></div>
+        <div class="range"><input type="range" min="${min}" max="${max}" step="0.05" value="${esc(value)}" aria-label="Strength" ${pick ? "" : "disabled"}><output>${Number(value).toFixed(2)}</output></div>
+      </div>`;
+    }).join("") : `<span class="hint">No Krea 2 LoRAs installed yet. Add them in the notebook's Krea 2 cell; the catalogue is in DATA_DIR/image_loras.json.</span>`;
+    if ($("genLoras").dataset.html !== html) { $("genLoras").innerHTML = html; $("genLoras").dataset.html = html; }
+    $("genSteps").disabled = !showLoras;
+  }
+  $("genOpen").onclick = () => openGenerate([]);
+  $("genClose").onclick = $("genCancel").onclick = () => $("genDialog").close();
+  document.querySelectorAll('input[name="genEngine"]').forEach((input) => input.addEventListener("change", renderGenOptions));
+  $("genRefs").addEventListener("click", async (event) => {
+    const remove = event.target.closest("[data-gen-unref]");
+    if (remove) { gen.refs.splice(Number(remove.dataset.genUnref), 1); return renderGenRefs(); }
+    if (event.target.closest("#genAddRef")) {
+      const picked = await pickAssets({ kinds: ["image"], multiple: true, title: "Reference images" });
+      for (const asset of picked || []) if (!gen.refs.some((a) => a.id === asset.id)) gen.refs.push(asset);
+      gen.refs = gen.refs.slice(0, 10);
+      renderGenRefs();
+    }
+  });
+  $("genLoras").addEventListener("input", (event) => {
+    const row = event.target.closest("[data-lora]");
+    if (!row) return;
+    const file = row.dataset.lora;
+    const info = (gen.options?.local?.loras || []).find((l) => l.file === file) || {};
+    if (event.target.type === "checkbox") {
+      if (event.target.checked) {
+        if (info.kind === "adult") for (const other of gen.options.local.loras) if (other.kind === "adult" && gen.loras[other.file]) delete gen.loras[other.file];
+        gen.loras[file] = { strength: Number(row.querySelector('input[type="range"]').value) };
+      } else delete gen.loras[file];
+      renderGenOptions();
+    } else if (event.target.type === "range" && gen.loras[file]) {
+      gen.loras[file].strength = Number(event.target.value);
+      row.querySelector("output").textContent = Number(event.target.value).toFixed(2);
+    }
+  });
+  $("genForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (gen.busy) return;
+    const prompt = $("genPrompt").value.trim();
+    if (!prompt) return $("genPrompt").focus();
+    const engine = genEngine();
+    const refs = gen.refs.map((a) => a.id);
+    const body = { prompt, n: Number($("genCount").value), engine: refs.length ? "seedream" : engine, reference_asset_ids: refs };
+    if ($("genSize").value) body.size = $("genSize").value;
+    if ($("genSeed").value !== "") body.seed = Number($("genSeed").value);
+    if (!refs.length && (engine === "auto" || engine === "local")) {
+      body.loras = Object.entries(gen.loras).map(([name, v]) => ({ name, strength: v.strength }));
+      if ($("genSteps").value) body.steps = Number($("genSteps").value);
+    }
+    gen.busy = true;
+    const go = $("genGo");
+    go.disabled = true; go.textContent = "Generating…";
+    $("genHint").textContent = engine === "local" ? "Krea 2 is running on the GPU…" : "This usually takes 5–40 seconds.";
+    const started = performance.now();
+    try {
+      const result = await post("/v1/images", body);
+      const seconds = ((performance.now() - started) / 1000).toFixed(0);
+      const names = { krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo", seedream: "Seedream" };
+      const box = $("genResult");
+      box.hidden = false;
+      box.innerHTML = `<div class="row"><strong>${esc(names[result.engine] || result.model)}</strong><span class="hint">${seconds} s · ${result.assets.length} image${result.assets.length === 1 ? "" : "s"} in Generated${result.loras?.length ? ` · LoRAs: ${esc(result.loras.map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", "))}` : ""}</span></div>`
+        + (result.note ? `<div class="gen-status warn">${esc(result.note)}</div>` : "")
+        + (result.tried?.length ? `<div class="hint">Fell back from: ${esc(result.tried.map((t) => typeof t === "string" ? t : `${t.engine || t.model}: ${t.skipped || t.error || ""}`).join(" · "))}</div>` : "")
+        + `<div class="thumb-grid">${result.assets.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.id)}</span></a>`).join("")}</div>`;
+      box.scrollIntoView({ block: "nearest" });
+      loadMedia();
+    } catch (error) {
+      toast("Generation failed", error.message, "bad", 8000);
+    } finally {
+      gen.busy = false;
+      go.disabled = false; go.textContent = "Generate";
+      $("genHint").textContent = "Saved to the Generated collection.";
+    }
+  });
+
   $("mediaSelection").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-bulk]");
     if (!button) return;
@@ -2244,6 +2429,7 @@
       else if (action === "all") { media.assets.forEach((a) => media.selected.add(a.id)); renderSelection(); }
       else if (action === "create") { useAssetsInCreate(chosen); location.hash = "#create"; }
       else if (action === "agent") { attachToAgent(chosen); location.hash = "#agent"; }
+      else if (action === "generate") openGenerate(chosen.filter((a) => a.kind === "image"));
       else if (action === "music") { setMusicBed(chosen[0]); location.hash = "#create"; }
       else if (action === "move") {
         const name = await askInput("Move to collection", "Collection (new or existing)", media.collection, media.collections.map((c) => c.name));
@@ -2730,7 +2916,7 @@
     if (index >= 0) agent.sessions[index] = session; else agent.sessions.unshift(session);
     if (document.activeElement !== $("agentTitle")) $("agentTitle").value = session.title;
     if (session.id === agent.current && $("agentPersonaPanel").hidden) $("agentPersona").value = session.persona || "";
-    if (session.id === agent.current) paintAgentIdentity(session);
+    if (session.id === agent.current) { paintAgentIdentity(session); paintGrowth(session); }
     const running = session.status === "running" || session.status === "stopping";
     const status = $("agentStatus");
     status.hidden = session.status === "idle";
@@ -2851,6 +3037,7 @@
     } else if (message.role === "note") {
       if (c.kind === "repair") return;
       if (c.kind === "talk") { add(`<div class="note-line talk">💬 Talking · round ${esc(c.round)} of ${esc(c.of)}</div>`); return; }
+      if (c.kind === "grow") { add(`<div class="note-line grow" title="Adaptive: remembered in this chat">🌱 ${c.speaker ? `${esc(c.speaker)}: ` : ""}${esc(c.text || "")}</div>`); return; }
       add(`<div class="note-line ${esc(c.kind || "")}">${linkify(c.text || "")}</div>`);
     }
   }
@@ -2932,6 +3119,37 @@
     }
     if (await patchSession(fields)) { togglePersona(false); toast(draft.length ? "Characters saved" : "Persona saved", "For this chat only."); }
   };
+  function paintGrowth(session) {
+    $("agentAdaptive").checked = !!session?.adaptive;
+    const cast = castOf(session);
+    const grown = cast.filter((m) => m.growth?.length);
+    const box = $("agentGrowth");
+    const html = grown.length ? `<div class="row" style="justify-content:space-between"><span class="label" style="margin:0">🌱 What ${cast.length > 1 ? "they have" : "it has"} picked up in this chat</span><button class="btn btn-sm btn-ghost" type="button" data-growth-reset>Reset all</button></div>`
+      + grown.map((m) => `<div>${cast.length > 1 || m.display_name ? `<div class="growth-who">${esc(m.display_name || "Agent")}</div>` : ""}<ul>${m.growth.map((note, i) => `<li><span>${esc(note)}</span><button type="button" title="Forget this" aria-label="Forget this" data-growth-member="${esc(m.id)}" data-growth-index="${i}">×</button></li>`).join("")}</ul></div>`).join("")
+      + (session?.adaptive ? "" : `<span class="hint">Adaptive is off, so nothing new is added; what's here still shapes the replies.</span>`) : "";
+    box.hidden = !grown.length;
+    if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+  }
+  function castWithGrowth(edit) {
+    return castOf().map((m) => ({ id: m.id, name: m.name || "", persona: m.persona || "", avatar_asset_id: m.avatar_asset_id || "", growth: edit(m) }));
+  }
+  $("agentAdaptive").addEventListener("change", async (event) => {
+    const on = event.target.checked;
+    if (!agent.current) { event.target.checked = false; return toast("Start a chat first", "", "warn"); }
+    if (await patchSession({ adaptive: on })) toast(on ? "Adaptive on" : "Adaptive off", on ? "Characters now grow from this chat. Their core identity and the safety rules stay fixed." : "Nothing new is learned; what they picked up so far is kept.", "ok", 3500);
+    else event.target.checked = !on;
+  });
+  $("agentGrowth").addEventListener("click", async (event) => {
+    const reset = event.target.closest("[data-growth-reset]");
+    const forget = event.target.closest("[data-growth-index]");
+    if (reset) {
+      if (!confirm("Forget everything the characters picked up in this chat?")) return;
+      if (await patchSession({ cast: castWithGrowth(() => []) })) toast("Growth reset", "Back to the original personas.");
+    } else if (forget) {
+      const index = Number(forget.dataset.growthIndex);
+      await patchSession({ cast: castWithGrowth((m) => m.id === forget.dataset.growthMember ? m.growth.filter((_, i) => i !== index) : null) });
+    }
+  });
   function renderCastExtra() {
     const draft = agent.castDraft || [];
     $("castExtra").innerHTML = draft.map((m, i) => `

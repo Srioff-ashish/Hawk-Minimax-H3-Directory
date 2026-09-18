@@ -149,6 +149,25 @@ Downloading through the tunnel gets slow, especially while a render is using the
 
 **Agent** in Studio's sidebar is an autonomous director. Start a chat, pick the model (Grok 4.6 by default, or Grok 4.3 and any other Atlas model), optionally set a **Persona**, attach files and describe the video. It plans, renders, waits and fixes problems by itself, shows every tool it uses, and plays the result in the chat. It runs on the Colab server, so you can close the browser; press **Stop** to end a run. It uses the Studio tools in-process, never through the tunnel. Details: [API → Agent](api.md#agent-an-autonomous-video-director).
 
+Tick **🌱 Adaptive** on a chat to let its characters grow from what you talk about and from their conversations with each other. What they pick up shows in the chat and in the Persona panel, where you can remove it. Their name, age and the safety rules never change.
+
+### Local images with Krea 2
+
+Studio and the agent can make images on the Colab GPU with **Krea 2 Turbo** and its LoRAs: free, private, and without Atlas moderation. Install it in a notebook cell after ComfyUI is set up. It needs:
+
+| Folder in `/content/ComfyUI/models` | File (Hugging Face `Comfy-Org/Krea-2`) |
+|---|---|
+| `diffusion_models` | `krea2_turbo_fp8_scaled.safetensors` |
+| `text_encoders` | `qwen3vl_4b_fp8_scaled.safetensors` |
+| `vae` | `qwen_image_vae.safetensors` |
+| `loras` | Your Krea 2 LoRAs, e.g. `krea2_realism_v1`, `krea2_realistic_snapshot`, `krea2_enhancer`, `snofs_photodetail_slider`, `krea2_darkbrush`, `krea2_sunsetblur` |
+
+Keep Civitai downloads authenticated with a Colab secret (🔑 in the sidebar, e.g. `CIVITAI_TOKEN`, read with `userdata.get`). Never paste the token into a cell. Save LoRAs with the file names in [deploy/image_loras.example.json](../deploy/image_loras.example.json) so their recommended strengths, trigger words and step counts apply; other files with "krea" in the name still show up. No ComfyUI restart is needed: the API re-reads the model folders.
+
+Use it from **Media → ✨ Generate** (engine *Auto* or *Krea 2 (local)*, tick LoRAs, set strengths), or just ask the agent for an image. *Auto* uses Krea 2 when the GPU is idle, **Z-Image Turbo** on Atlas while a video is rendering, and **Seedream** if both fail; the agent also moves to Seedream when it isn't happy with a result. Editing reference images always uses Seedream.
+
+Krea 2 shares the GPU with the video models. ComfyUI may unload the H3 models to fit it, so the next video render spends a minute or so reloading them. A video render that starts while Krea 2 runs waits its turn.
+
 In **AI planner** mode on the Create page, **Planner model** picks which Atlas model writes the plan; a warning appears when the model can't see your reference images.
 
 ## Connect Claude or Grok each session
@@ -192,6 +211,7 @@ Then work in the chat as described in [API → Using it from a chat](api.md#5-us
 | `attention` | `sol scheduled` **(default)**, `comfy default` | Sol falls back to normal attention by itself if its kernel can't run |
 | `install_rife_interpolation` | off / on | Needed only for `interpolation: 48/60 fps` |
 | `pack_branch` | `main` | Which branch of this repo to run |
+| `HAWK_IMAGE_ENGINE` | `auto` **(default)**, `local`, `turbo`, `seedream` | Default image engine for Studio and the agent. Set `os.environ["HAWK_IMAGE_ENGINE"]` in a cell before starting the API |
 
 The turbo LoRA is always downloaded and is required by default ([loras.json](api.md#2-choose-loras-lorasjson)). To use extra LoRAs in every render, edit `/content/hawk_api_data/loras.json` during the session. It resets next session; to keep a change, add it to `deploy/loras.example.json` in your fork.
 
@@ -201,6 +221,8 @@ The turbo LoRA is always downloaded and is required by default ([loras.json](api
 |---|---|
 | `No CUDA GPU found` | Runtime → Change runtime type → G4, then run from cell 2 |
 | `Not enough disk` | Pick smaller models in cell 1 |
+| Generate says *Krea 2 isn't installed* | The message lists the missing files; check they're in `/content/ComfyUI/models/{diffusion_models,text_encoders,vae}` with those exact names |
+| Images come from Z-Image Turbo instead of Krea 2 | A video was rendering, so *Auto* didn't wait. Pick *Krea 2 (local)* to queue behind it |
 | Download very slow or 401/403 | Add an `HF_TOKEN` secret |
 | `ComfyUI exited during startup` | Run the *Show logs* cell. A missing package usually means cell 2 didn't finish; rerun it |
 | `Cloudflare quick tunnel did not start` | Rerun cell 4. Cloudflare occasionally refuses new quick tunnels for a few minutes |

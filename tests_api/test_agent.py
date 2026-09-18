@@ -337,6 +337,53 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         edited = (await self.http.patch(f"/v1/agent/sessions/{chat['id']}", json={"persona": "You are Maya, now a film director."})).json()
         self.assertEqual((edited["cast"][0]["persona"], edited["cast"][1]["display_name"]), ("You are Maya, now a film director.", "Riya"))
 
+    async def test_adaptive_personas_grow(self):
+        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
+        grow = {"lines": [{"speaker": "Maya", "say": "Noted!"}], "actions": [], "done": True,
+                "grow": [{"speaker": "Maya", "note": "Calls the user 'boss' now."}, {"speaker": "Riya", "note": "Warming up to Maya."},
+                         {"speaker": "Nobody", "note": "ignored"}]}
+        self.atlas.reply = lambda body: json.dumps(grow)
+        chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()
+        self.assertFalse(chat["adaptive"])
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "hi"})
+        view = await self.settle(chat["id"])
+        self.assertEqual([m["growth"] for m in view["session"]["cast"]], [[], []], "no growth while adaptive is off")
+        self.assertNotIn("ADAPTIVE PERSONA", self.atlas.requests[-1]["messages"][0]["content"])
+
+        chat = (await self.http.patch(f"/v1/agent/sessions/{chat['id']}", json={"adaptive": True})).json()
+        self.assertTrue(chat["adaptive"])
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "call me boss"})
+        view = await self.settle(chat["id"])
+        self.assertIn("ADAPTIVE PERSONA", self.atlas.requests[-1]["messages"][0]["content"])
+        members = {m["display_name"]: m for m in view["session"]["cast"]}
+        self.assertEqual(members["Maya"]["growth"], ["Calls the user 'boss' now."])
+        self.assertEqual(members["Riya"]["growth"], ["Warming up to Maya."])
+        notes = [m["content"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "grow"]
+        self.assertEqual([(n["speaker"], n["text"]) for n in notes], [("Maya", "Calls the user 'boss' now."), ("Riya", "Warming up to Maya.")])
+
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "again"})
+        view = await self.settle(chat["id"])
+        self.assertEqual(view["session"]["cast"][0]["growth"], ["Calls the user 'boss' now."], "repeats are not stored twice")
+        self.assertIn("Calls the user 'boss' now.", self.atlas.requests[-1]["messages"][0]["content"])
+
+        # editing a persona keeps growth; growth [] resets it
+        edited = view["session"]["cast"]
+        kept = (await self.http.patch(f"/v1/agent/sessions/{chat['id']}", json={"cast": [
+            {"id": edited[0]["id"], "name": "Maya", "persona": "stylist, now a director"},
+            {"id": edited[1]["id"], "name": "Riya", "persona": "director", "growth": []}]})).json()
+        self.assertEqual([m["growth"] for m in kept["cast"]], [["Calls the user 'boss' now."], []])
+
+        solo = await self.new_chat(persona="You are Maya.")
+        await self.http.patch(f"/v1/agent/sessions/{solo}", json={"adaptive": True})
+        self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": [], "done": True, "grow": [{"note": "Prefers Hinglish."}]})
+        await self.http.post(f"/v1/agent/sessions/{solo}/messages", json={"text": "hinglish please"})
+        view = await self.settle(solo)
+        self.assertEqual(view["session"]["cast"][0]["growth"], ["Prefers Hinglish."])
+        self.assertEqual(view["session"]["persona"], "You are Maya.")
+        await self.http.post(f"/v1/agent/sessions/{solo}/messages", json={"text": "next"})
+        await self.settle(solo)
+        self.assertIn("you have grown in this chat so far", self.atlas.requests[-1]["messages"][0]["content"])
+
     async def test_let_them_talk(self):
         cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
         chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
@@ -396,7 +443,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         seeded = (await self.http.post("/v1/images", json={"prompt": "Lamp", "n": 2, "seed": 7})).json()
         self.assertEqual(sorted(r["seed"] for r in self.atlas.image_requests[-2:]), [7, 8])
         self.assertEqual((seeded["model"], self.atlas.image_requests[-1]["size"]), ("z-image/turbo", "1024*1536"))
-        too_big = await self.http.post("/v1/images", json={"prompt": "Lamp", "size": "4096x4096"})
+        too_big = await self.http.post("/v1/images", json={"prompt": "Lamp", "size": "4096x4096", "engine": "turbo"})
         self.assertEqual(too_big.status_code, 422)
 
     async def test_inspect_image_then_upgrade_to_seedream(self):
@@ -436,6 +483,60 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(parts[2]["image_url"]["url"].startswith("data:image/"))
         self.assertEqual(reviews[0]["model"], "xai/grok-4.6", "the chat's model can see images")
         self.assertIn("inspect_image", self.atlas.requests[0]["messages"][0]["content"])
+
+    async def test_local_krea_images_and_fallbacks(self):
+        files = self.fake.model_files
+        auto = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
+        self.assertEqual(auto["engine"], "z-image")
+        self.assertIn("not installed", auto["tried"][0]["skipped"])
+
+        files["diffusion_models"].append("krea2_turbo_fp8_scaled.safetensors")
+        files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
+        files["vae"] = ["qwen_image_vae.safetensors"]
+        files["loras"] += ["krea2_realism_v1.safetensors", "krea2_mystic_xxx_v3.safetensors", "snofs_krea2.safetensors",
+                           "krea2_darkbrush.safetensors", "styles/krea2_my_custom.safetensors"]
+        options = (await self.http.get("/v1/images/options")).json()
+        self.assertEqual((options["local"]["installed"], options["local"]["busy"]), (True, False))
+        loras = {l["file"]: l for l in options["local"]["loras"]}
+        self.assertTrue(loras["krea2_realism_v1.safetensors"]["installed"])
+        self.assertFalse(loras["krea2_enhancer.safetensors"]["installed"])
+        self.assertEqual(loras["styles/krea2_my_custom.safetensors"]["kind"], "other")
+
+        made = await self.http.post("/v1/images", json={"prompt": "Portrait of Maya", "n": 2, "size": "1024x1536",
+                                                        "loras": [{"name": "realism"}, {"name": "darkbrush", "strength": 0.9}]})
+        self.assertEqual(made.status_code, 201, made.text)
+        made = made.json()
+        self.assertEqual((made["engine"], len(made["assets"])), ("krea2", 2))
+        self.assertIn("krea2", made["assets"][0]["tags"])
+        graph = list(self.fake.prompts.values())[-1]
+        nodes = {n["class_type"]: n["inputs"] for n in graph.values() if n["class_type"] != "LoraLoaderModelOnly"}
+        chain = [n["inputs"] for n in graph.values() if n["class_type"] == "LoraLoaderModelOnly"]
+        self.assertEqual(nodes["UNETLoader"]["unet_name"], "krea2_turbo_fp8_scaled.safetensors")
+        self.assertEqual(nodes["CLIPLoader"]["type"], "krea2")
+        self.assertEqual([(c["lora_name"], c["strength_model"]) for c in chain], [("krea2_realism_v1.safetensors", 0.8), ("krea2_darkbrush.safetensors", 0.9)])
+        self.assertEqual((nodes["KSampler"]["steps"], nodes["KSampler"]["cfg"], nodes["KSampler"]["scheduler"]), (8, 1.0, "simple"))
+        self.assertEqual((nodes["EmptyLatentImage"]["width"], nodes["EmptyLatentImage"]["height"], nodes["EmptyLatentImage"]["batch_size"]), (1024, 1536, 2))
+        self.assertTrue(nodes["CLIPTextEncode"]["text"].endswith(", muted minimalist sketch style"), "trigger word added")
+
+        await self.http.post("/v1/images", json={"prompt": "Portrait", "engine": "local", "loras": [{"name": "mystic"}]})
+        sampler = next(n["inputs"] for n in list(self.fake.prompts.values())[-1].values() if n["class_type"] == "KSampler")
+        self.assertEqual((sampler["steps"], sampler["scheduler"]), (12, "beta"), "the LoRA's recommended sampler settings")
+        two_adult = await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "loras": [{"name": "mystic"}, {"name": "snofs_krea2"}]})
+        self.assertEqual(two_adult.status_code, 422)
+        refused = await self.http.post("/v1/images", json={"prompt": "a 16 year old girl on a beach"})
+        self.assertEqual(refused.status_code, 422, "refused outright, not passed to another engine")
+        self.assertIn("under 18", refused.json()["error"])
+
+        self.fake.running["render"] = asyncio.get_event_loop().create_future()  # a video render holds ComfyUI
+        busy = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
+        self.assertEqual(busy["engine"], "z-image")
+        self.assertIn("busy", busy["tried"][0]["skipped"])
+        self.assertEqual((await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})).status_code, 422)
+        self.fake.running.pop("render")
+
+        edit = (await self.http.post("/v1/images", json={"prompt": "Same, red dress", "engine": "local", "reference_asset_ids": [made["assets"][0]["id"]]})).json()
+        self.assertEqual(edit["model"], "bytedance/seedream-v5.0-pro/edit")
+        self.assertIn("can't use reference images", edit["note"])
 
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05

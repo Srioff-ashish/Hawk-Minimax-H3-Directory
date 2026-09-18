@@ -343,6 +343,8 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 
 **Group chats.** A chat can hold a `cast` of up to 4 characters (`[{name, persona, avatar_asset_id}]`, the first is the lead; with several, each needs a name). One model call per turn voices all of them: replies carry `lines: [{speaker, say}]` (at most 8 per reply) and characters may talk to each other. `@Name` in your message gets only that character; otherwise one or two who fit answer, and "everyone" / "sab" gets all of them. `set_persona` / `set_avatar` / `remove_character` take `speaker`, so "Riya, show me a picture of you" sets Riya's avatar, and a new speaker in `set_persona` adds a character. `/talk` runs up to 10 rounds of them talking among themselves (one model call per round).
 
+**Adaptive personas.** Tick **🌱 Adaptive** in a chat's header (or PATCH `{adaptive: true}`) and its characters grow: they pick up your preferences, nicknames, in-jokes, shared memories and how the relationship is going, and in group chats what they learn about and feel for each other, including during "Let them talk". When something meaningful changes, the reply carries `grow: [{speaker, note}]` (at most one note per character); each note is stored on the character as `growth` (the newest 12 are kept, repeats are dropped), shown in the chat as "🌱 Maya: …", and fed back into every later prompt. Core identity never changes through growth: name, age (always an adult), background and the platform rules. The Persona panel lists what each character has picked up; forget one note with ×, or **Reset all**. Through the API, `cast[].growth` omitted keeps it and `[]` clears it. Turning Adaptive off stops new growth but keeps what was learned.
+
 **Persona name and avatar.** Each chat has its own. `persona_name` is `name` when set, otherwise the name the persona gives itself ("You are Maya, …" → Maya). Ask the agent for a picture of itself: it runs `generate_image`, then `set_avatar` with the new image, and Studio shows that face and name on every reply, in the chat header and in the chat list. The agent is told its avatar's asset id and uses it as the picture reference for later images or videos of itself. Sessions include `avatar_url` (a signed thumbnail) and `avatar_file_url`.
 
 ### Media library and Google Drive import
@@ -369,17 +371,25 @@ The server always appends a short, non-editable **platform rules** block (no sex
 
 ### Images
 
-`POST /v1/images` (and the MCP / agent tool `generate_image`) creates images with Atlas Cloud's `generateImage` API: `{prompt, reference_asset_ids?, model?, size?, n (1-4), seed?}`.
+`POST /v1/images` (and the MCP / agent tool `generate_image`) creates images: `{prompt, engine?, loras?, steps?, reference_asset_ids?, model?, size?, n (1-4), seed?}`. `GET /v1/images/options` (MCP `image_options`) reports whether local Krea 2 is installed and idle, its LoRA catalogue, and the Atlas models.
 
-| Case | Model | Notes |
+| `engine` | What runs | Notes |
 |---|---|---|
-| Text only (default) | `z-image/turbo` (alias `turbo`) | Fast, about $0.01 an image; sizes 512–2048 a side (default 1024x1536); `n` runs as parallel requests. Change the default with `HAWK_IMAGE_MODEL`. |
-| Text only, best quality | `bytedance/seedream-v5.0-pro/text-to-image` (alias `seedream`) | About 4x the cost. |
-| With `reference_asset_ids` | `bytedance/seedream-v5.0-pro/edit` | Always: z-image can't edit, so asking for `turbo` with references switches to Seedream edit and the result says so in `note`. Keeps a face and changes outfit, scene or style. |
+| `auto` (default) | Krea 2 → z-image/turbo → Seedream | Local Krea 2 when it's installed and ComfyUI is idle; otherwise z-image/turbo; Seedream if that fails too. The result's `tried` lists what was skipped and why. Change the default with `HAWK_IMAGE_ENGINE`. |
+| `local` | Krea 2 Turbo on the pod's GPU | Free and private, with Krea 2 LoRAs. Waits behind a running render instead of falling back. Model `krea` / `local` means the same. |
+| `turbo` | Atlas `z-image/turbo` | Fast, about $0.01 an image; sizes 512–2048 a side (default 1024x1536); `n` runs as parallel requests. `HAWK_IMAGE_MODEL` sets the Atlas text-to-image default. |
+| `seedream` | Atlas `bytedance/seedream-v5.0-pro/text-to-image` | Best quality, about 4x the cost. |
+| any, with `reference_asset_ids` | `bytedance/seedream-v5.0-pro/edit` | Always: Krea 2 and z-image can't edit, so the result says so in `note`. Keeps a face and changes outfit, scene or style. |
 
-Results are stored as image assets and can be used right away as `picture` references in plans and renders.
+**Krea 2 LoRAs.** `loras: [{name, strength?}]` picks LoRAs by file name, a unique part of it, or the catalogue label (`"realism"`, `"darkbrush"`). Without `strength`, the catalogue's recommended value is used. A LoRA's trigger words are added to the prompt, and its recommended steps, sampler and scheduler replace the Turbo defaults (8 steps, cfg 1, euler, simple). The catalogue lives in `$DATA_DIR/image_loras.json` (copied from [deploy/image_loras.example.json](../deploy/image_loras.example.json) on first use; edit the copy). Each entry has `kind` (`realism`, `detail`, `style`, `adult`), `strength`, `range`, optional `trigger`, `steps`, `sampler` and `scheduler`, and `notes` that the agent reads. Any other LoRA file with "krea" in its name shows up as kind `other`.
 
-The agent drafts base images with z-image/turbo, then checks them with **`inspect_image`**: a vision model (the chat's own model when it can see images, else Grok 4.6) scores each image against the brief and flags faces, hands, anatomy, wrong outfit or setting and garbled text. On real flaws it retries with a sharper prompt, and moves to Seedream when turbo still falls short. For a picture of itself or a character it writes a detailed 60–120 word prompt from the persona, makes 2 options, inspects them and sets the best as the avatar.
+**Safety.** Local generation has no provider moderation, so the API checks it: prompts that mention minors (child, teen, schoolgirl, "16 year old" …) are refused with 422, and a request may use at most one `adult` LoRA. Adult LoRAs are for fictional adults only; the agent uses them only when you explicitly ask for adult content, and never for real, identifiable people.
+
+**Graph.** Krea 2 runs as `UNETLoader (krea2_turbo_fp8_scaled)` → `LoraLoaderModelOnly` × N → `KSampler`, with `CLIPLoader (qwen3vl_4b_fp8_scaled, type krea2)` → `CLIPTextEncode` as the positive, `ConditioningZeroOut` as the negative, and `VAELoader (qwen_image_vae)` → `VAEDecode` → `SaveImage`. `HAWK_KREA_UNET`, `HAWK_KREA_CLIP` and `HAWK_KREA_VAE` change the file names.
+
+Results are stored as image assets in the **Generated** collection, tagged with the engine (`krea2`, `z-image`, `seedream`), and can be used right away as `picture` references in plans and renders. In Studio, **Media → ✨ Generate** does the same: prompt, engine, size, count, seed, reference images and a Krea 2 LoRA picker with strength sliders. Select images and press **✨ Edit / remix** to start from them.
+
+The agent follows the same order for base images: Krea 2 when the GPU is free, else z-image/turbo. It checks results with **`inspect_image`**: a vision model (the chat's own model when it can see images, else Grok 4.6) scores each image against the brief and flags faces, hands, anatomy, wrong outfit or setting and garbled text. On real flaws it retries once with a sharper prompt, then moves to Seedream. It picks Krea LoRAs from `image_options` (a realism or detail LoRA for photo portraits, a style LoRA by its trigger). For a picture of itself or a character it writes a detailed 60–120 word prompt from the persona, makes 2 options, inspects them and sets the best as the avatar.
 
 Every asset in API responses carries a signed `file_url`, and images a `thumb_url` (a 320 px JPEG, via `GET /v1/assets/<id>/file?w=320`). Signed links open without the token, so Studio and the agent chat show thumbnails of uploaded and generated images.
 
@@ -394,7 +404,8 @@ The API process needs `ATLAS_API_KEY` (the Colab launcher passes it already). Th
 | `upload_page_link` | Signed link to the browser upload page |
 | `add_reference_from_url` | Fetch a public file URL onto the pod |
 | `list_references` | Uploaded assets |
-| `generate_image` | Generate or edit images with Atlas (Seedream v5.0 Pro by default); results become image assets |
+| `generate_image` | Generate or edit images: local Krea 2 with LoRAs, z-image/turbo or Seedream (`engine`, `loras`); results become image assets |
+| `image_options` | Whether local Krea 2 is installed and idle, its LoRAs with recommended strengths, and the Atlas image models |
 | `list_options` | Base models, text encoders and LoRAs on the pod, defaults, presets, samplers, aspect ratios |
 | `plan_film` | Start a plan job |
 | `render_film` | Start a render: `script`, `plan_job_id` or `story`, plus `references`, `settings`, `loras`, `lora_preset` |
