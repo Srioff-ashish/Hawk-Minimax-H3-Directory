@@ -2329,7 +2329,7 @@
     else if (!local.reachable) { text = "ComfyUI isn't reachable, so Krea 2 is unavailable. Auto uses Z-Image Turbo."; tone = "warn"; }
     else if (!local.installed) { text = `Krea 2 isn't installed on the pod (missing ${(local.missing || []).join(", ")}). Run the Krea 2 install cell in the notebook. Auto uses Z-Image Turbo.`; tone = "warn"; }
     else if (local.busy) { text = `Krea 2 is ready, but the GPU is busy (${local.queue} job${local.queue === 1 ? "" : "s"} in the queue). Auto will use Z-Image Turbo now; pick Krea 2 to wait.`; tone = "warn"; }
-    else { text = `Krea 2 is ready on this GPU · ${(local.loras || []).filter((l) => l.installed).length} LoRAs installed.`; tone = "ok"; }
+    else { text = `Krea 2 is ready on this GPU · ${(local.loras || []).filter((l) => l.installed).length} LoRAs installed${local.files?.clip ? ` · encoder ${local.files.clip.replace(/\.safetensors$/, "")}` : ""}.`; tone = "ok"; }
     if (!refs && engine === "turbo") text += " Z-Image Turbo: about $0.01 an image.";
     status.textContent = text;
     status.className = `gen-status ${tone}`;

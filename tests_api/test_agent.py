@@ -533,6 +533,15 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         chain = [n["inputs"] for n in graph.values() if n["class_type"] == "LoraLoaderModelOnly"]
         self.assertEqual(nodes["UNETLoader"]["unet_name"], "krea2_turbo_fp8_scaled.safetensors")
         self.assertEqual(nodes["CLIPLoader"]["type"], "krea2")
+        self.assertEqual(nodes["CLIPLoader"]["clip_name"], "qwen3vl_4b_fp8_scaled.safetensors")
+        files["text_encoders"].remove("qwen3vl_4b_fp8_scaled.safetensors")  # swapped for the bf16 encoder
+        files["text_encoders"] += ["qwen3vl_8b_nvfp4.safetensors", "qwen3vl_4b_bf16.safetensors"]
+        options = (await self.http.get("/v1/images/options")).json()
+        self.assertEqual((options["local"]["installed"], options["local"]["files"]["clip"]), (True, "qwen3vl_4b_bf16.safetensors"))
+        await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})
+        graph = list(self.fake.prompts.values())[-1]
+        self.assertEqual(next(n["inputs"]["clip_name"] for n in graph.values() if n["class_type"] == "CLIPLoader"), "qwen3vl_4b_bf16.safetensors")
+        files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
         self.assertEqual([(c["lora_name"], c["strength_model"]) for c in chain], [("krea2_realism_v1.safetensors", 0.8), ("krea2_darkbrush.safetensors", 0.9)])
         self.assertEqual((nodes["KSampler"]["steps"], nodes["KSampler"]["cfg"], nodes["KSampler"]["scheduler"]), (8, 1.0, "simple"))
         self.assertEqual((nodes["EmptyLatentImage"]["width"], nodes["EmptyLatentImage"]["height"], nodes["EmptyLatentImage"]["batch_size"]), (1024, 1536, 2))

@@ -27,6 +27,24 @@ DEFAULT_STEPS = 8
 WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
+# Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
+# else the first match, higher precision first.
+MODEL_FAMILIES = {
+    "diffusion_models": re.compile(r"krea[-_ ]?2.*turbo", re.IGNORECASE),
+    "text_encoders": re.compile(r"qwen[-_ ]?3[-_ ]?vl[-_ ]?4b", re.IGNORECASE),
+    "vae": re.compile(r"qwen[-_ ]?image[-_ ]?vae", re.IGNORECASE),
+}
+_PRECISION = ("bf16", "fp16", "fp8", "")
+
+
+def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:
+    """The configured file if present, else the best file of the same model family."""
+    for name in files:
+        if name == configured or name.rsplit("/", 1)[-1] == configured:
+            return name
+    matches = [name for name in files if family.search(name.rsplit("/", 1)[-1])]
+    rank = lambda name: next(i for i, tag in enumerate(_PRECISION) if tag in name.lower())
+    return min(matches, key=lambda name: (rank(name), name)) if matches else None
 MAX_ADULT_LORAS = 3  # the most a manual (Studio) request may stack; the agent stays at 1
 ADULT_STRENGTH_WARN = 1.0  # combined adult LoRA strength above this tends to over-cook Turbo
 
@@ -157,17 +175,20 @@ class LocalImageEngine:
     async def status(self) -> dict:
         """Installed model files, whether ComfyUI is busy, and the LoRA catalogue."""
         s = self.settings
-        missing = []
+        missing, files = [], {}
         try:
-            for folder, name in (("diffusion_models", s.krea_unet), ("text_encoders", s.krea_clip), ("vae", s.krea_vae)):
-                if name not in await self.service.available_models(folder, refresh=True):
+            for key, folder, name in (("unet", "diffusion_models", s.krea_unet), ("clip", "text_encoders", s.krea_clip), ("vae", "vae", s.krea_vae)):
+                found = pick_model(name, await self.service.available_models(folder, refresh=True), MODEL_FAMILIES[folder])
+                if found:
+                    files[key] = found
+                else:
                     missing.append(f"{folder}/{name}")
             busy, queue = await self.busy()
             reachable = True
         except Exception as exc:  # ComfyUI down
             return {"installed": False, "busy": False, "reachable": False, "missing": [], "error": str(exc), "loras": []}
         return {"installed": not missing, "busy": busy, "queue": queue, "reachable": reachable, "missing": missing,
-                "model": s.krea_unet, "loras": [lora.view() for lora in await self.catalogue()]}
+                "model": files.get("unet", s.krea_unet), "files": files, "loras": [lora.view() for lora in await self.catalogue()]}
 
     async def busy(self) -> tuple[bool, int]:
         running, pending = await self.service.comfy.queue_state()
@@ -240,10 +261,10 @@ class LocalImageEngine:
             if item.trigger and item.trigger.lower() not in text.lower():
                 text = f"{text}, {item.trigger}"
         hint = next((item for item in used if item.steps or item.scheduler or item.sampler), None)
-        s = self.settings
+        files = status["files"]
         graph = krea_graph(
             text, width=width, height=height, n=max(1, min(4, n)), seed=seed if seed is not None else int.from_bytes(os.urandom(6), "big"),
-            loras=chosen, unet=s.krea_unet, clip=s.krea_clip, vae=s.krea_vae,
+            loras=chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
             steps=steps or (hint.steps if hint and hint.steps else DEFAULT_STEPS),
             sampler=(hint.sampler if hint and hint.sampler else "euler"), scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
             prefix="hawk_images/krea2",
