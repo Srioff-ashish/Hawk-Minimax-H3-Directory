@@ -142,12 +142,24 @@ class PromptIn(BaseModel):
     text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
 
 
+class CastMemberIn(BaseModel):
+    id: str | None = Field(None, description="Keep a character's id when editing; new characters get one.")
+    name: str | None = Field(None, description="Display name, e.g. Riya. Required when the chat has several characters (or taken from the persona).")
+    persona: str = Field("", description="Who this character is.")
+    avatar_asset_id: str | None = Field(None, description="An image asset shown as this character's face.")
+
+
+class AgentTalkIn(BaseModel):
+    rounds: int = Field(5, ge=1, le=10, description="How many rounds the characters talk to each other.")
+
+
 class AgentSessionIn(BaseModel):
     title: str | None = Field(None, description="Chat title; the agent renames it once the task is clear.")
     persona: str | None = Field(None, description="Who the agent should be, e.g. 'Bollywood ad-film director'.")
     model: str | None = Field(None, description="Atlas chat model id; default HAWK_AGENT_MODEL (xai/grok-4.6).")
     name: str | None = Field(None, description="The persona's display name, e.g. Maya. Empty: taken from the persona text.")
     avatar_asset_id: str | None = Field(None, description="An image asset shown as the agent's avatar in this chat; empty removes it.")
+    cast: list[CastMemberIn] | None = Field(None, description="Several characters in one chat (up to 4); the first is the lead.")
 
 
 class AgentMessageIn(BaseModel):

@@ -30,6 +30,9 @@ from .prompts import render_agent_prompt
 log = logging.getLogger("hawk_api.agent")
 
 MAX_STEPS = 40
+MAX_CAST = 4  # characters in one chat
+MAX_LINES = 8  # spoken lines in one reply of a group chat
+MAX_TALK_ROUNDS = 10
 MAX_RUN_SECONDS = 3 * 3600
 RECENT_MESSAGES = 30
 SUMMARY_TOKEN_LIMIT = 150_000
@@ -47,17 +50,23 @@ AGENT_TOOLS = [
     },
     {
         "name": "set_persona",
-        "description": "Replace your persona when the user asks you to be or act like someone. name is the persona's "
-        "display name shown in the chat (e.g. Maya); omit it to keep the current one.",
-        "args": {"persona": "string (required)", "name": "string, optional"},
+        "description": "Replace a persona when the user asks you to be or act like someone. name is the display name "
+        "shown in the chat (e.g. Maya). In a group chat pass speaker (a character's name) to change that character; "
+        "a new speaker name adds a character (up to 4).",
+        "args": {"persona": "string (required)", "name": "string, optional", "speaker": "string, optional"},
+    },
+    {
+        "name": "remove_character",
+        "description": "Remove a character from this group chat when the user asks.",
+        "args": {"speaker": "string (required)"},
     },
     {
         "name": "set_avatar",
         "description": "Make an image your avatar in this chat: it is shown with your name next to every reply. When the "
         "user asks for a picture of you or your persona, generate it with generate_image, then call set_avatar with the "
         "new asset_id. Later pictures or videos of yourself should use your avatar as a reference (role picture). "
-        "asset_id \"\" removes the avatar.",
-        "args": {"asset_id": "string (required)", "name": "string, optional"},
+        "asset_id \"\" removes the avatar. In a group chat pass speaker: whose avatar it is.",
+        "args": {"asset_id": "string (required)", "name": "string, optional", "speaker": "string, optional"},
     },
     {
         "name": "rename_chat",
@@ -68,7 +77,8 @@ AGENT_TOOLS = [
 
 
 SUMMARY_PROMPT = (
-    "Summarise the conversation so far for your own future context. Keep: the user's goals and preferences, the persona, "
+    "Summarise the conversation so far for your own future context. Keep: the user's goals and preferences, the persona "
+    "or cast (each character's name, personality and avatar asset id, and how they relate), "
     "decisions made, every asset id, job id and video link, what is finished and what is still open. Plain text, at most 400 words."
 )
 
@@ -83,6 +93,28 @@ def persona_name(persona: str) -> str:
         if match.group(1) not in _NOT_NAMES:
             return match.group(1)
     return ""
+
+
+def cast_of(session: dict) -> list[dict]:
+    """The chat's characters. A chat without a cast has one: its persona."""
+    cast = session.get("cast")
+    if isinstance(cast, list) and cast:
+        return cast
+    return [{"id": "main", "name": session.get("name", ""), "persona": session.get("persona", ""),
+             "avatar_asset_id": session.get("avatar_asset_id", "")}]
+
+
+def display_name(member: dict, index: int = 0, total: int = 1) -> str:
+    name = member.get("name") or persona_name(member.get("persona", ""))
+    return name or ("" if total == 1 else f"Friend {index + 1}")
+
+
+def find_member(cast: list[dict], speaker: str) -> int | None:
+    key = (speaker or "").strip().lower()
+    for index, member in enumerate(cast):
+        if key and key in (member.get("id", "").lower(), display_name(member, index, len(cast)).lower()):
+            return index
+    return None
 
 
 def _now() -> float:
@@ -184,8 +216,23 @@ def parse_reply(text: str) -> dict | None:
                 return None
             args = action.get("args") or {}
             clean.append({"tool": action["tool"], "args": args if isinstance(args, dict) else {}})
-        say = data.get("say")
-        return {"say": say if isinstance(say, str) else "", "actions": clean, "done": bool(data.get("done"))}
+        lines = []
+        for line in data.get("lines") if isinstance(data.get("lines"), list) else []:
+            if isinstance(line, dict) and isinstance(line.get("say"), str) and line["say"].strip():
+                lines.append({"speaker": str(line.get("speaker") or "").strip()[:40], "say": line["say"].strip()})
+        lines = lines[:MAX_LINES]
+        say = data.get("say") if isinstance(data.get("say"), str) else ""
+        if not say and lines:
+            say = "\n".join(f"{line['speaker']}: {line['say']}" if line["speaker"] else line["say"] for line in lines)
+        for action, source in zip(clean, actions):
+            if isinstance(source.get("by"), str) and source["by"].strip():
+                action["by"] = source["by"].strip()[:40]
+        reply = {"say": say, "actions": clean, "done": bool(data.get("done"))}
+        if data.get("pause"):
+            reply["pause"] = True
+        if lines:
+            reply["lines"] = lines
+        return reply
     return None
 
 
@@ -229,6 +276,7 @@ class AgentService:
         self.store = store or AgentStore(service.settings.db_path)
         self._tasks: dict[str, asyncio.Task] = {}
         self._stop: set[str] = set()
+        self._joining: set[str] = set()  # the user wrote while the characters were talking
 
     # ------------------------------------------------------------ lifecycle
 
@@ -273,8 +321,11 @@ class AgentService:
     def list_sessions(self) -> list[dict]:
         return self.store.list_sessions()
 
-    def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None) -> dict:
+    def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None,
+                       cast=None) -> dict:
         session = self.get_session(session_id)
+        if cast is not None:
+            self._set_cast(session, cast)
         if title is not None:
             session["title"] = title.strip() or session["title"]
         if persona is not None:
@@ -284,15 +335,46 @@ class AgentService:
         if name is not None:
             session["name"] = name.strip()[:40]
         if avatar_asset_id is not None:
-            avatar_asset_id = avatar_asset_id.strip()
-            if avatar_asset_id:
-                asset = self.service.store.get_asset(avatar_asset_id)
-                if asset is None:
-                    raise RequestError(f"Unknown asset {avatar_asset_id!r}.")
-                if asset["kind"] != "image":
-                    raise RequestError(f"Asset {avatar_asset_id} is {asset['kind']}; an avatar must be an image.")
-            session["avatar_asset_id"] = avatar_asset_id
+            session["avatar_asset_id"] = self._check_avatar(avatar_asset_id)
+        if session.get("cast"):  # the lead character mirrors the single-persona fields
+            lead = session["cast"][0]
+            lead.update(name=session.get("name", ""), persona=session.get("persona", ""), avatar_asset_id=session.get("avatar_asset_id", ""))
         return self.store.save_session(session)
+
+    def _check_avatar(self, asset_id: str) -> str:
+        asset_id = (asset_id or "").strip()
+        if asset_id:
+            asset = self.service.store.get_asset(asset_id)
+            if asset is None:
+                raise RequestError(f"Unknown asset {asset_id!r}.")
+            if asset["kind"] != "image":
+                raise RequestError(f"Asset {asset_id} is {asset['kind']}; an avatar must be an image.")
+        return asset_id
+
+    def _set_cast(self, session: dict, cast: list[dict]) -> None:
+        if not cast:
+            raise RequestError("A chat needs at least one character.")
+        if len(cast) > MAX_CAST:
+            raise RequestError(f"At most {MAX_CAST} characters in one chat.")
+        clean, names = [], set()
+        for index, member in enumerate(cast):
+            entry = {
+                "id": str(member.get("id") or uuid.uuid4().hex[:8]),
+                "name": str(member.get("name") or "").strip()[:40],
+                "persona": str(member.get("persona") or "").strip(),
+                "avatar_asset_id": self._check_avatar(str(member.get("avatar_asset_id") or "")),
+            }
+            shown = display_name(entry, index, len(cast))
+            if len(cast) > 1:
+                if not (entry["name"] or persona_name(entry["persona"])):
+                    raise RequestError(f"Character {index + 1} needs a name.")
+                if shown.lower() in names:
+                    raise RequestError(f"Two characters are called {shown}; give each a different name.")
+            names.add(shown.lower())
+            clean.append(entry)
+        session["cast"] = clean
+        lead = clean[0]
+        session.update(name=lead["name"], persona=lead["persona"], avatar_asset_id=lead["avatar_asset_id"])
 
     def public(self, session: dict) -> dict:
         """A session for clients: the persona's display name and a signed avatar thumbnail."""
@@ -303,6 +385,15 @@ class AgentService:
         if asset:
             links = self.service.asset_view(asset)
             view["avatar_url"], view["avatar_file_url"] = links.get("thumb_url"), links.get("file_url")
+        cast = cast_of(session)
+        view["cast"] = []
+        for index, member in enumerate(cast):
+            entry = {**member, "display_name": display_name(member, index, len(cast)), "avatar_url": None, "avatar_file_url": None}
+            found = self.service.store.get_asset(member["avatar_asset_id"]) if member.get("avatar_asset_id") else None
+            if found:
+                links = self.service.asset_view(found)
+                entry["avatar_url"], entry["avatar_file_url"] = links.get("thumb_url"), links.get("file_url")
+            view["cast"].append(entry)
         return view
 
     async def delete_session(self, session_id: str) -> None:
@@ -327,6 +418,16 @@ class AgentService:
 
     async def send(self, session_id: str, text: str, attachments: list[str] | None = None) -> dict:
         session = self.get_session(session_id)
+        task = self._tasks.get(session_id)
+        if task is not None and session.get("talking") and (text or "").strip():
+            # The user joins a "let them talk" conversation: end it after the current step, then answer them.
+            self._joining.add(session_id)
+            self._stop.add(session_id)
+            try:
+                await asyncio.wait_for(asyncio.shield(task), timeout=180)
+            except asyncio.TimeoutError:
+                raise Conflict("The characters are still finishing a line. Try again in a moment.") from None
+            session = self.get_session(session_id)
         if session["status"] in ("running", "stopping") or session_id in self._tasks:
             raise Conflict("The agent is still working on this chat. Wait, or stop it first.")
         if not (text or "").strip() and not attachments:
@@ -344,6 +445,21 @@ class AgentService:
         self._tasks[session_id] = asyncio.create_task(self._run(session_id))
         return {"session": session, "message": message}
 
+    def talk(self, session_id: str, rounds: int = 5) -> dict:
+        """Let the characters of a group chat talk to each other for a few rounds."""
+        session = self.get_session(session_id)
+        if session["status"] in ("running", "stopping") or session_id in self._tasks:
+            raise Conflict("The agent is still working on this chat. Wait, or stop it first.")
+        if len(cast_of(session)) < 2:
+            raise RequestError("Add a second character first: talking needs at least two.")
+        rounds = max(1, min(MAX_TALK_ROUNDS, int(rounds)))
+        session["status"] = "running"
+        session["talking"] = True
+        self.store.save_session(session)
+        self._stop.discard(session_id)
+        self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds))
+        return session
+
     def request_stop(self, session_id: str) -> dict:
         session = self.get_session(session_id)
         if session_id in self._tasks:
@@ -355,45 +471,58 @@ class AgentService:
     def _note(self, session_id: str, text: str, kind: str = "info") -> None:
         self.store.add_message(session_id, "note", {"text": text, "kind": kind})
 
-    async def _run(self, session_id: str) -> None:
+    async def _run(self, session_id: str, talk_rounds: int = 0) -> None:
         started = time.monotonic()
         steps = repairs = 0
         final_status = "idle"
         try:
-            while True:
-                if session_id in self._stop:
-                    self._note(session_id, "Stopped by you.")
-                    break
-                if steps >= MAX_STEPS:
-                    self._note(session_id, f"Paused after {MAX_STEPS} steps. Send a message to continue.", "warn")
-                    break
-                if time.monotonic() - started > MAX_RUN_SECONDS:
-                    self._note(session_id, "Paused after 3 hours. Send a message to continue.", "warn")
-                    break
-                session = self.get_session(session_id)
-                await self._maybe_summarize(session)
-                messages = await self._build_messages(session)
-                text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
-                steps += 1
-                await self._add_usage(session_id, session["model"], usage)
-                reply = parse_reply(text)
-                if reply is None:
-                    self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True})
-                    if repairs:
-                        self._note(session_id, "The model did not answer in the required JSON format twice; stopped.", "error")
-                        final_status = "error"
-                        break
-                    repairs += 1
-                    self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
-                    continue
-                repairs = 0
-                self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply})
-                if not reply["actions"]:
-                    break
-                for action in reply["actions"]:
+            for round_number in range(1, (talk_rounds or 1) + 1):
+                if talk_rounds:
                     if session_id in self._stop:
+                        self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
                         break
-                    await self._execute(session_id, action)
+                    self.store.add_message(session_id, "note", {"text": f"Talking · round {round_number} of {talk_rounds}",
+                                                                "kind": "talk", "round": round_number, "of": talk_rounds})
+                reply, halt = None, False
+                while True:
+                    if session_id in self._stop:
+                        self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
+                        halt = True
+                        break
+                    if steps >= MAX_STEPS:
+                        self._note(session_id, f"Paused after {MAX_STEPS} steps. Send a message to continue.", "warn")
+                        halt = True
+                        break
+                    if time.monotonic() - started > MAX_RUN_SECONDS:
+                        self._note(session_id, "Paused after 3 hours. Send a message to continue.", "warn")
+                        halt = True
+                        break
+                    session = self.get_session(session_id)
+                    await self._maybe_summarize(session)
+                    messages = await self._build_messages(session)
+                    text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
+                    steps += 1
+                    await self._add_usage(session_id, session["model"], usage)
+                    reply = parse_reply(text)
+                    if reply is None:
+                        self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True})
+                        if repairs:
+                            self._note(session_id, "The model did not answer in the required JSON format twice; stopped.", "error")
+                            final_status, halt = "error", True
+                            break
+                        repairs += 1
+                        self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
+                        continue
+                    repairs = 0
+                    self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply})
+                    if not reply["actions"]:
+                        break
+                    for action in reply["actions"]:
+                        if session_id in self._stop:
+                            break
+                        await self._execute(session_id, action)
+                if halt or reply is None or reply.get("pause"):
+                    break
         except AtlasError as exc:
             self._note(session_id, f"Model error: {exc}", "error")
             final_status = "error"
@@ -407,9 +536,11 @@ class AgentService:
         finally:
             self._tasks.pop(session_id, None)
             self._stop.discard(session_id)
+            self._joining.discard(session_id)
             session = self.store.get_session(session_id)
             if session is not None:
                 session["status"] = final_status
+                session["talking"] = False
                 self.store.save_session(session)
 
     async def _add_usage(self, session_id: str, model: str, usage: dict) -> None:
@@ -439,18 +570,8 @@ class AgentService:
         try:
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
-            elif name == "set_persona":
-                new_name = args.get("name")
-                self.update_session(session_id, persona=str(args.get("persona") or ""),
-                                    name=str(new_name) if new_name is not None else None)
-                session = self.public(self.get_session(session_id))
-                result = {"persona": session["persona"], "name": session["persona_name"]}
-            elif name == "set_avatar":
-                new_name = args.get("name")
-                self.update_session(session_id, avatar_asset_id=str(args.get("asset_id") or ""),
-                                    name=str(new_name) if new_name is not None else None)
-                session = self.public(self.get_session(session_id))
-                result = {"avatar_asset_id": session["avatar_asset_id"], "name": session["persona_name"], "thumb_url": session["avatar_url"]}
+            elif name in ("set_persona", "set_avatar", "remove_character"):
+                result = self._edit_character(session_id, name, args)
             elif name == "rename_chat":
                 self.update_session(session_id, title=str(args.get("title") or ""))
                 result = {"title": self.get_session(session_id)["title"]}
@@ -518,11 +639,47 @@ class AgentService:
             elif role == "tool":
                 body = compact_result(content["result"]) if content.get("ok") else f"ERROR: {content.get('error')}"
                 push("user", f"TOOL RESULT {content['tool']}: {body}")
+            elif role == "note" and content.get("kind") == "talk":
+                push("user", f"(The user is listening. Characters, keep talking to each other: round {content.get('round')} of "
+                             f"{content.get('of')}. Continue naturally from the last lines; use tools if you decide to. If you "
+                             "reach a decision, need the user, or have nothing more to say, add \"pause\": true.)")
             elif role == "note" and content.get("kind") in ("repair", "error", "warn"):
                 push("user", f"NOTE: {content.get('text', '')}")
         return chat
 
+    def _edit_character(self, session_id: str, tool: str, args: dict) -> dict:
+        session = self.get_session(session_id)
+        cast = [dict(member) for member in cast_of(session)]
+        speaker = str(args.get("speaker") or "").strip()
+        index = find_member(cast, speaker) if speaker else 0
+        if tool == "remove_character":
+            if index is None:
+                raise RequestError(f"No character called {speaker!r} in this chat.")
+            if len(cast) == 1:
+                raise RequestError("The last character can't be removed; change its persona instead.")
+            cast.pop(index)
+        else:
+            if index is None:  # a new speaker joins the chat
+                if tool == "set_avatar":
+                    raise RequestError(f"No character called {speaker!r}; add them with set_persona first.")
+                cast.append({"name": speaker, "persona": ""})
+                index = len(cast) - 1
+            member = cast[index]
+            if args.get("name") is not None:
+                member["name"] = str(args["name"])
+            if tool == "set_persona":
+                member["persona"] = str(args.get("persona") or "")
+            else:
+                member["avatar_asset_id"] = str(args.get("asset_id") or "")
+        self.update_session(session_id, cast=cast)
+        view = self.public(self.get_session(session_id))
+        return {"cast": [{"name": m["display_name"], "avatar_asset_id": m["avatar_asset_id"], "thumb_url": m["avatar_url"]}
+                         for m in view["cast"]]}
+
     def _persona_text(self, session: dict) -> str:
+        cast = cast_of(session)
+        if len(cast) > 1:
+            return self._cast_text(session, cast)
         persona = session.get("persona") or ""
         view = self.public(session)
         facts = []
@@ -535,6 +692,29 @@ class AgentService:
             facts.append("You have no avatar yet. When the user asks to see you, generate_image a picture of your persona, "
                          "then set_avatar with it.")
         return f"{persona}\n\n{' '.join(facts)}".strip() if persona or facts else ""
+
+    def _cast_text(self, session: dict, cast: list[dict]) -> str:
+        view = self.public(session)
+        people = []
+        for member in view["cast"]:
+            face = (f"Avatar: asset {member['avatar_asset_id']}." if member["avatar_url"]
+                    else "No avatar yet (when the user asks to see them, generate_image a picture, then set_avatar with speaker).")
+            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}")
+        names = ", ".join(member["display_name"] for member in view["cast"])
+        return (
+            f"This chat is a group conversation. You voice a cast of {len(cast)} characters: {names}. The user talks to all of them.\n"
+            + "\n".join(people)
+            + "\n\nGROUP CHAT RULES\n"
+            "- Reply with \"lines\" instead of \"say\": {\"lines\": [{\"speaker\": \"<name>\", \"say\": \"...\"}], \"actions\": [], \"done\": true}. "
+            "Each line is one character speaking in their own voice, personality and opinions.\n"
+            "- Characters may talk to, tease, agree or argue with each other within a reply.\n"
+            "- If the user writes @Name, only that character answers. Otherwise one or two characters who fit answer; "
+            "if the user asks everyone (everyone, all, sab, dono), each answers.\n"
+            f"- At most {MAX_LINES} lines per reply. Never write the user's lines.\n"
+            "- Mark who does a tool call with \"by\": \"<name>\" in the action. A picture or video of a character uses that "
+            "character's avatar as a picture reference (role picture); a scene with several characters uses all their avatars.\n"
+            "- set_persona / set_avatar / remove_character take speaker to act on one character."
+        )
 
     async def _build_messages(self, session: dict) -> list[dict]:
         system = render_agent_prompt(

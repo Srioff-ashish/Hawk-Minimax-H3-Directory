@@ -282,6 +282,109 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         cleared = (await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": ""})).json()
         self.assertEqual((cleared["avatar_url"], cleared["persona_name"]), (None, "Maya Ji"))
 
+    async def test_group_chat_cast_lines_and_avatars(self):
+        agent_module.WAIT_POLL_SECONDS = 0.05
+        cast = [{"persona": "You are Maya, a warm Delhi stylist."}, {"name": "Riya", "persona": "Maya's sarcastic Mumbai friend."}]
+        bad = [
+            [{"persona": "A stylist"}, {"name": "Riya", "persona": "x"}],  # first has no name
+            [{"name": "Riya", "persona": "a"}, {"name": "riya", "persona": "b"}],  # same name
+            [{"name": f"P{n}", "persona": "x"} for n in range(5)],  # too many
+        ]
+        for members in bad:
+            self.assertEqual((await self.http.post("/v1/agent/sessions", json={"cast": members})).status_code, 422, members)
+
+        def reply(body):
+            turn = assistant_turns(body)
+            if turn == 0:
+                chatter = [{"speaker": "Maya" if n % 2 == 0 else "Riya", "say": f"line {n}"} for n in range(10)]
+                return json.dumps({"lines": chatter, "actions": [
+                    {"tool": "generate_image", "by": "Riya", "args": {"prompt": "Portrait of Riya"}}]})
+            if turn == 1:
+                asset = tool_result(body, "generate_image")["assets"][0]["id"]
+                return json.dumps({"lines": [], "actions": [{"tool": "set_avatar", "by": "Riya", "args": {"asset_id": asset, "speaker": "Riya"}},
+                                                           {"tool": "set_persona", "args": {"speaker": "Zoya", "persona": "A shy poet."}}]})
+            return json.dumps({"lines": [{"speaker": "Riya", "say": "Yeh main hoon."}], "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        response = await self.http.post("/v1/agent/sessions", json={"cast": cast})
+        self.assertEqual(response.status_code, 201, response.text)
+        chat = response.json()
+        self.assertEqual([m["display_name"] for m in chat["cast"]], ["Maya", "Riya"])
+        self.assertEqual((chat["persona_name"], chat["persona"]), ("Maya", cast[0]["persona"]))
+
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "@Riya apni photo dikhao"})
+        view = await self.settle(chat["id"])
+        first = next(m for m in view["messages"] if m["role"] == "assistant")["content"]
+        self.assertEqual(len(first["lines"]), 8, "capped at 8 lines")
+        self.assertEqual(first["actions"][0]["by"], "Riya")
+        self.assertTrue(first["say"].startswith("Maya: line 0"))
+        members = {m["display_name"]: m for m in view["session"]["cast"]}
+        self.assertEqual(list(members), ["Maya", "Riya", "Zoya"], "set_persona with a new speaker adds a character")
+        self.assertTrue(members["Riya"]["avatar_url"] and members["Riya"]["avatar_asset_id"])
+        self.assertIsNone(members["Maya"]["avatar_url"])
+
+        system = self.atlas.requests[0]["messages"][0]["content"]
+        self.assertIn("You voice a cast of 2 characters: Maya, Riya", system)
+        self.assertIn("At most 8 lines per reply", system)
+        self.assertIn(f"Avatar: asset {members['Riya']['avatar_asset_id']}", self.atlas.requests[-1]["messages"][0]["content"])
+
+        self.atlas.reply = lambda body: json.dumps({"lines": [], "actions": [{"tool": "remove_character", "args": {"speaker": "zoya"}}], "done": False}) \
+            if assistant_turns(body) == 3 else json.dumps({"lines": [{"speaker": "Maya", "say": "Bye Zoya"}], "actions": [], "done": True})
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "Zoya ko hatao"})
+        view = await self.settle(chat["id"])
+        self.assertEqual([m["display_name"] for m in view["session"]["cast"]], ["Maya", "Riya"])
+
+        edited = (await self.http.patch(f"/v1/agent/sessions/{chat['id']}", json={"persona": "You are Maya, now a film director."})).json()
+        self.assertEqual((edited["cast"][0]["persona"], edited["cast"][1]["display_name"]), ("You are Maya, now a film director.", "Riya"))
+
+    async def test_let_them_talk(self):
+        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
+        chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
+        solo = await self.new_chat(persona="You are Maya.")
+        self.assertEqual((await self.http.post(f"/v1/agent/sessions/{solo}/talk", json={"rounds": 3})).status_code, 422)
+        self.assertEqual((await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 11})).status_code, 422)
+
+        def reply(body):
+            rounds = body["messages"][-1]["content"]
+            number = int(re.search(r"round (\d+) of", rounds).group(1))
+            return json.dumps({"lines": [{"speaker": "Maya", "say": f"round {number}"}, {"speaker": "Riya", "say": "haan"}],
+                               "actions": [], "done": True, "pause": number == 3})
+
+        self.atlas.reply = reply
+        started = await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 6})
+        self.assertEqual(started.status_code, 202, started.text)
+        view = await self.settle(chat)
+        talks = [m["content"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "talk"]
+        self.assertEqual([(n["round"], n["of"]) for n in talks], [(1, 6), (2, 6), (3, 6)], "stops when they pause")
+        self.assertEqual(len([m for m in view["messages"] if m["role"] == "assistant"]), 3)
+        self.assertIn("keep talking to each other: round 3 of 6", self.atlas.requests[-1]["messages"][-1]["content"])
+        self.assertEqual(view["session"]["status"], "idle")
+
+    async def test_join_while_they_talk(self):
+        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
+        chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
+
+        def reply(body):
+            last = body["messages"][-1]["content"]
+            if "USER: Main bhi hoon" in last:
+                return json.dumps({"lines": [{"speaker": "Riya", "say": "Aao aao!"}], "actions": [], "done": True})
+            return json.dumps({"lines": [{"speaker": "Maya", "say": "chit chat"}], "actions": [], "done": True})
+
+        self.atlas.reply, self.atlas.delay = reply, 0.3
+        await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 10})
+        await asyncio.sleep(0.5)
+        talking = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()["session"]
+        self.assertTrue(talking["talking"] and talking["status"] == "running")
+        joined = await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Main bhi hoon"})
+        self.assertEqual(joined.status_code, 202, joined.text)
+        view = await self.settle(chat)
+        notes = [m["content"]["text"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") != "talk"]
+        self.assertIn("You joined in.", notes)
+        rounds = [m for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "talk"]
+        self.assertLess(len(rounds), 10)
+        self.assertEqual(view["messages"][-1]["content"]["lines"][0]["say"], "Aao aao!")
+        self.assertFalse(view["session"]["talking"])
+
     async def test_generate_and_edit_images(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
         created = (await self.http.post("/v1/images", json={"prompt": "A fit model in her forties, studio portrait", "n": 2, "size": "1536x2048"})).json()

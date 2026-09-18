@@ -337,8 +337,11 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | GET | `/v1/agent/sessions/<id>?after=<message id>` | The chat and its messages after that id |
 | PATCH | `/v1/agent/sessions/<id>` | Change `title`, `persona`, `model`, `name` or `avatar_asset_id` (`""` removes the avatar) |
 | POST | `/v1/agent/sessions/<id>/messages` | `{text, attachments: [asset_id]}` → 202, the agent starts working; 409 while it is still working |
+| POST | `/v1/agent/sessions/<id>/talk` | `{rounds: 1–10}` → group chats: the characters talk to each other; stops when they pause or on Stop; a message from you joins in |
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
+
+**Group chats.** A chat can hold a `cast` of up to 4 characters (`[{name, persona, avatar_asset_id}]`, the first is the lead; with several, each needs a name). One model call per turn voices all of them: replies carry `lines: [{speaker, say}]` (at most 8 per reply) and characters may talk to each other. `@Name` in your message gets only that character; otherwise one or two who fit answer, and "everyone" / "sab" gets all of them. `set_persona` / `set_avatar` / `remove_character` take `speaker`, so "Riya, show me a picture of you" sets Riya's avatar, and a new speaker in `set_persona` adds a character. `/talk` runs up to 10 rounds of them talking among themselves (one model call per round).
 
 **Persona name and avatar.** Each chat has its own. `persona_name` is `name` when set, otherwise the name the persona gives itself ("You are Maya, …" → Maya). Ask the agent for a picture of itself: it runs `generate_image`, then `set_avatar` with the new image, and Studio shows that face and name on every reply, in the chat header and in the chat list. The agent is told its avatar's asset id and uses it as the picture reference for later images or videos of itself. Sessions include `avatar_url` (a signed thumbnail) and `avatar_file_url`.
 
