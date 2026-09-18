@@ -142,7 +142,7 @@ class FakeComfy:
             images = []
             for number in range(1, batch + 1):
                 name = f"{stem}_{len(self.outputs) + 1:05d}_.png"
-                self.save_output(f"{folder}/{name}", PNG)
+                self.save_output(f"{folder}/{name}", PNG + name.encode())  # each output differs, like real images
                 images.append({"filename": name, "subfolder": folder, "type": "output"})
             outputs[node_id] = {"images": images}
             return await finish("success")

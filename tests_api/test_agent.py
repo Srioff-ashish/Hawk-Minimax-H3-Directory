@@ -628,6 +628,12 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Refused", refused.text)
         fine = await self.http.post("/v1/images", json={"prompt": "Change the background to a beach", "reference_asset_ids": [photo]})
         self.assertEqual(fine.json()["engine"], "krea2-edit")
+        derived = fine.json()["assets"][0]["id"]  # made from the photo: still counts as the photo, edit after edit
+        again = (await self.http.post("/v1/images", json={"prompt": "Same, sunset", "reference_asset_ids": [derived]})).json()["assets"][0]["id"]
+        for ref in (derived, again):
+            laundered = await self.http.post("/v1/images", json={"prompt": "Same woman, evening", "reference_asset_ids": [ref],
+                                                                 "loras": [{"name": "mystic"}]})
+            self.assertEqual(laundered.status_code, 422, "an edit of an upload can't be re-edited with adult LoRAs")
         adult = await self.http.post("/v1/images", json={"prompt": "Same woman, evening", "reference_asset_ids": [character], "loras": [{"name": "mystic"}]})
         self.assertEqual(adult.status_code, 201, "generated (fictional) characters can use adult LoRAs")
         turbo = (await self.http.post("/v1/images", json={"prompt": "x", "engine": "turbo", "reference_asset_ids": [character]})).json()
