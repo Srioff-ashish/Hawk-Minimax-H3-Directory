@@ -3,6 +3,8 @@
   "loras": [
     {"file": "krea2_realism_v1.safetensors", "kind": "realism", "label": "Realism v1", "strength": 0.8, "range": [0.5, 1.0],
      "notes": "General photorealism: skin, light, lens character. Good default for photo portraits."},
+    {"file": "krea2_realism_v2.safetensors", "kind": "realism", "label": "Realism v2", "strength": 0.8, "range": [0.5, 1.0],
+     "notes": "Newer photorealism LoRA: skin, light, lens character. Good default for photo portraits; use instead of v1."},
     {"file": "krea2_realistic_snapshot.safetensors", "kind": "realism", "label": "Realistic snapshot", "strength": 1.2, "range": [1.0, 2.0],
      "notes": "Candid phone-snapshot look: natural flash, casual framing, less polish."},
     {"file": "krea2_enhancer.safetensors", "kind": "detail", "label": "Enhancer", "strength": 0.7, "range": [0.4, 1.0],

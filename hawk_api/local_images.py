@@ -94,8 +94,13 @@ def load_catalogue(path: str) -> list[ImageLora]:
         shutil.copyfile(EXAMPLE_LORAS, path)
     with open(path, "r", encoding="utf-8") as handle:
         data = json.load(handle)
+    entries = [e for e in data.get("loras", []) if isinstance(e, dict)]
+    if os.path.abspath(path) != os.path.abspath(EXAMPLE_LORAS):  # LoRAs added to the example later still show up
+        with open(EXAMPLE_LORAS, "r", encoding="utf-8") as handle:
+            known = {e.get("file") for e in entries}
+            entries += [e for e in json.load(handle).get("loras", []) if isinstance(e, dict) and e.get("file") not in known]
     items = []
-    for entry in data.get("loras", []):
+    for entry in entries:
         if not isinstance(entry, dict) or not entry.get("file"):
             continue
         low, high = (entry.get("range") or [0.0, 2.0])[:2]
