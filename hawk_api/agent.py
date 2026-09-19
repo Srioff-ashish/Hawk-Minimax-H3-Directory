@@ -54,8 +54,18 @@ INSPECT_PROMPT = (
     '"best": "<asset_id>", "advice": "one or two sentences: how to fix (prompt changes), and whether a higher-quality model is worth it"}'
 )
 MAX_RUN_SECONDS = 3 * 3600
-RECENT_MESSAGES = 30
-SUMMARY_TOKEN_LIMIT = 150_000
+MANUAL_KEEP_MESSAGES = 4  # the Compact button keeps this many messages word for word
+SUMMARY_MAX_TOKENS = 6000  # room for reasoning models to think before writing the summary
+# Tools whose argument schema is large are listed by description only until the chat uses them (describe_tool shows it).
+BIG_SCHEMA_TOKENS = 250
+ALWAYS_FULL_TOOLS = frozenset({"generate_image"})
+# What survives in tool results from earlier turns: ids, links, outcomes and verdicts; raw details are dropped.
+BRIEF_KEYS = frozenset({
+    "id", "asset_id", "job_id", "kind", "status", "engine", "model", "error", "video_url", "score", "verdict", "best",
+    "advice", "issues", "title", "name", "note", "engine_note", "cost_usd", "filename", "message", "progress",
+    "duration", "segments", "assets", "images", "cast",
+})
+BRIEF_STRING_CHARS = 300
 RESULT_CHARS = 6000
 STRING_CHARS = 1500
 WAIT_POLL_SECONDS = 10.0
@@ -95,6 +105,12 @@ AGENT_TOOLS = [
         "Returns a score, issues and keep/retry per image, the best one, and advice (e.g. a sharper prompt, or switch to "
         "seedream). Use it after generate_image before showing, using or setting an avatar.",
         "args": {"asset_ids": "list of asset ids (required, 1-4)", "brief": "string: what the images should show"},
+    },
+    {
+        "name": "describe_tool",
+        "description": "Show the full argument schema of a tool that the catalogue lists without one (large tools such as "
+        "render_film and plan_film). Call it once before the first use of such a tool in a chat.",
+        "args": {"name": "string (required): the tool's name"},
     },
     {
         "name": "rename_chat",
@@ -303,13 +319,14 @@ def parse_reply(text: str) -> dict | None:
     return None
 
 
-def _shorten(value, keep: frozenset = frozenset({"video_url", "segment_urls", "upload_url", "thumb_url", "file_url"})):
+def _shorten(value, keep: frozenset = frozenset({"video_url", "segment_urls", "upload_url", "thumb_url", "file_url"}),
+             limit: int = STRING_CHARS):
     if isinstance(value, dict):
-        return {k: (v if k in keep else _shorten(v, keep)) for k, v in value.items()}
+        return {k: (v if k in keep else _shorten(v, keep, limit)) for k, v in value.items()}
     if isinstance(value, list):
-        return [_shorten(v, keep) for v in value[:50]]
-    if isinstance(value, str) and len(value) > STRING_CHARS:
-        return value[:STRING_CHARS] + f"... [{len(value) - STRING_CHARS} more characters]"
+        return [_shorten(v, keep, limit) for v in value[:50]]
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit] + f"... [{len(value) - limit} more characters]"
     return value
 
 
@@ -319,6 +336,28 @@ def compact_result(result) -> str:
         return text
     urls = re.findall(r'"video_url":\s*"[^"]*"', text)
     return text[:RESULT_CHARS] + " ...[truncated]" + (" " + " ".join(urls) if urls else "")
+
+
+def brief_result(value, depth: int = 0):
+    """An earlier turn's tool result cut down to what later turns refer to (ids, links, outcomes, verdicts)."""
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            if key not in BRIEF_KEYS or item in (None, "", [], {}):
+                continue
+            brief = brief_result(item, depth + 1)
+            if brief not in (None, "", [], {}):
+                kept[key] = brief
+        return kept
+    if isinstance(value, list):
+        return [b for b in (brief_result(item, depth + 1) for item in value[:12]) if b not in (None, "", [], {})]
+    if isinstance(value, str) and len(value) > BRIEF_STRING_CHARS:
+        return value[:BRIEF_STRING_CHARS] + "..."
+    return value
+
+
+def estimate_tokens(messages: list[dict]) -> int:
+    return sum(len(m["content"]) if isinstance(m["content"], str) else len(json.dumps(m["content"])) for m in messages) // 4
 
 
 def _compact_schema(schema: dict) -> dict:
@@ -345,6 +384,10 @@ class AgentService:
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
+        settings = service.settings
+        self.summary_model = settings.agent_summary_model
+        self.compact_tokens = settings.agent_compact_tokens  # summarise older messages above this (estimated tokens)
+        self.keep_messages = settings.agent_keep_messages
 
     # ------------------------------------------------------------ lifecycle
 
@@ -578,10 +621,10 @@ class AgentService:
                     messages = await self._build_messages(session)
                     text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
                     steps += 1
-                    await self._add_usage(session_id, session["model"], usage)
+                    call = await self._add_usage(session_id, session["model"], usage)
                     reply = parse_reply(text)
                     if reply is None:
-                        self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True})
+                        self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True, "usage": call})
                         if repairs:
                             self._note(session_id, "The model did not answer in the required JSON format twice; stopped.", "error")
                             final_status, halt = "error", True
@@ -590,7 +633,7 @@ class AgentService:
                         self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
                         continue
                     repairs = 0
-                    self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply})
+                    self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply, "usage": call})
                     if reply.get("grow"):
                         await self._grow(session_id, reply["grow"])
                     if not reply["actions"]:
@@ -621,23 +664,50 @@ class AgentService:
                 session["talking"] = False
                 self.store.save_session(session)
 
-    async def _add_usage(self, session_id: str, model: str, usage: dict) -> None:
+    async def _add_usage(self, session_id: str, model: str, usage: dict) -> dict:
+        """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at list prices
+        (cached input tokens, when the provider reports them, may be billed lower)."""
         session = self.get_session(session_id)
         info = await self.atlas.model_info(model) or {}
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
+        details = usage.get("prompt_tokens_details") or {}
+        cached = int((details.get("cached_tokens") if isinstance(details, dict) else 0) or usage.get("prompt_cache_hit_tokens") or 0)
+        cost = prompt * info.get("price_in", 0.0) + completion * info.get("price_out", 0.0)
         totals = session.setdefault("usage", {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "steps": 0})
         totals["prompt_tokens"] += prompt
         totals["completion_tokens"] += completion
+        totals["cached_tokens"] = totals.get("cached_tokens", 0) + cached
         totals["steps"] = totals.get("steps", 0) + 1
-        totals["cost_usd"] = round(totals.get("cost_usd", 0.0) + prompt * info.get("price_in", 0.0) + completion * info.get("price_out", 0.0), 6)
+        totals["cost_usd"] = round(totals.get("cost_usd", 0.0) + cost, 6)
         self.store.save_session(session)
+        return {"model": model, "in": prompt, "out": completion, "cached": cached, "cost_usd": round(cost, 6)}
 
     # ------------------------------------------------------------ tools
 
-    async def _catalog(self) -> str:
+    def _tools_in_use(self, session: dict | None) -> set[str]:
+        """Tools this chat has called or described since its summary: their full schemas stay in the catalogue."""
+        if session is None:
+            return set()
+        used = set()
+        for message in self.store.messages(session["id"], after=session.get("summary_upto", 0)):
+            if message["role"] == "tool":
+                content = message["content"]
+                used.add(content.get("tool"))
+                if content.get("tool") == "describe_tool":
+                    used.add(str((content.get("args") or {}).get("name") or ""))
+        return used
+
+    async def _catalog(self, session: dict | None = None) -> str:
+        """Every tool with its description. Large argument schemas appear only once the chat uses the tool, so a chat
+        about images doesn't pay for render_film's schema on every call (session None: everything in full)."""
+        used = self._tools_in_use(session)
         lines = []
         for tool in await self.mcp.list_tools():
             schema = json.dumps(_compact_schema(tool.input_schema), ensure_ascii=False, separators=(",", ":"))
+            if session is not None and len(schema) // 4 > BIG_SCHEMA_TOKENS and tool.name not in ALWAYS_FULL_TOOLS | used:
+                lines.append(f"- {tool.name}: {tool.description}\n  args: large; call describe_tool {{\"name\": \"{tool.name}\"}} "
+                             "once before using it")
+                continue
             lines.append(f"- {tool.name}: {tool.description}\n  args JSON schema: {schema}")
         for tool in AGENT_TOOLS:
             lines.append(f"- {tool['name']}: {tool['description']}\n  args: {json.dumps(tool['args'])}")
@@ -679,6 +749,8 @@ class AgentService:
         try:
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
+            elif name == "describe_tool":
+                result = await self._describe_tool(args)
             elif name == "inspect_image":
                 result = await self._inspect_images(session_id, args)
             elif name in ("set_persona", "set_avatar", "remove_character"):
@@ -699,6 +771,13 @@ class AgentService:
         if job_id:
             content["job_id"] = job_id
         self.store.add_message(session_id, "tool", content)
+
+    async def _describe_tool(self, args: dict) -> dict:
+        name = str(args.get("name") or "").strip()
+        for tool in await self.mcp.list_tools():
+            if tool.name == name:  # _tools_in_use sees this call, so the catalogue shows the schema from the next step on
+                return {"name": name, "note": "Its full args JSON schema is now in your tool catalogue."}
+        raise RequestError(f"No tool called {name!r}.")
 
     async def _call_mcp(self, name: str, args: dict):
         try:
@@ -732,8 +811,12 @@ class AgentService:
     # ------------------------------------------------------------ context
 
     def _history_messages(self, session: dict) -> list[dict]:
-        """Stored messages after the summary, as chat messages (same-role runs merged)."""
+        """Stored messages after the summary, as chat messages (same-role runs merged). Turns before the user's latest
+        message are sent trimmed (free, no model call): tool results keep ids, links, outcomes and verdicts, and long
+        action arguments such as image prompts are cut; the current turn is sent in full."""
         chat: list[dict] = []
+        stored = self.store.messages(session["id"], after=session.get("summary_upto", 0))
+        current = max((index for index, m in enumerate(stored) if m["role"] == "user"), default=0)
 
         def push(role: str, text: str) -> None:
             if chat and chat[-1]["role"] == role:
@@ -741,16 +824,28 @@ class AgentService:
             else:
                 chat.append({"role": role, "content": text})
 
-        for message in self.store.messages(session["id"], after=session.get("summary_upto", 0)):
+        for index, message in enumerate(stored):
             content, role = message["content"], message["role"]
+            old = index < current
             if role == "user":
                 files = content.get("attachments") or []
                 note = ("\nAttached assets: " + ", ".join(f"{f['asset_id']} ({f['kind']}: {f['filename']})" for f in files)) if files else ""
                 push("user", f"USER: {content.get('text', '')}{note}")
             elif role == "assistant":
-                push("assistant", content.get("raw") or json.dumps({k: content.get(k) for k in ("say", "actions", "done")}))
+                raw = content.get("raw") or json.dumps({k: content.get(k) for k in ("say", "actions", "done")})
+                if old and len(raw) > 1500 and not content.get("invalid"):
+                    reply = {k: v for k, v in content.items() if k not in ("raw", "usage")}
+                    reply["actions"] = [{**action, "args": _shorten(action.get("args") or {}, frozenset(), BRIEF_STRING_CHARS)}
+                                        for action in reply.get("actions") or []]
+                    raw = json.dumps(reply, ensure_ascii=False)
+                push("assistant", raw)
             elif role == "tool":
-                body = compact_result(content["result"]) if content.get("ok") else f"ERROR: {content.get('error')}"
+                if not content.get("ok"):
+                    body = f"ERROR: {str(content.get('error'))[:BRIEF_STRING_CHARS] if old else content.get('error')}"
+                elif old:
+                    body = json.dumps(brief_result(content["result"]), ensure_ascii=False) or "{}"
+                else:
+                    body = compact_result(content["result"])
                 push("user", f"TOOL RESULT {content['tool']}: {body}")
             elif role == "note" and content.get("kind") == "talk":
                 push("user", f"(The user is listening. Characters, keep talking to each other: round {content.get('round')} of "
@@ -969,7 +1064,7 @@ class AgentService:
             self.service.prompts.get("agent"),
             persona=self._persona_text(session),
             pipeline=INSTRUCTIONS.strip(),
-            tools=await self._catalog(),
+            tools=await self._catalog(session),
         )
         messages = [{"role": "system", "content": system}]
         if session.get("summary"):
@@ -979,25 +1074,64 @@ class AgentService:
             history.insert(0, {"role": "user", "content": "(continuing the conversation)"})
         return messages + history
 
-    async def _maybe_summarize(self, session: dict) -> None:
+    async def _maybe_summarize(self, session: dict, force: bool = False) -> bool:
+        """Fold older messages into the chat's summary with one call to the cheap summary model: automatically once the
+        conversation sent with each call passes compact_tokens, or now (force, the Compact button). The newest messages
+        stay word for word; everything stays in the database and in Studio. True when it summarised."""
         stored = self.store.messages(session["id"], after=session.get("summary_upto", 0))
-        if len(stored) <= RECENT_MESSAGES:
-            return
-        size = sum(len(json.dumps(m["content"], ensure_ascii=False)) for m in stored) // 4
-        if size < SUMMARY_TOKEN_LIMIT:
-            return
-        older = stored[:-RECENT_MESSAGES]
-        transcript = "\n".join(f"{m['role'].upper()}: {compact_result(m['content'])}" for m in older)
+        keep = MANUAL_KEEP_MESSAGES if force else self.keep_messages
+        spoken = [index for index, m in enumerate(stored) if m["role"] != "note"]  # notes don't count towards keep
+        if len(spoken) <= keep:
+            return False
+        if not force and estimate_tokens(self._history_messages(session)) < self.compact_tokens:
+            return False
+        older = stored[: spoken[-keep]]
+        lines = []
+        for m in older:
+            content = m["content"]
+            if m["role"] == "tool":
+                body = json.dumps(brief_result(content.get("result")), ensure_ascii=False) if content.get("ok") else f"ERROR: {content.get('error')}"
+                lines.append(f"TOOL {content.get('tool')}: {body}")
+            elif m["role"] == "assistant":
+                reply = {k: v for k, v in content.items() if k not in ("raw", "usage", "invalid")}
+                lines.append("ASSISTANT: " + json.dumps(_shorten(reply, frozenset(), BRIEF_STRING_CHARS), ensure_ascii=False))
+            else:
+                lines.append(f"{m['role'].upper()}: {json.dumps(content, ensure_ascii=False)}")
+        transcript = "\n".join(lines)
         previous = f"Earlier summary:\n{session['summary']}\n\n" if session.get("summary") else ""
-        text, usage = await self.atlas.chat(
-            session["model"],
-            [{"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": previous + transcript[-400_000:]}],
-            json_mode=False,
-            max_tokens=1500,
-        )
-        await self._add_usage(session["id"], session["model"], usage)
+        request = [{"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": previous + transcript[-400_000:]}]
+        text = usage = model = None
+        for model in dict.fromkeys((self.summary_model, session["model"])):
+            try:
+                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                break
+            except AtlasError as exc:
+                log.warning("summary with %s failed: %s", model, exc)
+        if text is None:
+            if force:
+                raise RequestError("Could not summarise the chat right now; try again in a moment.")
+            return False
+        await self._add_usage(session["id"], model, usage)
         fresh = self.get_session(session["id"])
         fresh["summary"] = text.strip()
         fresh["summary_upto"] = older[-1]["id"]
         self.store.save_session(fresh)
         session.update(summary=fresh["summary"], summary_upto=fresh["summary_upto"])
+        return True
+
+    async def context_tokens(self, session: dict) -> int:
+        """Estimated input tokens of the next model call: instructions, tool catalogue, summary and history."""
+        return estimate_tokens(await self._build_messages(session))
+
+    async def compact(self, session_id: str) -> dict:
+        """The Compact button: summarise everything but the last few messages now."""
+        session = self.get_session(session_id)
+        if session_id in self._tasks:
+            raise Conflict("The agent is working; compact once it has finished.")
+        before = await self.context_tokens(session)
+        done = await self._maybe_summarize(session, force=True)
+        after = await self.context_tokens(self.get_session(session_id))
+        text = (f"Compacted: each call now sends about {after:,} tokens instead of {before:,}." if done
+                else "Nothing to compact yet: the chat is already short.")
+        self.store.add_message(session_id, "note", {"text": text, "kind": "compact", "before": before, "after": after})
+        return {"session": self.get_session(session_id), "compacted": done, "before": before, "after": after}

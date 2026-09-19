@@ -323,11 +323,14 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 
 - **Models:** any chat model on your Atlas account. The picker lists Grok 4.6 (default, `HAWK_AGENT_MODEL`), Grok 4.5, Grok 4.3 first. `GET /v1/agent/models` returns the list with vision support and prices.
 - **Persona:** free text per chat ("a Bollywood ad-film director who loves warm colours"). You can also tell the agent "be a …" in the chat. Safety rules are fixed and not changed by the persona: no sexual content involving anyone who appears under 18, and no sexual or nude content of real, identifiable people.
-- **Tools:** exactly the MCP tools of this server, listed and called **in-process**, so the agent never goes through the tunnel and gets new tools automatically. It also has `wait_for_job` (waits on the server without spending tokens), `set_persona` and `rename_chat`.
-- **History:** every chat is stored in `DATA_DIR/jobs.sqlite3`. The last 30 messages are sent to the model verbatim; very long chats are summarised automatically, and the full history stays in the database.
+- **Tools:** exactly the MCP tools of this server, listed and called **in-process**, so the agent never goes through the tunnel and gets new tools automatically. It also has `wait_for_job` (waits on the server without spending tokens), `set_persona`, `rename_chat` and `describe_tool`. Tools with large argument schemas (`render_film`, `plan_film`) are listed by description only until the chat uses them or calls `describe_tool`. That saves about 1,500 tokens per call in chats that don't make videos.
+- **History:** every chat is stored in `DATA_DIR/jobs.sqlite3` and stays there in full. What is sent to the model is kept small in three ways:
+  - **Trimming (free):** tool results from before your latest message are cut to what later turns refer to: ids, links, engine, status, scores and errors. Long action arguments such as image prompts are cut to 300 characters. The current turn is sent in full.
+  - **Automatic summary:** once the history sent with each call passes about 20,000 tokens (`HAWK_AGENT_COMPACT_TOKENS`), everything but the last 10 messages (`HAWK_AGENT_KEEP_MESSAGES`) is folded into the chat's summary. One call to `HAWK_AGENT_SUMMARY_MODEL` does it (default DeepSeek V4.1 Flash, whatever the chat's model; the chat's model is the fallback).
+  - **Compact button** (`POST /v1/agent/sessions/<id>/compact`): summarises all but the last 4 messages now and reports the estimated tokens per call before and after. It returns 409 while the agent is working.
 - **Runs on the server:** a message starts a background run that continues if you close the browser. Limits per message: 40 model steps and 3 hours. **Stop** ends it after the current step. A server restart marks a running chat as interrupted.
 - **Protocol:** Atlas does not advertise tool calling for Grok, so the model answers every turn with JSON: `{"say": "…", "actions": [{"tool": "…", "args": {…}}], "done": false}`. Replies in any other shape get one repair round.
-- **Cost:** each chat shows tokens used and the estimated cost from Atlas prices.
+- **Cost:** each chat shows tokens used and the estimated cost from Atlas prices. Each reply shows its own call's tokens in and out; hover for the cost. Stored assistant messages carry `usage: {model, in, out, cached, cost_usd}`. `cached` is filled when the provider reports prompt-cache hits.
 
 | Method | Path | |
 |---|---|---|
@@ -339,6 +342,7 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 | POST | `/v1/agent/sessions/<id>/messages` | `{text, attachments: [asset_id]}` → 202, the agent starts working; 409 while it is still working |
 | POST | `/v1/agent/sessions/<id>/talk` | `{rounds: 1–10}` → group chats: the characters talk to each other; stops when they pause or on Stop; a message from you joins in |
 | POST | `/v1/agent/sessions/<id>/stop` | Stop after the current step |
+| POST | `/v1/agent/sessions/<id>/compact` | Summarise all but the last 4 messages now → `{compacted, before, after, session}` (estimated tokens per call) |
 | DELETE | `/v1/agent/sessions/<id>` | Delete the chat |
 
 **Group chats.** A chat can hold a `cast` of up to 4 characters (`[{name, persona, avatar_asset_id}]`, the first is the lead; with several, each needs a name). One model call per turn voices all of them: replies carry `lines: [{speaker, say}]` (at most 8 per reply) and characters may talk to each other. `@Name` in your message gets only that character; otherwise one or two who fit answer, and "everyone" / "sab" gets all of them. `set_persona` / `set_avatar` / `remove_character` take `speaker`, so "Riya, show me a picture of you" sets Riya's avatar, and a new speaker in `set_persona` adds a character. `/talk` runs up to 10 rounds of them talking among themselves (one model call per round).

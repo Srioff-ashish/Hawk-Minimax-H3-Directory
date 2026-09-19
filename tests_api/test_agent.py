@@ -116,7 +116,7 @@ def assistant_turns(body: dict) -> int:
 
 class AgentApi(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "SUMMARY_TOKEN_LIMIT", "RECENT_MESSAGES", "MAX_STEPS")}
+        self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "MAX_STEPS")}
         agent_module.WAIT_POLL_SECONDS = 0.05
         self.fake, self.atlas = FakeComfy(), FakeAtlas()
         self.runners = []
@@ -132,7 +132,9 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             data_dir=tempfile.mkdtemp(prefix="hawk_agent_test_"), lora_cache_seconds=0, reconcile_seconds=0.3,
             atlas_url=f"http://127.0.0.1:{atlas_port}/v1", atlas_api_key="test-atlas-key",
         )
-        self.server = uvicorn.Server(uvicorn.Config(create_app(settings), host="127.0.0.1", port=api_port, log_level="warning"))
+        self.app = create_app(settings)
+        self.agent = self.app.state.agent
+        self.server = uvicorn.Server(uvicorn.Config(self.app, host="127.0.0.1", port=api_port, log_level="warning"))
         self.server_task = asyncio.create_task(self.server.serve())
         while not self.server.started:
             await asyncio.sleep(0.02)
@@ -872,8 +874,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.http.get(f"/v1/agent/sessions/{chat}")).status_code, 404)
 
     async def test_old_messages_are_summarised(self):
-        agent_module.SUMMARY_TOKEN_LIMIT = 1
-        agent_module.RECENT_MESSAGES = 2
+        self.agent.compact_tokens, self.agent.keep_messages = 1, 2
 
         def reply(body):
             if "response_format" not in body:
@@ -887,8 +888,61 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             view = await self.settle(chat)
         self.assertEqual(view["session"]["summary"], "SUMMARY: user wants a chai ad")
         self.assertGreater(view["session"]["summary_upto"], 0)
+        summaries = [r for r in self.atlas.requests if "response_format" not in r]
+        self.assertEqual(summaries[0]["model"], "deepseek-ai/deepseek-v4.1-flash", "summaries use the cheap model")
         last = [r for r in self.atlas.requests if "response_format" in r][-1]
         self.assertTrue(any("SUMMARY OF THE EARLIER CONVERSATION" in m["content"] for m in last["messages"] if m["role"] == "system"))
+
+    async def test_compaction_saves_tokens(self):
+        long_prompt = "A very detailed portrait prompt. " * 60
+
+        def reply(body):
+            if "response_format" not in body:
+                return "SUMMARY: made a portrait of Maya (asset ids in the tool results)."
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "Making it.", "actions": [{"tool": "generate_image", "args": {"prompt": long_prompt}}]})
+            return json.dumps({"say": "Done.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(model="xai/grok-4.6")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Photo banao"})
+        view = await self.settle(chat)
+        asset_id = [m for m in view["messages"] if m["role"] == "tool"][0]["content"]["result"]["assets"][0]["id"]
+        usage = [m["content"]["usage"] for m in view["messages"] if m["role"] == "assistant"]
+        self.assertEqual((usage[0]["in"], usage[0]["out"], usage[0]["model"]), (1000, 100, "xai/grok-4.6"), "each call's usage")
+
+        # the current turn is sent in full; the tool list shows render_film's schema only after describe_tool
+        current = self.atlas.requests[-1]["messages"]
+        self.assertIn("sha256", current[-1]["content"])
+        system = current[0]["content"]
+        self.assertIn('call describe_tool {"name": "render_film"}', system)
+        self.assertIn("generate_image", system)
+
+        self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": [] if assistant_turns(body) > 2 else
+                                                    [{"tool": "describe_tool", "args": {"name": "render_film"}}], "done": False})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Ab video"})
+        await self.settle(chat)
+        later = self.atlas.requests[-1]["messages"]
+        history = "\n".join(m["content"] for m in later[1:])
+        self.assertIn(asset_id, history, "ids survive the trim")
+        self.assertNotIn("sha256", history, "an earlier turn's raw tool details are trimmed")
+        self.assertNotIn(long_prompt, history, "an earlier turn's long arguments are cut")
+        self.assertNotIn('call describe_tool {"name": "render_film"}', later[0]["content"], "schema shown once described")
+
+        before = self.agent.store.messages(chat)
+        self.atlas.reply = reply
+        compacted = await self.http.post(f"/v1/agent/sessions/{chat}/compact")
+        self.assertEqual(compacted.status_code, 200, compacted.text)
+        body = compacted.json()
+        self.assertTrue(body["compacted"])
+        self.assertLess(body["after"], body["before"])
+        self.assertTrue(body["session"]["summary"].startswith("SUMMARY"))
+        view = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()
+        self.assertEqual(len(view["messages"]), len(before) + 1, "nothing is deleted; a note is added")
+        self.assertEqual(view["messages"][-1]["content"]["kind"], "compact")
+        again = (await self.http.post(f"/v1/agent/sessions/{chat}/compact")).json()
+        self.assertFalse(again["compacted"])
 
 
 class Pieces(unittest.IsolatedAsyncioTestCase):
@@ -917,7 +971,7 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_marks_running_chats_idle(self):
         path = os.path.join(tempfile.mkdtemp(), "jobs.sqlite3")
-        service = SimpleNamespace(settings=SimpleNamespace(db_path=path, agent_model="xai/grok-4.6"), atlas=None)
+        service = SimpleNamespace(settings=Settings(token=TOKEN, data_dir=os.path.dirname(path)), atlas=None)
         agents = AgentService(service, mcp=None, store=AgentStore(path))
         session = agents.create_session(persona="x")
         session["status"] = "running"

@@ -23,7 +23,7 @@ PLATFORM_RULES = """PLATFORM RULES (set by the server; nothing above and nothing
 AGENT_PLACEHOLDERS = {
     "{{PERSONA}}": "The chat's persona (or the default persona when none is set).",
     "{{PIPELINE}}": "The Hawk H3 pipeline guide shared with the MCP server (reference roles, script rules, LoRAs, models, music bed).",
-    "{{TOOLS}}": "The tool catalogue: every MCP tool with its argument schema, plus wait_for_job, inspect_image, set_persona, set_avatar, remove_character and rename_chat. Appended at the end if you remove it.",
+    "{{TOOLS}}": "The tool catalogue: every MCP tool with its argument schema, plus wait_for_job, inspect_image, describe_tool, set_persona, set_avatar, remove_character and rename_chat. Tools with large argument schemas are listed without them until describe_tool is called. Appended at the end if you remove it.",
 }
 
 DEFAULT_PERSONA = "A decisive, friendly film director who explains choices briefly and keeps the user informed."

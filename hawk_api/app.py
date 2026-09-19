@@ -427,6 +427,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Group chats: let the characters talk to each other for a few rounds (stop any time)."""
         return agent.public(agent.talk(session_id, body.rounds))
 
+    @app.post("/v1/agent/sessions/{session_id}/compact", tags=["agent"])
+    async def agent_compact(session_id: str):
+        """Summarise all but the last few messages now, so each model call sends less. The full history is kept."""
+        result = await agent.compact(session_id)
+        return {**result, "session": agent.public(result["session"])}
+
     @app.post("/v1/agent/sessions/{session_id}/stop", tags=["agent"])
     async def agent_stop(session_id: str):
         return agent.public(agent.request_stop(session_id))

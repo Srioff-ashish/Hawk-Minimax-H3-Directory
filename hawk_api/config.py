@@ -40,6 +40,12 @@ class Settings:
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     agent_model: str = "xai/grok-4.6"
+    #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense.
+    agent_summary_model: str = "deepseek-ai/deepseek-v4.1-flash"
+    #: Summarise older messages once the conversation sent with each call passes this many tokens (estimated).
+    agent_compact_tokens: int = 20_000
+    #: Messages kept word for word after an automatic summary.
+    agent_keep_messages: int = 10
     #: Text-to-image default: fast and cheap. Edits (reference images) always use Seedream edit.
     image_model: str = "z-image/turbo"
     #: auto = local Krea 2 when installed and idle, else image_model, else Seedream.
@@ -92,6 +98,9 @@ class Settings:
             atlas_url=_env("ATLAS_API_URL", cls.atlas_url).rstrip("/"),
             atlas_api_key=_env("ATLAS_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
+            agent_summary_model=_env("HAWK_AGENT_SUMMARY_MODEL", cls.agent_summary_model),
+            agent_compact_tokens=int(_env("HAWK_AGENT_COMPACT_TOKENS", str(cls.agent_compact_tokens))),
+            agent_keep_messages=max(2, int(_env("HAWK_AGENT_KEEP_MESSAGES", str(cls.agent_keep_messages)))),
             image_model=_env("HAWK_IMAGE_MODEL", cls.image_model),
             image_engine=_env("HAWK_IMAGE_ENGINE", cls.image_engine),
             krea_unet=_env("HAWK_KREA_UNET", cls.krea_unet),

@@ -770,6 +770,7 @@
               <button class="btn btn-sm" id="agentTalk" type="button" title="The characters talk to each other; press Stop any time">Let them talk</button>
             </span>
             <span class="hint" id="agentUsage" title="Model tokens and estimated cost for this chat"></span>
+            <button class="btn btn-sm" id="agentCompact" type="button" title="Summarise all but the last few messages, so every later call sends fewer tokens. The full chat stays here.">🗜 Compact</button>
           </div>
           <div class="agent-persona" id="agentPersonaPanel" hidden>
             <label class="label" for="agentPersona">Who should the agent be? It shapes its tone and creative choices; safety rules always apply.</label>
@@ -3145,6 +3146,9 @@
     $("agentStop").disabled = session.status === "stopping";
     const usage = session.usage || {};
     $("agentUsage").textContent = usage.steps ? `${((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)).toLocaleString()} tokens · $${(usage.cost_usd || 0).toFixed(3)}` : "";
+    $("agentUsage").title = `Model tokens and estimated cost for this chat: ${(usage.prompt_tokens || 0).toLocaleString()} in`
+      + `${usage.cached_tokens ? ` (${usage.cached_tokens.toLocaleString()} cached)` : ""}, ${(usage.completion_tokens || 0).toLocaleString()} out, ${usage.steps || 0} calls`;
+    $("agentCompact").disabled = running;
     if (agent.modelsLoaded && $("agentModel").value !== session.model) fillAgentModels();
     renderAgentSessions();
     const typing = $("agentThread").querySelector(".typing");
@@ -3221,6 +3225,13 @@
     if ($("agentPersonaPanel").hidden) { $("agentName").value = session?.name || ""; $("agentName").placeholder = session?.persona_name ? `${session.persona_name} (from the persona)` : "Taken from the persona, e.g. Maya"; }
   }
 
+  const kTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
+  function callCost(usage) {  // this reply's model call: tokens in / out and estimated cost
+    if (!usage || !usage.in) return "";
+    const title = `This call: ${usage.in.toLocaleString()} tokens in${usage.cached ? ` (${usage.cached.toLocaleString()} cached)` : ""}, `
+      + `${(usage.out || 0).toLocaleString()} out, about $${(usage.cost_usd || 0).toFixed(4)} on ${usage.model || "the chat's model"}`;
+    return ` · <span title="${esc(title)}">${kTokens(usage.in)} in · ${kTokens(usage.out || 0)} out</span>`;
+  }
   function renderAgentMessage(message) {
     if (agent.rendered.has(message.id)) return;
     agent.rendered.add(message.id);
@@ -3237,8 +3248,8 @@
       add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
-      if (c.lines?.length) for (const line of c.lines) add(`<div class="msg-meta">${whoHtml(line.speaker)}· ${time}</div><div class="bubble agent">${linkify(line.say)}</div>`);
-      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}</div><div class="bubble agent">${linkify(c.say)}</div>`);
+      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}· ${time}${i ? "" : callCost(c.usage)}</div><div class="bubble agent">${linkify(line.say)}</div>`));
+      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}</div><div class="bubble agent">${linkify(c.say)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
       const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;
@@ -3488,6 +3499,19 @@
     }
   }
   $("agentSend").onclick = sendAgentMessage;
+  $("agentCompact").onclick = async () => {
+    const button = $("agentCompact");
+    button.disabled = true;
+    try {
+      const result = await post(`/v1/agent/sessions/${agent.current}/compact`, {});
+      updateAgentHeader(result.session);
+      toast(result.compacted ? "Chat compacted" : "Nothing to compact yet",
+        result.compacted ? `Each call now sends about ${kTokens(result.after)} tokens instead of ${kTokens(result.before)}.` : "The chat is already short.",
+        result.compacted ? "ok" : "", 5000);
+      pollAgent(true);
+    } catch (error) { toast("Could not compact", error.message, "bad"); }
+    finally { button.disabled = false; }
+  };
   $("agentStop").onclick = async () => {
     try { updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/stop`, {})); toast("Stopping after the current step", "", "warn", 3000); }
     catch (error) { toast("Could not stop", error.message, "bad"); }
