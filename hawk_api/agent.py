@@ -41,6 +41,8 @@ MAX_GROWTH_CHARS = 240
 # inspect_image tries the chat's model (when it sees images), then these, until one returns a usable verdict: some models
 # refuse or garble reviews of certain images (adult content in particular).
 VISION_FALLBACK_MODELS = ("xai/grok-4.6", "xai/grok-4.3")
+# Reasoning models (DeepSeek V4.x) think before the verdict; too small a budget ends the reply empty (finish_reason=length).
+INSPECT_MAX_TOKENS = 8000
 PASS_SCORE = 6  # an inspected batch whose best image scores below this counts as a failed take
 # After a failed take, engine "auto" moves one step up this ladder for the rest of the run (until the user writes again).
 ENGINE_LADDER = ("local", "turbo", "seedream")
@@ -781,7 +783,7 @@ class AgentService:
         for model in models:
             try:
                 text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True,
-                                                    max_tokens=1500, temperature=0.2, max_retries=1)
+                                                    max_tokens=INSPECT_MAX_TOKENS, temperature=0.2, max_retries=1)
             except AtlasError as exc:
                 failures.append(f"{model}: {exc}")
                 continue
