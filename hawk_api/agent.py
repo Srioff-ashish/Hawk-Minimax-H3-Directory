@@ -38,7 +38,12 @@ MAX_GROWTH = 12  # hard cap on growth notes per character in an adaptive chat
 MERGE_GROWTH_AT = 8  # at this many notes, the model merges them into a few denser ones
 MERGED_GROWTH = 4
 MAX_GROWTH_CHARS = 240
-VISION_FALLBACK_MODEL = "xai/grok-4.6"  # inspect_image when the chat's model can't see images
+# inspect_image tries the chat's model (when it sees images), then these, until one returns a usable verdict: some models
+# refuse or garble reviews of certain images (adult content in particular).
+VISION_FALLBACK_MODELS = ("xai/grok-4.6", "xai/grok-4.3")
+PASS_SCORE = 6  # an inspected batch whose best image scores below this counts as a failed take
+# After a failed take, engine "auto" moves one step up this ladder for the rest of the run (until the user writes again).
+ENGINE_LADDER = ("local", "turbo", "seedream")
 INSPECT_PROMPT = (
     "You are a demanding photo editor. Check each image (in the order given) against the brief. Look for: match with the "
     "brief (subject, age, look, outfit, setting, mood); natural face and eyes; correct hands and fingers; body proportions and "
@@ -337,6 +342,7 @@ class AgentService:
         self._tasks: dict[str, asyncio.Task] = {}
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
+        self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
 
     # ------------------------------------------------------------ lifecycle
 
@@ -508,6 +514,7 @@ class AgentService:
         session["status"] = "running"
         self.store.save_session(session)
         self._stop.discard(session_id)
+        self._failed_engines.pop(session_id, None)
         self._tasks[session_id] = asyncio.create_task(self._run(session_id))
         return {"session": session, "message": message}
 
@@ -523,6 +530,7 @@ class AgentService:
         session["talking"] = True
         self.store.save_session(session)
         self._stop.discard(session_id)
+        self._failed_engines.pop(session_id, None)
         self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds))
         return session
 
@@ -633,8 +641,39 @@ class AgentService:
             lines.append(f"- {tool['name']}: {tool['description']}\n  args: {json.dumps(tool['args'])}")
         return "\n".join(lines)
 
+    def _step_up_engine(self, session_id: str, args: dict) -> str | None:
+        """The engine for a generate_image call with engine "auto" once a take failed inspection this run: the next
+        rung of ENGINE_LADDER above the highest one that failed (turbo can't edit, so edits go straight to Seedream)."""
+        failed = self._failed_engines.get(session_id)
+        if not failed or str(args.get("engine") or args.get("model") or "auto").strip().lower() != "auto":
+            return None
+        if args.get("loras"):  # LoRAs (adult ones included) only run on local Krea 2
+            return None
+        ladder = ENGINE_LADDER if not args.get("reference_asset_ids") else ("local", "seedream")
+        top = max((ENGINE_LADDER.index(engine) for engine in failed), default=-1)
+        return next((engine for engine in ladder if ENGINE_LADDER.index(engine) > top), ladder[-1])
+
+    def _record_takes(self, session_id: str, verdict: dict) -> None:
+        """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed."""
+        images = [item for item in verdict.get("images") or [] if isinstance(item, dict)]
+        if not images:
+            return
+        scores = [float(item["score"]) for item in images if isinstance(item.get("score"), (int, float))]
+        rejected = all(str(item.get("verdict", "")).lower() == "retry" for item in images) or (scores and max(scores) < PASS_SCORE)
+        if not rejected:
+            return
+        for item in images:
+            asset = self.service.store.get_asset(str(item.get("asset_id") or ""))
+            generator = str(((asset or {}).get("source") or {}).get("generator") or "")
+            if generator:
+                engine = "local" if generator.startswith("krea2") else "turbo" if generator.startswith("z-image") else "seedream"
+                self._failed_engines.setdefault(session_id, set()).add(engine)
+
     async def _execute(self, session_id: str, action: dict) -> None:
         name, args = action["tool"], action["args"]
+        stepped = self._step_up_engine(session_id, args) if name == "generate_image" else None
+        if stepped:
+            args = {**args, "engine": stepped}
         try:
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
@@ -650,6 +689,8 @@ class AgentService:
             ok = not (isinstance(result, dict) and result.get("_error"))
         except Exception as exc:
             result, ok = {"_error": str(exc) or type(exc).__name__}, False
+        if stepped and ok and isinstance(result, dict):
+            result = {**result, "engine_note": f"An earlier take failed inspection, so engine auto used {stepped} this time."}
         content = {"tool": name, "args": args, "ok": ok, "result": result if ok else None,
                    "error": None if ok else result.get("_error")}
         job_id = result.get("id") if ok and isinstance(result, dict) and result.get("kind") in ("plan", "render") else None
@@ -734,15 +775,33 @@ class AgentService:
             parts.append({"type": "text", "text": f"Image asset_id {asset_id}:"})
             parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
         session = self.get_session(session_id)
-        model = session["model"]
-        if not ((await self.atlas.model_info(model)) or {}).get("vision"):
-            model = VISION_FALLBACK_MODEL
-        text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True, max_tokens=1500, temperature=0.2)
-        await self._add_usage(session_id, model, usage)
-        verdict = parse_json_object(text)
-        if verdict is None:
-            return {"model": model, "review": text.strip()[:2000]}
-        return {"model": model, **verdict}
+        models = [session["model"]] if ((await self.atlas.model_info(session["model"])) or {}).get("vision") else []
+        models += [m for m in VISION_FALLBACK_MODELS if m not in models]
+        failures = []
+        for model in models:
+            try:
+                text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True,
+                                                    max_tokens=1500, temperature=0.2, max_retries=1)
+            except AtlasError as exc:
+                failures.append(f"{model}: {exc}")
+                continue
+            await self._add_usage(session_id, model, usage)
+            verdict = parse_json_object(text)
+            if not isinstance(verdict, dict) or not isinstance(verdict.get("images"), list):
+                failures.append(f"{model}: no usable verdict ({text.strip()[:160]!r})")
+                continue
+            self._record_takes(session_id, verdict)
+            result = {"model": model, **verdict}
+            if failures:
+                result["skipped_models"] = failures
+            nxt = self._step_up_engine(session_id, {"engine": "auto"})
+            if nxt:
+                result["next_engine"] = f"The next generate_image with engine auto will use {nxt}."
+            return result
+        log.warning("inspect_image failed on every model: %s", failures)
+        raise RequestError("No vision model could inspect these images (" + "; ".join(f[:300] for f in failures) + "). "
+                           "Don't regenerate only because inspection is unavailable: show the images and let the user judge. "
+                           "For a retake without LoRAs use engine \"seedream\"; LoRA images (adult ones included) only come from local Krea 2.")
 
     def _edit_character(self, session_id: str, tool: str, args: dict) -> dict:
         session = self.get_session(session_id)

@@ -42,6 +42,8 @@ MODELS = [
     {"id": "xai/grok-4.6", "name": "Grok 4.6", "input_modalities": ["text", "image"], "output_modalities": ["text"],
      "context_length": 500000, "pricing": {"prompt": "0.000002", "completion": "0.000006"}},
 ]
+DEEPSEEK = {"id": "deepseek-ai/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "input_modalities": ["text", "image"],
+            "output_modalities": ["text"], "context_length": 1048576, "pricing": {"prompt": "0.0000003", "completion": "0.0000012"}}
 
 
 class FakeAtlas:
@@ -53,6 +55,7 @@ class FakeAtlas:
         self.image_requests: list[dict] = []
         self.polls = 0
         self.model_list = MODELS
+        self.fail_vision: set[str] = set()  # these models answer 400 to calls with images
         self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat),
                              web.post("/api/v1/model/generateImage", self.generate), web.get("/api/v1/model/prediction/{pid}", self.prediction)])
 
@@ -76,6 +79,8 @@ class FakeAtlas:
         self.requests.append(body)
         if self.delay:
             await asyncio.sleep(self.delay)
+        if body["model"] in self.fail_vision and isinstance(body["messages"][0]["content"], list):
+            return web.json_response({"error": {"message": "content policy: image rejected"}}, status=400)
         text = self.reply(body)
         return web.json_response({"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
                                   "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
@@ -503,6 +508,70 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(parts[2]["image_url"]["url"].startswith("data:image/"))
         self.assertEqual(reviews[0]["model"], "xai/grok-4.6", "the chat's model can see images")
         self.assertIn("inspect_image", self.atlas.requests[0]["messages"][0]["content"])
+
+    async def test_inspect_falls_back_and_failed_takes_move_up_engines(self):
+        files = self.fake.model_files
+        files["diffusion_models"].append("krea2_turbo_fp8_scaled.safetensors")
+        files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
+        files["vae"] = ["qwen_image_vae.safetensors"]
+        self.atlas.model_list = MODELS + [DEEPSEEK]
+        self.atlas.fail_vision = {"deepseek-ai/deepseek-v4.1-flash"}  # e.g. refuses to review adult images
+        reviewers = []
+
+        def reply(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list):
+                reviewers.append(body["model"])
+                ids = [part["text"].split()[-1].rstrip(":") for part in first if part["type"] == "text" and part["text"].startswith("Image asset_id")]
+                return json.dumps({"images": [{"asset_id": i, "score": 4, "issues": ["bad hands"], "verdict": "retry"} for i in ids],
+                                   "best": ids[0], "advice": "Retry with a sharper prompt."})
+            turn = assistant_turns(body)
+            if turn < 6 and turn % 2 == 0:
+                return json.dumps({"say": "", "actions": [{"tool": "generate_image", "args": {"prompt": f"Portrait take {turn}", "engine": "auto"}}]})
+            if turn < 6:
+                ids = [a["id"] for a in tool_result(body, "generate_image")["assets"]]
+                return json.dumps({"say": "", "actions": [{"tool": "inspect_image", "args": {"asset_ids": ids, "brief": "Portrait"}}]})
+            return json.dumps({"say": "Done.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(model="deepseek-ai/deepseek-v4.1-flash")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo banao"})
+        view = await self.settle(chat)
+        tools = [m["content"] for m in view["messages"] if m["role"] == "tool"]
+        self.assertTrue(all(c["ok"] for c in tools), tools)
+        made = [c["result"]["engine"] for c in tools if c["tool"] == "generate_image"]
+        self.assertEqual(made, ["krea2", "z-image", "seedream"], "each failed take moves auto one engine up")
+        inspected = [c["result"] for c in tools if c["tool"] == "inspect_image"]
+        self.assertEqual(inspected[0]["model"], "xai/grok-4.6", "falls back when the chat's model fails")
+        self.assertIn("content policy", inspected[0]["skipped_models"][0])
+        self.assertIn("turbo", inspected[0]["next_engine"])
+        self.assertIn("seedream", tools[4]["result"]["engine_note"])
+        self.assertEqual(reviewers, ["xai/grok-4.6"] * 3)
+
+        # a new message starts over at the free local engine
+        def once(action):
+            """Run action on the first turn, then finish."""
+            pending = [action]
+
+            def reply(_body):
+                actions = [pending.pop()] if pending else []
+                return json.dumps({"say": "ok", "actions": actions, "done": not actions})
+            return reply
+
+        self.atlas.reply = once({"tool": "generate_image", "args": {"prompt": "Lamp"}})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Ek lamp bhi"})
+        view = await self.settle(chat)
+        last = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
+        self.assertEqual(last["result"]["engine"], "krea2")
+
+        self.atlas.fail_vision.add("xai/grok-4.6")
+        self.atlas.fail_vision.add("xai/grok-4.3")
+        self.atlas.reply = once({"tool": "inspect_image", "args": {"asset_ids": [last["result"]["assets"][0]["id"]]}})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Check it"})
+        view = await self.settle(chat)
+        failed = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
+        self.assertFalse(failed["ok"])
+        self.assertIn("seedream", failed["error"])
 
     async def test_local_krea_images_and_fallbacks(self):
         files = self.fake.model_files
