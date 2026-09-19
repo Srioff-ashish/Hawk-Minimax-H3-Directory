@@ -792,6 +792,14 @@ class AgentService:
             if not isinstance(verdict, dict) or not isinstance(verdict.get("images"), list):
                 failures.append(f"{model}: no usable verdict ({text.strip()[:160]!r})")
                 continue
+            images = [item for item in verdict["images"] if isinstance(item, dict)]
+            for index, item in enumerate(images):  # some models echo a made-up id; the images come back in the order sent
+                if str(item.get("asset_id")) not in ids and index < len(ids):
+                    item["asset_id"] = ids[index]
+            if str(verdict.get("best")) not in ids and images:
+                best = max(images, key=lambda item: item.get("score") if isinstance(item.get("score"), (int, float)) else 0)
+                verdict["best"] = best["asset_id"]
+            verdict["images"] = images
             self._record_takes(session_id, verdict)
             result = {"model": model, **verdict}
             if failures:

@@ -523,8 +523,9 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             if isinstance(first, list):
                 reviewers.append(body["model"])
                 ids = [part["text"].split()[-1].rstrip(":") for part in first if part["type"] == "text" and part["text"].startswith("Image asset_id")]
-                return json.dumps({"images": [{"asset_id": i, "score": 4, "issues": ["bad hands"], "verdict": "retry"} for i in ids],
-                                   "best": ids[0], "advice": "Retry with a sharper prompt."})
+                return json.dumps({"images": [{"asset_id": f"media-attachment-0-{n}", "score": 4, "issues": ["bad hands"], "verdict": "retry"}
+                                              for n, _ in enumerate(ids)],  # Grok sometimes echoes made-up ids
+                                   "best": "media-attachment-0-0", "advice": "Retry with a sharper prompt."})
             turn = assistant_turns(body)
             if turn < 6 and turn % 2 == 0:
                 return json.dumps({"say": "", "actions": [{"tool": "generate_image", "args": {"prompt": f"Portrait take {turn}", "engine": "auto"}}]})
@@ -547,6 +548,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertIn("turbo", inspected[0]["next_engine"])
         self.assertIn("seedream", tools[4]["result"]["engine_note"])
         self.assertEqual(reviewers, ["xai/grok-4.6"] * 3)
+        self.assertEqual(inspected[0]["best"], tools[0]["result"]["assets"][0]["id"], "made-up ids mapped back by position")
 
         # a new message starts over at the free local engine
         def once(action):
