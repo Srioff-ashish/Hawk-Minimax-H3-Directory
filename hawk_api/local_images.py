@@ -45,7 +45,8 @@ EDIT_REF_BOOST = 4.0  # likeness dial; >10 breaks removals, <1 frees the model
 EDIT_GROUNDING_PX = 768
 EDIT_MEGAPIXELS = 1.0  # the LoRA's sweet spot
 
-# Edits of uploaded photos may show real people: no nudity or sexual edits of them, whatever the engine.
+# Local Krea 2 edits of uploaded photos may show real people: no nudity or sexual edits of them. Only local generation
+# is checked here; Atlas engines (z-image/turbo, Seedream) are left to Atlas's own moderation.
 _SEXUAL = re.compile(
     r"\b(nude|nudes|nudity|naked|topless|bottomless|undress\w*|nsfw|sex|sexy|sexual\w*|explicit|porn\w*|erotic\w*|"
     r"genitals?|nipples?|remove (?:her|his|their|the) (?:clothes|clothing|top|shirt|dress|bra))\b",
@@ -116,8 +117,8 @@ def check_prompt(prompt: str) -> None:
     match = _MINOR.search(prompt or "")
     if match:
         raise LocalImageError(
-            f"Refused: the prompt mentions {match.group(0)!r}. Images of anyone under 18 are not allowed "
-            "(this rule applies to every engine and can't be changed).",
+            f"Refused: the prompt mentions {match.group(0)!r}. Local Krea 2 doesn't make images of anyone under 18 "
+            "(a fixed rule).",
             fatal=True,
         )
 
