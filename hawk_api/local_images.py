@@ -138,7 +138,6 @@ def from_upload(asset: dict, lookup=None, depth: int = 0) -> bool:
 
 
 def check_edit(prompt: str, sources: list[dict], loras: list, lookup=None) -> None:
-	def check_edit(prompt: str, sources: list[dict], loras: list, lookup=None) -> None:
     """Uploaded photos can be real people: edits of them, and images made from them, stay non-sexual and
     use no adult LoRA. Pictures made here from a prompt are fictional characters and follow the normal rules."""
     real = [a for a in sources if from_upload(a, lookup)]
@@ -152,6 +151,8 @@ def check_edit(prompt: str, sources: list[dict], loras: list, lookup=None) -> No
     if match:
         raise LocalImageError(f"Refused: {match.group(0)!r} edits of uploaded photos ({names}) aren't allowed; they may show "
                               "real people.", fatal=True)
+
+
 
 
 def edit_size(width: int, height: int, megapixels: float = EDIT_MEGAPIXELS) -> tuple[int, int]:
