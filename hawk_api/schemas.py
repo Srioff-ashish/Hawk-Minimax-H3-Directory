@@ -161,10 +161,13 @@ class CastMemberIn(BaseModel):
     persona: str = Field("", description="Who this character is.")
     avatar_asset_id: str | None = Field(None, description="An image asset shown as this character's face.")
     growth: list[str] | None = Field(None, description="How the character has grown in this chat (adaptive chats). Omit to keep; [] resets.")
+    feelings: dict[str, list[str]] | None = Field(None, description="Private feelings about the user (key 'user') or another "
+                                                  "character (their id), group chats. Omit to keep; {} resets.")
 
 
 class AgentTalkIn(BaseModel):
-    rounds: int = Field(5, ge=1, le=10, description="How many rounds the characters talk to each other.")
+    rounds: int = Field(5, ge=1, le=10, description="How many rounds the characters talk to each other (each speaks about once a round).")
+    makes: int = Field(2, ge=0, le=5, description="How many images or videos the characters may have made during this talk.")
 
 
 class AgentSessionIn(BaseModel):
@@ -175,6 +178,7 @@ class AgentSessionIn(BaseModel):
     avatar_asset_id: str | None = Field(None, description="An image asset shown as the agent's avatar in this chat; empty removes it.")
     cast: list[CastMemberIn] | None = Field(None, description="Several characters in one chat (up to 4); the first is the lead.")
     adaptive: bool | None = Field(None, description="Characters adapt: they grow from the conversation with you and with each other.")
+    whispers: bool | None = Field(None, description="Group chats: a message starting with @Name is private to that character.")
 
 
 class AgentMessageIn(BaseModel):

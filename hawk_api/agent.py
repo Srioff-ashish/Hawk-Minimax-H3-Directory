@@ -23,10 +23,12 @@ import threading
 import time
 import uuid
 
+from . import cast_talk
 from .atlas import AtlasClient, AtlasError
+from .cast_talk import USER_KEY, clean_feelings, visible_to
 from .jobs import ACTIVE, Conflict, HawkService, NotFound, RequestError
 from .mcp_server import INSTRUCTIONS
-from .prompts import render_agent_prompt
+from .prompts import PLATFORM_RULES, render_agent_prompt
 
 log = logging.getLogger("hawk_api.agent")
 
@@ -34,6 +36,10 @@ MAX_STEPS = 40
 MAX_CAST = 4  # characters in one chat
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
+MAX_TALK_MAKES = 5  # things the characters may have made during one "let them talk" (default 2)
+MAKE_STEPS = 8  # model steps the director gets to make one thing
+CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
+TURN_MAX_TOKENS = 4000  # room for reasoning models; a turn itself is short
 MAX_GROWTH = 12  # hard cap on growth notes per character in an adaptive chat
 MERGE_GROWTH_AT = 8  # at this many notes, the model merges them into a few denser ones
 MERGED_GROWTH = 4
@@ -312,7 +318,10 @@ def parse_reply(text: str) -> dict | None:
         grow = []
         for item in data.get("grow") if isinstance(data.get("grow"), list) else []:
             if isinstance(item, dict) and isinstance(item.get("note"), str) and item["note"].strip():
-                grow.append({"speaker": str(item.get("speaker") or "").strip()[:40], "note": item["note"].strip()[:MAX_GROWTH_CHARS]})
+                entry = {"speaker": str(item.get("speaker") or "").strip()[:40], "note": item["note"].strip()[:MAX_GROWTH_CHARS]}
+                if isinstance(item.get("about"), str) and item["about"].strip():
+                    entry["about"] = item["about"].strip()[:40]
+                grow.append(entry)
         if grow:
             reply["grow"] = grow[:MAX_CAST]
         return reply
@@ -384,6 +393,7 @@ class AgentService:
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
+        self._final: dict[str, str] = {}  # per running chat: the status it ends with
         settings = service.settings
         self.summary_model = settings.agent_summary_model
         self.compact_tokens = settings.agent_compact_tokens  # summarise older messages above this (estimated tokens)
@@ -415,6 +425,7 @@ class AgentService:
             "avatar_asset_id": "",
             "model": (model or "").strip() or self.service.settings.agent_model,
             "adaptive": False,
+            "whispers": False,
             "status": "idle",
             "summary": "",
             "summary_upto": 0,
@@ -434,10 +445,12 @@ class AgentService:
         return self.store.list_sessions()
 
     def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None,
-                       cast=None, adaptive=None) -> dict:
+                       cast=None, adaptive=None, whispers=None) -> dict:
         session = self.get_session(session_id)
         if adaptive is not None:
             session["adaptive"] = bool(adaptive)
+        if whispers is not None:
+            session["whispers"] = bool(whispers)
         if cast is not None:
             self._set_cast(session, cast)
         if title is not None:
@@ -479,8 +492,13 @@ class AgentService:
                 "persona": str(member.get("persona") or "").strip(),
                 "avatar_asset_id": self._check_avatar(str(member.get("avatar_asset_id") or "")),
             }
+            before = known.get(entry["id"], {})
             growth = member.get("growth")  # None keeps what the character has grown into so far
-            entry["growth"] = clean_growth(growth if growth is not None else known.get(entry["id"], {}).get("growth"))
+            entry["growth"] = clean_growth(growth if growth is not None else before.get("growth"))
+            feelings = member.get("feelings")  # the same for private feelings about the user and the others
+            entry["feelings"] = clean_feelings(feelings if feelings is not None else before.get("feelings"))
+            if before.get("memory"):  # the character's own memory of the chat (talk mode)
+                entry["memory"], entry["memory_upto"] = before["memory"], before.get("memory_upto", 0)
             shown = display_name(entry, index, len(cast))
             if len(cast) > 1:
                 if not (entry["name"] or persona_name(entry["persona"])):
@@ -506,6 +524,8 @@ class AgentService:
         view["cast"] = []
         for index, member in enumerate(cast):
             entry = {**member, "display_name": display_name(member, index, len(cast)), "avatar_url": None, "avatar_file_url": None}
+            entry["feelings_view"] = [{"key": key, "about": self._about_name(cast, key), "notes": notes}
+                                      for key, notes in clean_feelings(member.get("feelings")).items()]
             found = self.service.store.get_asset(member["avatar_asset_id"]) if member.get("avatar_asset_id") else None
             if found:
                 links = self.service.asset_view(found)
@@ -555,7 +575,11 @@ class AgentService:
             if asset is None:
                 raise RequestError(f"Unknown asset {asset_id!r}; upload it first.")
             files.append({"asset_id": asset["id"], "kind": asset["kind"], "filename": asset["filename"]})
-        message = self.store.add_message(session_id, "user", {"text": text.strip(), "attachments": files})
+        content = {"text": text.strip(), "attachments": files}
+        whisper = self._whisper_target(session, text)
+        if whisper:
+            content["private_to"] = whisper
+        message = self.store.add_message(session_id, "user", content)
         session["status"] = "running"
         self.store.save_session(session)
         self._stop.discard(session_id)
@@ -563,7 +587,7 @@ class AgentService:
         self._tasks[session_id] = asyncio.create_task(self._run(session_id))
         return {"session": session, "message": message}
 
-    def talk(self, session_id: str, rounds: int = 5) -> dict:
+    def talk(self, session_id: str, rounds: int = 5, makes: int = 2) -> dict:
         """Let the characters of a group chat talk to each other for a few rounds."""
         session = self.get_session(session_id)
         if session["status"] in ("running", "stopping") or session_id in self._tasks:
@@ -576,8 +600,27 @@ class AgentService:
         self.store.save_session(session)
         self._stop.discard(session_id)
         self._failed_engines.pop(session_id, None)
-        self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds))
+        makes = max(0, min(MAX_TALK_MAKES, int(makes)))
+        self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds, makes=makes))
         return session
+
+    def _whisper_target(self, session: dict, text: str) -> str:
+        """With whispers on, "@Name ..." at the start of a message is private to that character (its id)."""
+        cast = cast_of(session)
+        match = re.match(r"\s*@([\w'-]+)", text or "")
+        if not session.get("whispers") or len(cast) < 2 or not match:
+            return ""
+        index = find_member(cast, match.group(1))
+        return cast[index]["id"] if index is not None else ""
+
+    @staticmethod
+    def _about_name(cast: list[dict], key: str) -> str:
+        if key == USER_KEY:
+            return "the user"
+        for index, member in enumerate(cast):
+            if member.get("id") == key:
+                return display_name(member, index, len(cast))
+        return key
 
     def request_stop(self, session_id: str) -> dict:
         session = self.get_session(session_id)
@@ -590,79 +633,265 @@ class AgentService:
     def _note(self, session_id: str, text: str, kind: str = "info") -> None:
         self.store.add_message(session_id, "note", {"text": text, "kind": kind})
 
-    async def _run(self, session_id: str, talk_rounds: int = 0) -> None:
-        started = time.monotonic()
-        steps = repairs = 0
-        final_status = "idle"
+    async def _run(self, session_id: str, talk_rounds: int = 0, makes: int = 2) -> None:
+        self._final[session_id] = "idle"
         try:
-            for round_number in range(1, (talk_rounds or 1) + 1):
-                if talk_rounds:
-                    if session_id in self._stop:
-                        self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
-                        break
-                    self.store.add_message(session_id, "note", {"text": f"Talking · round {round_number} of {talk_rounds}",
-                                                                "kind": "talk", "round": round_number, "of": talk_rounds})
-                reply, halt = None, False
-                while True:
-                    if session_id in self._stop:
-                        self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
-                        halt = True
-                        break
-                    if steps >= MAX_STEPS:
-                        self._note(session_id, f"Paused after {MAX_STEPS} steps. Send a message to continue.", "warn")
-                        halt = True
-                        break
-                    if time.monotonic() - started > MAX_RUN_SECONDS:
-                        self._note(session_id, "Paused after 3 hours. Send a message to continue.", "warn")
-                        halt = True
-                        break
-                    session = self.get_session(session_id)
-                    await self._maybe_summarize(session)
-                    messages = await self._build_messages(session)
-                    text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
-                    steps += 1
-                    call = await self._add_usage(session_id, session["model"], usage)
-                    reply = parse_reply(text)
-                    if reply is None:
-                        self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True, "usage": call})
-                        if repairs:
-                            self._note(session_id, "The model did not answer in the required JSON format twice; stopped.", "error")
-                            final_status, halt = "error", True
-                            break
-                        repairs += 1
-                        self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
-                        continue
-                    repairs = 0
-                    self.store.add_message(session_id, "assistant", {"raw": text[:8000], **reply, "usage": call})
-                    if reply.get("grow"):
-                        await self._grow(session_id, reply["grow"])
-                    if not reply["actions"]:
-                        break
-                    for action in reply["actions"]:
-                        if session_id in self._stop:
-                            break
-                        await self._execute(session_id, action)
-                if halt or reply is None or reply.get("pause"):
-                    break
+            if talk_rounds:
+                await self._talk(session_id, talk_rounds, makes)
+            else:
+                last_user = next((m for m in reversed(self.store.messages(session_id)) if m["role"] == "user"), None)
+                private = (last_user or {}).get("content", {}).get("private_to", "") if last_user else ""
+                await self._director_turn(session_id, MAX_STEPS, private_to=private)
         except AtlasError as exc:
             self._note(session_id, f"Model error: {exc}", "error")
-            final_status = "error"
+            self._final[session_id] = "error"
         except asyncio.CancelledError:
-            final_status = "idle"
+            self._final[session_id] = "idle"
             raise
         except Exception as exc:  # never leave a chat stuck in "running"
             log.exception("agent run failed")
             self._note(session_id, f"Agent error: {exc}", "error")
-            final_status = "error"
+            self._final[session_id] = "error"
         finally:
             self._tasks.pop(session_id, None)
             self._stop.discard(session_id)
             self._joining.discard(session_id)
             session = self.store.get_session(session_id)
             if session is not None:
-                session["status"] = final_status
+                session["status"] = self._final.pop(session_id, "idle")
                 session["talking"] = False
                 self.store.save_session(session)
+
+    def _halted(self, session_id: str, started: float, steps: int, max_steps: int) -> bool:
+        """Stop, step and time limits, checked before every model call (notes say why it stopped)."""
+        if session_id in self._stop:
+            self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
+            return True
+        if steps >= max_steps:
+            if max_steps == MAX_STEPS:
+                self._note(session_id, f"Paused after {MAX_STEPS} steps. Send a message to continue.", "warn")
+            return True
+        if time.monotonic() - started > MAX_RUN_SECONDS:
+            self._note(session_id, "Paused after 3 hours. Send a message to continue.", "warn")
+            return True
+        return False
+
+    async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "") -> dict | None:
+        """The full agent (persona or cast, tools, pipeline) works until it replies without actions. Returns the last
+        reply, or None when it stopped. private_to: the user whispered to one character, so the answer is private too."""
+        started = time.monotonic()
+        steps = repairs = 0
+        reply = None
+        while True:
+            if self._halted(session_id, started, steps, max_steps):
+                return None
+            session = self.get_session(session_id)
+            await self._maybe_summarize(session)
+            messages = await self._build_messages(session)
+            text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
+            steps += 1
+            call = await self._add_usage(session_id, session["model"], usage)
+            reply = parse_reply(text)
+            if reply is None:
+                self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True, "usage": call})
+                if repairs:
+                    self._note(session_id, "The model did not answer in the required JSON format twice; stopped.", "error")
+                    self._final[session_id] = "error"
+                    return None
+                repairs += 1
+                self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
+                continue
+            repairs = 0
+            content = {"raw": text[:8000], **reply, "usage": call}
+            if private_to:
+                content["private_to"] = private_to
+            self.store.add_message(session_id, "assistant", content)
+            if reply.get("grow"):
+                await self._grow(session_id, reply["grow"])
+            if not reply["actions"]:
+                return reply
+            for action in reply["actions"]:
+                if session_id in self._stop:
+                    break
+                await self._execute(session_id, action)
+
+    # ------------------------------------------------------------ let them talk
+
+    async def _talk(self, session_id: str, rounds: int, makes: int) -> None:
+        """The characters talk to each other: each turn is one character's own model call (see cast_talk)."""
+        started = time.monotonic()
+        steps = 0
+        spoke: list[int] = []
+        last_index, last_text = self._last_speaker(session_id)
+        for round_number in range(1, rounds + 1):
+            if session_id in self._stop:
+                self._note(session_id, "You joined in." if session_id in self._joining else "Stopped by you.")
+                return
+            self.store.add_message(session_id, "note", {"text": f"Talking · round {round_number} of {rounds}",
+                                                        "kind": "talk", "round": round_number, "of": rounds})
+            for _ in range(len(cast_of(self.get_session(session_id)))):
+                if self._halted(session_id, started, steps, MAX_STEPS):
+                    return
+                session = self.get_session(session_id)
+                cast = cast_of(session)
+                names = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
+                index = cast_talk.next_speaker(cast, names, last_index, last_text, spoke)
+                turn = await self._character_turn(session, index)
+                steps += 1
+                if turn is None:
+                    self._note(session_id, f"{names[index]} couldn't answer in the expected format; the talk stopped.", "error")
+                    self._final[session_id] = "error"
+                    return
+                spoke.append(index)
+                last_index, last_text = index, turn["say"]
+                if turn.get("grow"):
+                    await self._grow(session_id, [{"speaker": names[index], **item} for item in turn["grow"]])
+                if turn.get("make"):
+                    if makes > 0:
+                        makes -= 1
+                        await self._make_for(session_id, names[index], turn["make"])
+                    else:
+                        self._note(session_id, f"{names[index]} wanted something made, but this talk's limit is reached.", "warn")
+                if turn.get("pause"):
+                    return
+
+    def _last_speaker(self, session_id: str) -> tuple[int | None, str]:
+        """Who spoke last (a character's index, or None for the user) and what they said, to pick the first speaker."""
+        session = self.get_session(session_id)
+        cast = cast_of(session)
+        for message in reversed(self.store.messages(session_id)):
+            content = message["content"]
+            if message["role"] == "user":
+                return None, content.get("text", "")
+            if message["role"] == "assistant" and content.get("lines"):
+                line = content["lines"][-1]
+                return find_member(cast, line.get("speaker", "")), line.get("say", "")
+        return None, ""
+
+    async def _character_turn(self, session: dict, index: int) -> dict | None:
+        """One character speaks: a small call with only what this character knows."""
+        session_id = session["id"]
+        cast = cast_of(session)
+        member = cast[index]
+        await self._remember(session, member["id"])
+        session = self.get_session(session_id)
+        cast = cast_of(session)
+        member = cast[index]
+        names = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
+        name = names[index]
+        others = "\n".join(f"- {names[i]}: {(m.get('persona') or 'no persona yet')[:300]}" for i, m in enumerate(cast) if i != index)
+        feelings = clean_feelings(member.get("feelings"))
+        feeling_lines = [f"- About {self._about_name(cast, key)}: " + " ".join(notes) for key, notes in feelings.items()]
+        grown = self._growth_text(member).replace("they have", "you have")
+        prompt = cast_talk.CHARACTER_TURN_PROMPT.format(
+            name=name,
+            persona=member.get("persona") or f"{name}, a character in this chat.",
+            growth=f"\n{grown}" if grown else "",
+            others=others,
+            listening=" They are listening to you talk right now and may join in.",
+            feelings="\n".join(feeling_lines) or "(none yet)",
+            memory=member.get("memory") or "(nothing older: everything is in the conversation below)",
+            words=cast_talk.TURN_WORDS,
+            adaptive=cast_talk.ADAPTIVE_TURN if session.get("adaptive") else "",
+            make_field=', "make": "optional"',
+            grow_field=', "grow": []' if session.get("adaptive") else "",
+            rules=PLATFORM_RULES,
+        )
+        transcript = self._transcript(session, member["id"], names)
+        messages = [{"role": "system", "content": prompt},
+                    {"role": "user", "content": f"THE CONVERSATION SO FAR (most recent last):\n{transcript or '(nothing yet)'}\n\n"
+                                                f"(It's your turn, {name}. Reply with the JSON only.)"}]
+        for attempt in range(2):
+            text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
+            call = await self._add_usage(session_id, session["model"], usage)
+            turn = cast_talk.parse_turn(text)
+            if turn is not None:
+                line = {"speaker": name, "say": turn["say"]}
+                if turn.get("to"):
+                    line["to"] = turn["to"]
+                content = {"lines": [line], "say": f"{name}: {turn['say']}", "actions": [], "done": True, "talk": True,
+                           "speaker_id": member["id"], "raw": json.dumps({"lines": [line]}, ensure_ascii=False), "usage": call}
+                self.store.add_message(session_id, "assistant", content)
+                return turn
+            messages.append({"role": "assistant", "content": text[:2000]})
+            messages.append({"role": "user", "content": 'Reply with only the JSON object: {"say": "...", "to": "..."}'})
+        return None
+
+    def _transcript(self, session: dict, member_id: str, names: list[str], upto: int | None = None) -> str:
+        """The chat as one character heard it, after its memory (whispers to others left out), newest last."""
+        cast = cast_of(session)
+        member = next((m for m in cast if m.get("id") == member_id), {})
+        lines = []
+        for message in self.store.messages(session["id"], after=member.get("memory_upto", 0)):
+            if upto is not None and message["id"] > upto:
+                break
+            if not visible_to(message, member_id):
+                continue
+            lines.extend(self._script_lines(message, member_id))
+        return "\n".join(lines[-60:])
+
+    def _script_lines(self, message: dict, member_id: str) -> list[str]:
+        content, role = message["content"], message["role"]
+        if role == "user":
+            text = content.get("text", "")
+            files = content.get("attachments") or []
+            if files:
+                text += " [shared " + ", ".join(f"{f['kind']} {f['asset_id']}" for f in files) + "]"
+            return [f"User (whispering only to you): {text}" if content.get("private_to") == member_id else f"User: {text}"]
+        if role == "assistant" and not content.get("invalid"):
+            if content.get("lines"):
+                return [f"{line.get('speaker') or 'Agent'}: {line.get('say', '')}" for line in content["lines"]]
+            return [content["say"]] if content.get("say") else []
+        if role == "tool" and content.get("ok") and content.get("tool") in ("generate_image", "render_film", "wait_for_job", "set_avatar"):
+            brief = brief_result(content.get("result"))
+            ids = [a.get("id") for a in (brief.get("assets") or []) if isinstance(a, dict)] if isinstance(brief, dict) else []
+            what = f"images {', '.join(ids)}" if ids else json.dumps(brief, ensure_ascii=False)[:200]
+            return [f"[{content['tool']}: {what}]"]
+        if role == "note" and content.get("kind") == "make":
+            return [f"[{content.get('speaker')} asked for this to be made: {content.get('text', '')}]"]
+        return []
+
+    async def _make_for(self, session_id: str, speaker: str, request: str) -> None:
+        """A character asked for something to be made: the director, with its tools, makes it and presents it."""
+        self.store.add_message(session_id, "note", {"text": request, "kind": "make", "speaker": speaker})
+        await self._director_turn(session_id, MAKE_STEPS)
+
+    async def _remember(self, session: dict, member_id: str, force: bool = False) -> bool:
+        """Fold older parts of the chat into one character's own memory (its point of view), with the cheap model."""
+        cast = cast_of(session)
+        member = next((m for m in cast if m.get("id") == member_id), None)
+        if member is None:
+            return False
+        heard = [m for m in self.store.messages(session["id"], after=member.get("memory_upto", 0))
+                 if visible_to(m, member_id) and m["role"] in ("user", "assistant", "tool")]
+        keep = MANUAL_KEEP_MESSAGES if force else CHARACTER_KEEP_MESSAGES
+        if len(heard) <= keep:
+            return False
+        names = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
+        if not force and len(self._transcript(session, member_id, names)) // 4 < self.compact_tokens // 2:
+            return False
+        older_upto = heard[-keep - 1]["id"]
+        older = self._transcript(session, member_id, names, upto=older_upto)
+        name = names[cast.index(member)]
+        previous = f"Your earlier memory:\n{member['memory']}\n\n" if member.get("memory") else ""
+        request = [{"role": "system", "content": cast_talk.MEMORY_PROMPT.format(name=name)},
+                   {"role": "user", "content": f"{previous}What you heard since:\n{older}"}]
+        for model in dict.fromkeys((self.summary_model, session["model"])):
+            try:
+                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+            except AtlasError as exc:
+                log.warning("character memory with %s failed: %s", model, exc)
+                continue
+            await self._add_usage(session["id"], model, usage)
+            fresh = self.get_session(session["id"])
+            cast = [dict(m) for m in cast_of(fresh)]
+            for entry in cast:
+                if entry.get("id") == member_id:
+                    entry["memory"], entry["memory_upto"] = text.strip(), older_upto
+            fresh["cast"] = cast
+            self.store.save_session(fresh)
+            return True
+        return False
 
     async def _add_usage(self, session_id: str, model: str, usage: dict) -> dict:
         """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at Atlas list
@@ -833,7 +1062,13 @@ class AgentService:
             if role == "user":
                 files = content.get("attachments") or []
                 note = ("\nAttached assets: " + ", ".join(f"{f['asset_id']} ({f['kind']}: {f['filename']})" for f in files)) if files else ""
-                push("user", f"USER: {content.get('text', '')}{note}")
+                whisper = content.get("private_to")
+                if whisper:
+                    to = self._about_name(cast_of(session), whisper)
+                    push("user", f"USER (whispering privately to {to}: only {to} hears this and only {to} answers, in a private "
+                                 f"line; the others must not learn it from anyone but {to}): {content.get('text', '')}{note}")
+                else:
+                    push("user", f"USER: {content.get('text', '')}{note}")
             elif role == "assistant":
                 raw = content.get("raw") or json.dumps({k: content.get(k) for k in ("say", "actions", "done")})
                 if old and len(raw) > 1500 and not content.get("invalid"):
@@ -850,10 +1085,16 @@ class AgentService:
                 else:
                     body = compact_result(content["result"])
                 push("user", f"TOOL RESULT {content['tool']}: {body}")
-            elif role == "note" and content.get("kind") == "talk":
-                push("user", f"(The user is listening. Characters, keep talking to each other: round {content.get('round')} of "
-                             f"{content.get('of')}. Continue naturally from the last lines; use tools if you decide to. If you "
-                             "reach a decision, need the user, or have nothing more to say, add \"pause\": true.)")
+            elif role == "note" and content.get("kind") == "make":
+                latest = not any(m["role"] == "assistant" for m in stored[index + 1:])
+                who = content.get("speaker") or "A character"
+                if latest:
+                    push("user", f"(STAGE DIRECTION, not the user: while the characters talk, {who} asked for this to be made: "
+                                 f"{content.get('text', '')}. Make it now with your tools (the characters' avatars as picture "
+                                 f"references where they appear), then reply with one short line from {who} presenting it, "
+                                 "with \"done\": true.)")
+                else:
+                    push("user", f"(Earlier, {who} asked for this to be made: {content.get('text', '')})")
             elif role == "note" and content.get("kind") in ("repair", "error", "warn"):
                 push("user", f"NOTE: {content.get('text', '')}")
         return chat
@@ -941,57 +1182,86 @@ class AgentService:
                          for m in view["cast"]]}
 
     async def _grow(self, session_id: str, notes: list[dict]) -> None:
-        """Adaptive chats: add what a character just learned or became to their growth notes."""
+        """Adaptive chats: add what a character just became (about "self") to its growth notes, or how it now feels
+        about the user or another character to its private feelings (group chats)."""
         session = self.get_session(session_id)
         if not session.get("adaptive"):
             return
         cast = [dict(member) for member in cast_of(session)]
-        added = []
+        added, merge = [], []
         for item in notes:
-            index = find_member(cast, item["speaker"]) if item["speaker"] else 0
+            index = find_member(cast, item["speaker"]) if item.get("speaker") else 0
             if index is None:
                 if len(cast) > 1:
                     continue
                 index = 0
-            before = cast[index].get("growth") or []
-            cast[index]["growth"] = clean_growth(before + [item["note"]])
-            if cast[index]["growth"] != before:
-                added.append((display_name(cast[index], index, len(cast)), item["note"]))
+            member = cast[index]
+            about = str(item.get("about") or "self").strip()
+            key = None
+            if len(cast) > 1 and about.lower() not in ("self", "me", "myself", ""):
+                target = find_member(cast, about)
+                key = USER_KEY if about.lower() in ("user", "you", "the user") else (cast[target]["id"] if target not in (None, index) else None)
+            if key is None:
+                before = member.get("growth") or []
+                member["growth"] = clean_growth(before + [item["note"]])
+                if member["growth"] != before:
+                    added.append((display_name(member, index, len(cast)), item["note"], ""))
+                    if len(member["growth"]) >= MERGE_GROWTH_AT:
+                        merge.append((member["id"], None))
+                continue
+            feelings = clean_feelings(member.get("feelings"))
+            before = feelings.get(key, [])
+            feelings = clean_feelings({**feelings, key: before + [item["note"]]})
+            if feelings.get(key) != before:
+                member["feelings"] = feelings
+                added.append((display_name(member, index, len(cast)), item["note"], self._about_name(cast, key)))
+                if len(feelings[key]) >= cast_talk.MAX_FEELINGS:
+                    merge.append((member["id"], key))
         if not added:
             return
         self.update_session(session_id, cast=cast)
-        for speaker, note in added:
-            self.store.add_message(session_id, "note", {"text": note, "kind": "grow", "speaker": speaker})
-        for member in cast:
-            if len(member.get("growth") or []) >= MERGE_GROWTH_AT:
-                await self._merge_growth(session_id, member["id"])
+        for speaker, note, about in added:
+            content = {"text": note, "kind": "grow", "speaker": speaker}
+            if about:
+                content["about"] = about
+            self.store.add_message(session_id, "note", content)
+        for member_id, key in merge:
+            await self._merge_growth(session_id, member_id, key)
 
-    async def _merge_growth(self, session_id: str, member_id: str) -> None:
-        """Fold a character's growth notes into a few denser ones, so early shifts aren't pushed out by later ones."""
+    async def _merge_growth(self, session_id: str, member_id: str, key: str | None = None) -> None:
+        """Fold a character's growth notes (or its feelings about one person, key) into a few denser ones, so early
+        shifts aren't pushed out by later ones. Written by the cheap summary model."""
         session = self.get_session(session_id)
         cast = [dict(member) for member in cast_of(session)]
         member = next((m for m in cast if m.get("id") == member_id), None)
         if member is None:
             return
         name = display_name(member, cast.index(member), len(cast)) or "the agent"
-        listing = "\n".join(f"- {note}" for note in member.get("growth") or [])
-        try:
-            text, usage = await self.atlas.chat(
-                session["model"],
-                [{"role": "system", "content": MERGE_GROWTH_PROMPT.format(limit=MERGED_GROWTH)},
-                 {"role": "user", "content": f"Character: {name}. Persona: {member.get('persona', '')}\n\nGrowth notes, oldest first:\n{listing}"}],
-                json_mode=True, max_tokens=800, temperature=0.2,
-            )
-            await self._add_usage(session_id, session["model"], usage)
-        except AtlasError as exc:
-            log.warning("merging growth notes failed: %s", exc)
-            return  # the notes stay as they are; clean_growth still caps them
-        merged = clean_growth((parse_json_object(text) or {}).get("notes"))[:MERGED_GROWTH]
+        notes = member.get("growth") or [] if key is None else clean_feelings(member.get("feelings")).get(key, [])
+        limit = MERGED_GROWTH if key is None else cast_talk.MERGED_FEELINGS
+        about = "" if key is None else f" These notes are how {name} feels about {self._about_name(cast, key)}."
+        listing = "\n".join(f"- {note}" for note in notes)
+        request = [{"role": "system", "content": MERGE_GROWTH_PROMPT.format(limit=limit)},
+                   {"role": "user", "content": f"Character: {name}. Persona: {member.get('persona', '')}{about}\n\nGrowth notes, oldest first:\n{listing}"}]
+        text = None
+        for model in dict.fromkeys((self.summary_model, session["model"])):
+            try:
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=3000, temperature=0.2, max_retries=1)
+            except AtlasError as exc:
+                log.warning("merging growth notes with %s failed: %s", model, exc)
+                continue
+            await self._add_usage(session_id, model, usage)
+            break
+        merged = clean_growth((parse_json_object(text or "") or {}).get("notes"))[:limit]
         if not merged:
-            return
-        member["growth"] = merged
+            return  # the notes stay as they are; clean_growth / clean_feelings still cap them
+        if key is None:
+            member["growth"] = merged
+        else:
+            member["feelings"] = {**clean_feelings(member.get("feelings")), key: merged}
         self.update_session(session_id, cast=cast)
-        self.store.add_message(session_id, "note", {"text": f"Condensed {name}'s growth into {len(merged)} notes.",
+        what = "growth" if key is None else f"feelings about {self._about_name(cast, key)}"
+        self.store.add_message(session_id, "note", {"text": f"Condensed {name}'s {what} into {len(merged)} notes.",
                                                     "kind": "grow-merge", "speaker": name})
 
     @staticmethod
@@ -1007,8 +1277,10 @@ class AgentService:
             f"- {who.capitalize()} can evolve: pick up the user's preferences, in-jokes, nicknames, shared memories and how "
             "the relationship is going" + (", and what the characters learn about and feel for each other when they talk" if group else "")
             + ". Change gradually and believably, the way a real person would.\n"
-            "- When a character really changes, add \"grow\": [{\"speaker\": \"<name>\", \"note\": \"one short sentence\"}] "
-            "to your reply. A note records who they are becoming, not what happened: a feeling, an attitude towards the user "
+            "- When a character really changes, add \"grow\": [{\"speaker\": \"<name>\", "
+            + ("\"about\": \"self\" | \"user\" | \"<another character's name>\", " if group else "")
+            + "\"note\": \"one short sentence\"}] to your reply" + (" (about: who the feeling is towards; self for who they "
+            "are becoming)" if group else "") + ". A note records who they are becoming, not what happened: a feeling, an attitude towards the user "
             "or another character, a habit, a preference. Good: \"Feels sidelined by the user and hides it behind jokes.\" "
             "Bad: \"Sent the recce list.\" Most replies need no note; roughly one per character per conversation, only "
             "when something shifts. Never for small talk, plans or tasks.\n"
@@ -1044,7 +1316,10 @@ class AgentService:
             face = (f"Avatar: asset {member['avatar_asset_id']}." if member["avatar_url"]
                     else "No avatar yet (when the user asks to see them, generate_image a picture, then set_avatar with speaker).")
             grown = self._growth_text(member)
-            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}" + (f" {grown}" if grown else ""))
+            felt = "; ".join(f"about {self._about_name(cast, key)}: " + " ".join(notes)
+                             for key, notes in clean_feelings(member.get("feelings")).items())
+            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}" + (f" {grown}" if grown else "")
+                          + (f" Private feelings ({member['display_name']} only): {felt}." if felt else ""))
         names = ", ".join(member["display_name"] for member in view["cast"])
         return (
             f"This chat is a group conversation. You voice a cast of {len(cast)} characters: {names}. The user talks to all of them.\n"
@@ -1058,7 +1333,11 @@ class AgentService:
             f"- At most {MAX_LINES} lines per reply. Never write the user's lines.\n"
             "- Mark who does a tool call with \"by\": \"<name>\" in the action. A picture or video of a character uses that "
             "character's avatar as a picture reference (role picture); a scene with several characters uses all their avatars.\n"
-            "- set_persona / set_avatar / remove_character take speaker to act on one character."
+            "- set_persona / set_avatar / remove_character take speaker to act on one character.\n"
+            "- Private feelings belong to one character: that character acts on them, but the others don't know them "
+            "unless they have been said aloud in the chat."
+            + ("\n- Whispers are on: a message marked as whispered to one character is heard only by that character. Only "
+               "they answer, and nobody else refers to it unless that character tells them." if session.get("whispers") else "")
             + (self._adaptive_rules(True) if session.get("adaptive") else "")
         )
 
@@ -1133,8 +1412,17 @@ class AgentService:
             raise Conflict("The agent is working; compact once it has finished.")
         before = await self.context_tokens(session)
         done = await self._maybe_summarize(session, force=True)
+        remembered = []
+        cast = cast_of(self.get_session(session_id))
+        if len(cast) > 1:  # each character's own memory, used when they talk among themselves
+            for index, member in enumerate(cast):
+                if await self._remember(self.get_session(session_id), member["id"], force=True):
+                    remembered.append(display_name(member, index, len(cast)))
         after = await self.context_tokens(self.get_session(session_id))
         text = (f"Compacted: each call now sends about {after:,} tokens instead of {before:,}." if done
-                else "Nothing to compact yet: the chat is already short.")
+                else "Nothing to compact yet: the chat is already short." if not remembered else "The chat itself is already short.")
+        if remembered:
+            text += f" Condensed the memories of {', '.join(remembered)}."
         self.store.add_message(session_id, "note", {"text": text, "kind": "compact", "before": before, "after": after})
-        return {"session": self.get_session(session_id), "compacted": done, "before": before, "after": after}
+        return {"session": self.get_session(session_id), "compacted": done or bool(remembered), "before": before,
+                "after": after, "memories": remembered}

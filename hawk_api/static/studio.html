@@ -347,6 +347,9 @@
   .adaptive-toggle:has(input:checked) { color: var(--ok); }
   .growth { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; }
   .growth-who { font-size: 13px; font-weight: 600; }
+  .growth-about { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+  .bubble.private { outline: 1.5px dashed var(--muted); outline-offset: 2px; }
+  .whisper-tag { font-size: 11px; color: var(--muted); }
   .growth ul { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; }
   .growth li { display: flex; align-items: flex-start; gap: 6px; font-size: 13px; }
   .growth li span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -764,10 +767,13 @@
             <select class="select" id="agentModel" style="width:auto;max-width:220px;height:32px"></select>
             <button class="btn btn-sm" id="agentPersonaBtn" type="button" aria-expanded="false">Persona</button>
             <label class="adaptive-toggle" title="Characters grow from your conversation and from talking to each other: new habits, nicknames, memories and feelings. Their core identity and the safety rules never change."><input type="checkbox" id="agentAdaptive"> 🌱 Adaptive</label>
-            <span class="row" id="agentTalkBox" hidden style="gap:4px;flex-wrap:nowrap">
+            <span class="row" id="agentTalkBox" hidden style="gap:4px;flex-wrap:wrap">
               <label class="sr-only" for="agentTalkRounds">Rounds</label>
               <select class="select" id="agentTalkRounds" style="width:auto;height:32px" title="How many rounds they talk"><option value="3">3 rounds</option><option value="5" selected>5 rounds</option><option value="8">8 rounds</option><option value="10">10 rounds</option></select>
-              <button class="btn btn-sm" id="agentTalk" type="button" title="The characters talk to each other; press Stop any time">Let them talk</button>
+              <label class="sr-only" for="agentTalkMakes">Things they may make</label>
+              <select class="select" id="agentTalkMakes" style="width:auto;height:32px" title="How many images or videos the characters may have made while they talk"><option value="0">Make nothing</option><option value="1">Make up to 1</option><option value="2" selected>Make up to 2</option><option value="3">Make up to 3</option><option value="5">Make up to 5</option></select>
+              <button class="btn btn-sm" id="agentTalk" type="button" title="Each character speaks for itself, in turn, mostly to the others; press Stop any time">Let them talk</button>
+              <label class="adaptive-toggle" id="agentWhispersBox" title="Whispers: start a message with @Name and only that character hears it; the others never learn it unless that character tells them."><input type="checkbox" id="agentWhispers"> 🤫 Whispers</label>
             </span>
             <span class="hint" id="agentUsage" title="Model tokens and estimated cost for this chat"></span>
             <button class="btn btn-sm" id="agentCompact" type="button" title="Summarise all but the last few messages, so every later call sends fewer tokens. The full chat stays here.">🗜 Compact</button>
@@ -3249,6 +3255,7 @@
     const group = castOf(session).length > 1;
     const running = session?.status === "running" || session?.status === "stopping";
     $("agentTalkBox").hidden = !group || running;
+    $("agentWhispers").checked = !!session.whispers;
     $("agentMentions").hidden = !group;
     $("agentMentions").innerHTML = group ? castOf(session).map((m) => `<button class="chip" type="button" data-mention="${esc(m.display_name)}">@${esc(m.display_name)}</button>`).join("") + `<span class="hint">talk to one, or write to everyone</span>` : "";
     const preview = $("agentAvatarPreview");
@@ -3278,10 +3285,13 @@
       const attachments = c.attachments || [];
       const images = attachments.filter((f) => f.thumb_url).map((f) => `<a href="${esc(f.file_url || f.thumb_url)}" target="_blank" rel="noopener" title="${esc(f.filename)} · ${esc(f.asset_id)}"><img class="att-thumb" src="${esc(f.thumb_url)}" alt="${esc(f.filename)}" loading="lazy"></a>`).join("");
       const others = attachments.filter((f) => !f.thumb_url).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
-      add(`<div class="msg-meta user">You · ${time}</div><div class="bubble user">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
+      const whisperTo = c.private_to ? castOf().find((m) => m.id === c.private_to)?.display_name || "one character" : "";
+      add(`<div class="msg-meta user">${whisperTo ? `<span class="whisper-tag">🤫 whispered to ${esc(whisperTo)}</span> · ` : ""}You · ${time}</div><div class="bubble user${whisperTo ? " private" : ""}">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
-      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}· ${time}${i ? "" : callCost(c.usage)}</div><div class="bubble agent">${linkify(line.say)}</div>`));
+      const secret = c.private_to ? `<span class="whisper-tag"> · 🤫 private</span>` : "";
+      const toWho = (to) => to && !/^(all|everyone)$/i.test(to) ? ` → ${esc(/^(user|you)$/i.test(to) ? "you" : to)}` : "";
+      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}</div><div class="bubble agent${c.private_to ? " private" : ""}">${linkify(line.say)}</div>`));
       else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}</div><div class="bubble agent">${linkify(c.say)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
@@ -3300,7 +3310,12 @@
       if (c.kind === "repair") return;
       if (c.kind === "talk") { add(`<div class="note-line talk">💬 Talking · round ${esc(c.round)} of ${esc(c.of)}</div>`); return; }
       if (c.kind === "grow-merge") { add(`<div class="note-line grow" title="Adaptive: older notes folded together; nothing in the chat is deleted">🌱 ${esc(c.text || "")}</div>`); return; }
-      if (c.kind === "grow") { add(`<div class="note-line grow" title="Adaptive: remembered in this chat">🌱 ${c.speaker ? `${esc(c.speaker)}: ` : ""}${esc(c.text || "")}</div>`); return; }
+      if (c.kind === "grow") {
+        const about = c.about ? ` → ${esc(c.about === "the user" ? "you" : c.about)}` : "";
+        add(`<div class="note-line grow" title="${c.about ? `Adaptive: a private feeling only ${esc(c.speaker)} knows` : "Adaptive: remembered in this chat"}">${c.about ? "🔒" : "🌱"} ${c.speaker ? `${esc(c.speaker)}${about}: ` : ""}${esc(c.text || "")}</div>`);
+        return;
+      }
+      if (c.kind === "make") { add(`<div class="note-line talk" title="A character asked for this; the director is making it">🎨 ${esc(c.speaker || "")} wants: ${esc(c.text || "")}</div>`); return; }
       add(`<div class="note-line ${esc(c.kind || "")}">${linkify(c.text || "")}</div>`);
     }
   }
@@ -3385,17 +3400,25 @@
   function paintGrowth(session) {
     $("agentAdaptive").checked = !!session?.adaptive;
     const cast = castOf(session);
-    const grown = cast.filter((m) => m.growth?.length);
+    const grown = cast.filter((m) => m.growth?.length || m.feelings_view?.length);
     const box = $("agentGrowth");
     const html = grown.length ? `<div class="row" style="justify-content:space-between"><span class="label" style="margin:0">🌱 What ${cast.length > 1 ? "they have" : "it has"} picked up in this chat</span><button class="btn btn-sm btn-ghost" type="button" data-growth-reset>Reset all</button></div>`
-      + grown.map((m) => `<div>${cast.length > 1 || m.display_name ? `<div class="growth-who">${esc(m.display_name || "Agent")}</div>` : ""}<ul>${m.growth.map((note, i) => `<li><span>${esc(note)}</span><button type="button" title="Forget this" aria-label="Forget this" data-growth-member="${esc(m.id)}" data-growth-index="${i}">×</button></li>`).join("")}</ul></div>`).join("")
+      + grown.map((m) => `<div>${cast.length > 1 || m.display_name ? `<div class="growth-who">${esc(m.display_name || "Agent")}</div>` : ""}<ul>${(m.growth || []).map((note, i) => `<li><span>${esc(note)}</span><button type="button" title="Forget this" aria-label="Forget this" data-growth-member="${esc(m.id)}" data-growth-index="${i}">×</button></li>`).join("")}</ul>`
+        + (m.feelings_view || []).map((f) => `<div class="growth-about" title="Private: only ${esc(m.display_name)} knows this">🔒 Feels about ${esc(f.about === "the user" ? "you" : f.about)}</div><ul>${f.notes.map((note, i) => `<li><span>${esc(note)}</span><button type="button" title="Forget this" aria-label="Forget this" data-growth-member="${esc(m.id)}" data-feeling-key="${esc(f.key)}" data-growth-index="${i}">×</button></li>`).join("")}</ul>`).join("")
+        + `</div>`).join("")
       + (session?.adaptive ? "" : `<span class="hint">Adaptive is off, so nothing new is added; what's here still shapes the replies.</span>`) : "";
     box.hidden = !grown.length;
     if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
   }
-  function castWithGrowth(edit) {
-    return castOf().map((m) => ({ id: m.id, name: m.name || "", persona: m.persona || "", avatar_asset_id: m.avatar_asset_id || "", growth: edit(m) }));
+  function castWithGrowth(edit, feel = () => null) {  // edit / feel return null to keep a character's growth / feelings
+    return castOf().map((m) => ({ id: m.id, name: m.name || "", persona: m.persona || "", avatar_asset_id: m.avatar_asset_id || "", growth: edit(m), feelings: feel(m) }));
   }
+  $("agentWhispers").addEventListener("change", async (event) => {
+    const on = event.target.checked;
+    if (!agent.current) { event.target.checked = false; return; }
+    if (await patchSession({ whispers: on })) toast(on ? "Whispers on" : "Whispers off", on ? "Start a message with @Name and only that character hears it." : "@Name messages are heard by everyone again.", "ok", 3500);
+    else event.target.checked = !on;
+  });
   $("agentAdaptive").addEventListener("change", async (event) => {
     const on = event.target.checked;
     if (!agent.current) { event.target.checked = false; return toast("Start a chat first", "", "warn"); }
@@ -3407,10 +3430,22 @@
     const forget = event.target.closest("[data-growth-index]");
     if (reset) {
       if (!confirm("Forget everything the characters picked up in this chat?")) return;
-      if (await patchSession({ cast: castWithGrowth(() => []) })) toast("Growth reset", "Back to the original personas.");
+      if (await patchSession({ cast: castWithGrowth(() => [], () => ({})) })) toast("Growth reset", "Back to the original personas.");
     } else if (forget) {
       const index = Number(forget.dataset.growthIndex);
-      await patchSession({ cast: castWithGrowth((m) => m.id === forget.dataset.growthMember ? m.growth.filter((_, i) => i !== index) : null) });
+      const key = forget.dataset.feelingKey;
+      const member = forget.dataset.growthMember;
+      if (key) {
+        await patchSession({ cast: castWithGrowth(() => null, (m) => {
+          if (m.id !== member) return null;
+          const feelings = { ...(m.feelings || {}) };
+          feelings[key] = (feelings[key] || []).filter((_, i) => i !== index);
+          if (!feelings[key].length) delete feelings[key];
+          return feelings;
+        }) });
+      } else {
+        await patchSession({ cast: castWithGrowth((m) => m.id === member ? m.growth.filter((_, i) => i !== index) : null) });
+      }
     }
   });
   function renderCastExtra() {
@@ -3456,7 +3491,7 @@
   $("agentTalk").onclick = async () => {
     if (!agent.current) return;
     try {
-      updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/talk`, { rounds: Number($("agentTalkRounds").value) }));
+      updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/talk`, { rounds: Number($("agentTalkRounds").value), makes: Number($("agentTalkMakes").value) }));
       toast("They're talking", "Press Stop any time, or send a message to join in.", "ok", 3000);
       await pollAgent(true);
     } catch (error) { toast("Could not start", error.message, "bad"); }

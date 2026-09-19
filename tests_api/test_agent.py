@@ -413,26 +413,37 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertIn("you have grown in this chat so far", self.atlas.requests[-1]["messages"][0]["content"])
 
     async def test_let_them_talk(self):
-        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
+        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}, {"name": "Zoya", "persona": "poet"}]
         chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
         solo = await self.new_chat(persona="You are Maya.")
         self.assertEqual((await self.http.post(f"/v1/agent/sessions/{solo}/talk", json={"rounds": 3})).status_code, 422)
         self.assertEqual((await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 11})).status_code, 422)
+        script = iter([("Maya", "Riya, yeh lehenga dekho!"), ("Riya", "Maroon phir se? Zoya, tum batao."),
+                       ("Zoya", "Mujhe toh pasand hai."), ("Maya", "Dekha?"), ("Riya", "Theek hai, jeet gayi tum.")])
+        speakers = []
 
         def reply(body):
-            rounds = body["messages"][-1]["content"]
-            number = int(re.search(r"round (\d+) of", rounds).group(1))
-            return json.dumps({"lines": [{"speaker": "Maya", "say": f"round {number}"}, {"speaker": "Riya", "say": "haan"}],
-                               "actions": [], "done": True, "pause": number == 3})
+            system = body["messages"][0]["content"]
+            who = re.match(r"You are (\w+), one of the characters", system).group(1)
+            speakers.append(who)
+            expected, say = next(script)
+            self.assertEqual(who, expected, "the named character speaks next, else whoever waited longest")
+            return json.dumps({"say": say, "to": "all", "pause": len(speakers) == 5})
 
         self.atlas.reply = reply
         started = await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 6})
         self.assertEqual(started.status_code, 202, started.text)
         view = await self.settle(chat)
+        self.assertEqual(speakers, ["Maya", "Riya", "Zoya", "Maya", "Riya"], "stops when someone pauses")
         talks = [m["content"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "talk"]
-        self.assertEqual([(n["round"], n["of"]) for n in talks], [(1, 6), (2, 6), (3, 6)], "stops when they pause")
-        self.assertEqual(len([m for m in view["messages"] if m["role"] == "assistant"]), 3)
-        self.assertIn("keep talking to each other: round 3 of 6", self.atlas.requests[-1]["messages"][-1]["content"])
+        self.assertEqual([(n["round"], n["of"]) for n in talks], [(1, 6), (2, 6)], "a round is one turn each")
+        lines = [m["content"]["lines"][0] for m in view["messages"] if m["role"] == "assistant"]
+        self.assertEqual(lines[1], {"speaker": "Riya", "say": "Maroon phir se? Zoya, tum batao.", "to": "all"})
+        last = self.atlas.requests[-1]["messages"]
+        self.assertNotIn("You are Hawk", last[0]["content"], "a character turn has no director prompt")
+        self.assertNotIn("render_film", last[0]["content"], "and no tool catalogue")
+        self.assertIn("Maya: Dekha?", last[1]["content"])
+        self.assertIn("It's your turn, Riya", last[1]["content"])
         self.assertEqual(view["session"]["status"], "idle")
 
     async def test_join_while_they_talk(self):
@@ -443,7 +454,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             last = body["messages"][-1]["content"]
             if "USER: Main bhi hoon" in last:
                 return json.dumps({"lines": [{"speaker": "Riya", "say": "Aao aao!"}], "actions": [], "done": True})
-            return json.dumps({"lines": [{"speaker": "Maya", "say": "chit chat"}], "actions": [], "done": True})
+            return json.dumps({"say": "chit chat", "to": "all"})
 
         self.atlas.reply, self.atlas.delay = reply, 0.3
         await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 10})
@@ -459,6 +470,78 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertLess(len(rounds), 10)
         self.assertEqual(view["messages"][-1]["content"]["lines"][0]["say"], "Aao aao!")
         self.assertFalse(view["session"]["talking"])
+
+    async def test_characters_feel_privately_make_things_whisper_and_remember(self):
+        cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
+        chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast, "adaptive": True, "whispers": True})).json()
+        self.assertTrue(chat["whispers"])
+        chat = chat["id"]
+        prompts = {}
+        turns = iter([
+            ("Maya", {"say": "Riya, you always pick for me.", "to": "Riya",
+                      "grow": [{"about": "Riya", "note": "Tired of Riya deciding everything."}, {"about": "user", "note": "Trusts the user's eye."}]}),
+            ("Riya", {"say": "Fine, let's see you in emerald then.", "to": "Maya", "make": "A photo of Maya in an emerald lehenga at a sangeet"}),
+            ("Maya", {"say": "Okay... I actually love it.", "to": "all", "pause": True}),
+        ])
+
+        def reply(body):
+            system = body["messages"][0]["content"]
+            character = re.match(r"You are (\w+), one of the characters", system)
+            if character:
+                who, turn = next(turns)
+                self.assertEqual(character.group(1), who)
+                prompts.setdefault(who, []).append(body["messages"])
+                return json.dumps(turn)
+            if system.startswith("You are Hawk"):
+                last = body["messages"][-1]["content"]
+                if "STAGE DIRECTION" in last and "TOOL RESULT" not in last:
+                    return json.dumps({"say": "", "actions": [{"tool": "generate_image", "by": "Riya", "args": {"prompt": "Maya in emerald"}}]})
+                if "whispering privately to Maya" in last:
+                    return json.dumps({"lines": [{"speaker": "Maya", "say": "Shh, secret safe."}], "actions": [], "done": True})
+                return json.dumps({"lines": [{"speaker": "Riya", "say": "Yeh lo!"}], "actions": [], "done": True})
+            return "MEMORY: I remember everything important."
+
+        self.atlas.reply = reply
+        await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 3, "makes": 1})
+        view = await self.settle(chat)
+        members = {m["display_name"]: m for m in view["session"]["cast"]}
+        riya_id = members["Riya"]["id"]
+        self.assertEqual(members["Maya"]["feelings"], {riya_id: ["Tired of Riya deciding everything."], "user": ["Trusts the user's eye."]})
+        self.assertEqual({v["about"] for v in members["Maya"]["feelings_view"]}, {"Riya", "the user"})
+        grows = [m["content"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "grow"]
+        self.assertEqual([(g["speaker"], g.get("about")) for g in grows], [("Maya", "Riya"), ("Maya", "the user")])
+
+        riya_prompt = prompts["Riya"][0][0]["content"]
+        self.assertNotIn("Tired of Riya", riya_prompt, "Maya's feelings are private to Maya")
+        self.assertIn("Tired of Riya", prompts["Maya"][1][0]["content"], "Maya keeps her own feelings")
+
+        kinds = [(m["role"], m["content"].get("kind") or m["content"].get("tool")) for m in view["messages"] if m["role"] in ("note", "tool")]
+        self.assertIn(("note", "make"), kinds)
+        self.assertIn(("tool", "generate_image"), kinds, "the director made what Riya asked for")
+        self.assertIn("[generate_image: images", prompts["Maya"][1][1]["content"], "and Maya saw it before her next line")
+
+        # whispers: only Maya hears it, and her answer is private too
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "@Maya Riya ko mat batana, emerald best hai"})
+        view = await self.settle(chat)
+        whisper = [m for m in view["messages"] if m["role"] == "user"][-1]["content"]
+        self.assertEqual(whisper["private_to"], members["Maya"]["id"])
+        self.assertEqual(view["messages"][-1]["content"]["private_to"], members["Maya"]["id"])
+        turns = iter([("Riya", {"say": "Maya, final answer?", "to": "Maya"}), ("Maya", {"say": "Trust me on this one.", "to": "Riya", "pause": True})])
+        prompts.clear()
+        await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 1})
+        await self.settle(chat)
+        self.assertIn("whispering only to you", prompts["Maya"][0][1]["content"])
+        self.assertNotIn("emerald best hai", prompts["Riya"][0][1]["content"], "Riya never hears the whisper")
+        self.assertNotIn("secret safe", prompts["Riya"][0][1]["content"])
+
+        # each character's memory is its own, condensed by the cheap model; Compact does all of them
+        compacted = (await self.http.post(f"/v1/agent/sessions/{chat}/compact")).json()
+        self.assertEqual(sorted(compacted["memories"]), ["Maya", "Riya"])
+        members = {m["display_name"]: m for m in compacted["session"]["cast"]}
+        self.assertTrue(members["Maya"]["memory"].startswith("MEMORY"))
+        memory_calls = [r for r in self.atlas.requests if r["messages"][0]["content"].startswith("You are Riya. Write your own memory")]
+        self.assertEqual(memory_calls[-1]["model"], "deepseek-ai/deepseek-v4.1-flash")
+        self.assertNotIn("emerald best hai", memory_calls[-1]["messages"][1]["content"], "Riya's memory has no whisper either")
 
     async def test_image_model_routing(self):
         seedream = (await self.http.post("/v1/images", json={"prompt": "A chai stall at dusk", "model": "seedream", "n": 2, "size": "2048x2048"})).json()
