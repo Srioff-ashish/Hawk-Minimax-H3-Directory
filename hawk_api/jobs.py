@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import mimetypes
 import os
 import random
@@ -54,16 +55,56 @@ LOST_AFTER_SECONDS = 20.0
 DEFAULT_COLLECTION = "Uploads"
 IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
 IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
+IMAGE_LITE_MODEL = "bytedance/seedream-v5.0-lite"  # 2K-4K only, a little cheaper than Pro 2K, a little below Pro in quality
+IMAGE_LITE_EDIT_MODEL = "bytedance/seedream-v5.0-lite/edit"
 IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
 IMAGE_ALIASES = {
     "turbo": IMAGE_FAST_MODEL, "z-image": IMAGE_FAST_MODEL, "zimage": IMAGE_FAST_MODEL, "z-image-turbo": IMAGE_FAST_MODEL,
     "fast": IMAGE_FAST_MODEL, "cheap": IMAGE_FAST_MODEL,
     "seedream": IMAGE_MODEL, "quality": IMAGE_MODEL, "best": IMAGE_MODEL,
+    "seedream-lite": IMAGE_LITE_MODEL, "lite": IMAGE_LITE_MODEL,
 }
+# Seedream 5 sizes (Atlas presets). Pro bills by output pixels: up to 2.36 MP is the 1.5K tier, above it the 2K tier at
+# twice the price, so Pro stays at 1.5K unless a bigger size is asked for. Lite starts at 2K.
+SEEDREAM_15K_PIXELS = 2_359_296
+SEEDREAM_PRO_15K = ((1536, 1536), (1776, 1328), (1328, 1776), (2048, 1152), (1152, 2048), (1024, 1024))
+SEEDREAM_PRO_2K = ((2048, 2048), (2304, 1728), (1728, 2304), (2720, 1530), (1530, 2720), (2496, 1664), (1664, 2496))
+SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 2848), (2496, 1664), (1664, 2496))
+# Estimated USD per image on Atlas (discounted list prices, Sept 2026); reported as cost_usd so the agent can budget.
+IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032}
+SEEDREAM_EXTRA_REFERENCE = 0.003  # each reference image after the first
 
 
 def _text_only_image_model(model: str) -> bool:
     return model.startswith("z-image/")
+
+
+def _parse_size(size: str | None) -> tuple[int, int] | None:
+    match = re.fullmatch(r"\s*(\d+)\s*[x*×]\s*(\d+)\s*", size or "")
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def _star_size_loose(size: str) -> str:
+    parsed = _parse_size(size)
+    return f"{parsed[0]}*{parsed[1]}" if parsed else size
+
+
+def seedream_size(model: str, size: str | None) -> tuple[str, str]:
+    """(Atlas "W*H", price tier) for a Seedream 5 request: the preset closest in aspect ratio (larger on a tie, same
+    price). Pro uses the 1.5K tier unless the request itself is above 2.36 MP. No size means portrait 2:3."""
+    parsed = _parse_size(size)
+    if size and parsed is None:
+        raise RequestError(f"size {size!r} should look like 1024x1536.")
+    width, height = parsed or (1024, 1536)
+    if "lite" in model:
+        presets, tier = SEEDREAM_LITE, "lite"
+    elif width * height > SEEDREAM_15K_PIXELS:
+        presets, tier = SEEDREAM_PRO_2K, "pro-2k"
+    else:
+        presets, tier = SEEDREAM_PRO_15K, "pro-1.5k"
+    want = math.log(width / height)
+    best = min(presets, key=lambda p: (round(abs(math.log(p[0] / p[1]) - want), 3), -p[0] * p[1]))
+    return f"{best[0]}*{best[1]}", tier
 
 
 def _star_size(size: str) -> str:
@@ -720,9 +761,11 @@ class HawkService:
         elif model.lower() in IMAGE_ALIASES or model:
             engine = engine or "atlas"
         engine = {"krea": "local", "krea2": "local", "z-image": "turbo", "fast": "turbo", "quality": "seedream"}.get(engine, engine)
+        if engine in ("seedream-lite", "lite"):
+            engine, model = "atlas", IMAGE_LITE_MODEL
         engine = engine or self.settings.image_engine
         if engine not in ("auto", "local", "turbo", "seedream", "atlas"):
-            raise RequestError(f"engine {engine!r} should be auto, local, turbo or seedream.")
+            raise RequestError(f"engine {engine!r} should be auto, local, turbo, seedream or seedream-lite.")
         notes, tried = [], []
         if sources and engine == "turbo":
             notes.append("z-image/turbo can't use reference images, so Seedream edit made this one.")
@@ -773,7 +816,7 @@ class HawkService:
         last_error = None
         for index, name in enumerate(chain):
             try:
-                used, images = await self._atlas_images(prompt, name, references, size, n, seed, notes)
+                used, images, cost = await self._atlas_images(prompt, name, references, size, n, seed, notes)
             except RequestError as exc:
                 last_error = exc
                 if index + 1 < len(chain):
@@ -781,7 +824,8 @@ class HawkService:
                     continue
                 raise
             tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
-            return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids)
+            return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids,
+                                            extra={"cost_usd": round(cost, 4)})
         raise last_error or RequestError("No image engine could make this image.")
 
     async def image_options(self) -> dict:
@@ -790,39 +834,48 @@ class HawkService:
             "default_engine": self.settings.image_engine,
             "local": local,
             "atlas": {"configured": self.atlas.configured, "text_to_image": self.settings.image_model,
-                      "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL},
+                      "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,
+                      "prices_usd": {"z-image/turbo": IMAGE_PRICES["z-image"], "seedream 1.5K (up to 2.36 MP)": IMAGE_PRICES["pro-1.5k"],
+                                     "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"]}},
             "sizes": ["1024x1024", "1024x1536", "1536x1024", "896x1600", "1600x896"],
         }
 
-    async def _atlas_images(self, prompt: str, model: str, references: list[str], size, n: int, seed, notes: list) -> tuple[str, list[bytes]]:
+    async def _atlas_images(self, prompt: str, model: str, references: list[str], size, n: int, seed,
+                            notes: list) -> tuple[str, list[bytes], float]:
+        """(model used, images, estimated USD)."""
         if references and _text_only_image_model(model):
             notes.append(f"{model} can't use reference images, so Seedream edit made this one.")
             model = IMAGE_EDIT_MODEL
         if references and model.endswith("/text-to-image"):
             model = model[: -len("/text-to-image")] + "/edit"
+        if references and model == IMAGE_LITE_MODEL:
+            model = IMAGE_LITE_EDIT_MODEL
+        if not references and model == IMAGE_LITE_EDIT_MODEL:
+            model = IMAGE_LITE_MODEL
         if not references and model.endswith("/edit"):
             raise RequestError(f"{model} edits images: pass reference_asset_ids, or use a text-to-image model.")
         payload: dict = {"model": model, "prompt": prompt.strip()}
-        if _text_only_image_model(model):
-            # z-image: "W*H" sizes and one image per request, so n runs as parallel requests.
+        count = max(1, n or 1)
+        # Both engines make one image per request, so n runs as parallel requests.
+        if _text_only_image_model(model):  # z-image: "W*H", each side 512-2048
             payload["size"] = _star_size(size) if size else "1024*1536"
             payload["prompt_extend"] = False
-            payloads = [{**payload, "seed": (seed + index) if seed is not None else -1} for index in range(max(1, n))]
+            payloads = [{**payload, "seed": (seed + index) if seed is not None else -1} for index in range(count)]
+            each = IMAGE_PRICES["z-image"]
         else:
-            if size:
-                payload["size"] = size
-            if seed is not None:
-                payload["seed"] = seed
-            if n and n > 1:
-                payload["n"] = n
+            payload["size"], tier = seedream_size(model, size)
             if references:
                 payload["images"] = references
-            payloads = [payload]
+            payloads = [{**payload, **({"seed": seed + index} if seed is not None else {})} for index in range(count)]
+            each = IMAGE_PRICES.get(tier, 0.0) + SEEDREAM_EXTRA_REFERENCE * max(0, len(references) - 1)
+            if size and payload["size"] != _star_size_loose(size):
+                notes.append(f"Seedream made {payload['size'].replace('*', 'x')} (its nearest preset to {size}).")
         try:
             batches = await asyncio.gather(*(self.atlas.generate_image(body) for body in payloads))
         except AtlasError as exc:
             raise RequestError(str(exc)) from None
-        return model, [image for batch in batches for image in batch]
+        images = [image for batch in batches for image in batch]
+        return model, images, each * len(images)
 
     async def _image_result(self, prompt: str, images: list[bytes], model: str, engine_tag: str, notes: list, tried: list,
                             reference_asset_ids, extra: dict | None = None) -> dict:

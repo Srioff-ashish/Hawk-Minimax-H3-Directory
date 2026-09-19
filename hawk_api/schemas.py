@@ -110,11 +110,13 @@ class ImageRequest(BaseModel):
     prompt: str = Field(min_length=1, description="What the image should show, or how to change the reference images.")
     reference_asset_ids: list[str] = Field(default_factory=list, max_length=10, description="Image assets to edit or combine. Krea 2 edit (auto/local) takes 1, or 2: the scene first, then the person; Seedream edit takes up to 10.")
     model: str | None = Field(None, description="Atlas image model or alias: 'turbo' (z-image/turbo, the text-to-image default: fast, ~$0.01, no edits) "
-                              "or 'seedream' (Seedream v5.0 Pro: best quality). Reference images always use Seedream edit.")
-    size: str | None = Field(None, description="e.g. 1024x1536 or 1536x1536 (z-image: 512-2048 a side); Seedream also 2048x2048, 2048x1152. Omit for the default.")
+                              "'seedream' (Seedream v5.0 Pro: best quality, ~$0.036 up to 2.36 MP, ~$0.072 above) or 'seedream-lite' "
+                              "(Seedream v5.0 Lite: 2K+ output for ~$0.032). Reference images use the matching Seedream edit.")
+    size: str | None = Field(None, description="e.g. 1024x1536 or 1536x1536 (z-image: 512-2048 a side). Seedream snaps to its nearest preset: up to 2.36 MP "
+                      "stays in Pro's cheaper 1.5K tier (e.g. 1328x1776); larger, like 2048x2048, bills the 2K tier at twice the price. Omit for the default.")
     n: int = Field(1, ge=1, le=4, description="How many images.")
     seed: int | None = Field(None, ge=0)
-    engine: str | None = Field(None, description="auto (default: local Krea 2 when idle, else z-image/turbo, else Seedream), local, turbo or seedream.")
+    engine: str | None = Field(None, description="auto (default: local Krea 2 when idle, else z-image/turbo, else Seedream), local, turbo, seedream or seedream-lite.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="Krea 2 LoRAs for local generation (file name or a unique part, optional strength).")
     steps: int | None = Field(None, ge=1, le=50, description="Local Krea 2 steps; default 8 (or the LoRA's recommendation).")
     ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit likeness dial: 4 (default) strong likeness, 1 looser and more creative, above 10 breaks removals.")

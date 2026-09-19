@@ -100,8 +100,10 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
 
     @mcp.tool(description=(
         "Generate or edit images. engine 'auto' (default, text only) tries local Krea 2 on this GPU (free; used when installed "
-        "and ComfyUI is idle), then Atlas z-image/turbo (about $0.01), then Seedream v5.0 Pro. engine 'local', 'turbo' or "
-        "'seedream' picks one; the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
+        "and ComfyUI is idle), then Atlas z-image/turbo (about $0.01), then Seedream v5.0 Pro. engine 'local', 'turbo', "
+        "'seedream' or 'seedream-lite' picks one; Seedream Pro costs about $0.036 an image up to 2.36 MP and $0.072 above "
+        "(e.g. 2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
+        "$0.032, a little below Pro in quality. Results carry cost_usd for Atlas images. the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
         "[{name, strength}] from image_options, e.g. a realism or detail LoRA for photo portraits, a style LoRA for a look; follow "
         "the GO-TO / AVOID notes; up to 3 adult LoRAs, only for fictional adults the user explicitly asked for. "
         "Edits: with reference_asset_ids, 'auto' / 'local' use Krea 2 Identity Edit on this GPU when installed and idle (free; "
@@ -111,7 +113,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         "outfit, pose, scene, light or style, make variations. Krea 2 edits of uploaded photos (not images made here) are "
         "refused if sexual or with adult LoRAs. Returns new image assets (asset_id, thumb_url) that work as picture "
         "references in plan_film and render_film, e.g. to lock a character's identity across segments. size like 1024x1536 "
-        "or 1536x1536 (z-image: 512-2048 a side; Seedream also 2048x2048, 2048x1152) is optional; n is 1-4. Write rich, "
+        "or 1536x1536 (z-image: 512-2048 a side; Seedream snaps to its nearest preset) is optional; n is 1-4. Write rich, "
         "specific prompts: subject, face, hair, expression, outfit, setting, light, camera and lens, mood, style. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
     ))
     async def generate_image(

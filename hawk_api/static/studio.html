@@ -1021,7 +1021,8 @@
           <label title="Krea 2 on this GPU when idle, else Z-Image Turbo, else Seedream"><input type="radio" name="genEngine" value="auto" checked>Auto</label>
           <label title="Krea 2 Turbo on this GPU, with LoRAs; free, no moderation"><input type="radio" name="genEngine" value="local">Krea 2 (local)</label>
           <label title="Atlas z-image/turbo: fast, about $0.01 an image, no edits"><input type="radio" name="genEngine" value="turbo">Z-Image Turbo</label>
-          <label title="Atlas Seedream v5.0 Pro: best quality; edits reference images"><input type="radio" name="genEngine" value="seedream">Seedream</label>
+          <label title="Atlas Seedream v5.0 Pro: best quality; edits reference images. About $0.036 an image up to 2.36 MP, $0.072 above"><input type="radio" name="genEngine" value="seedream">Seedream</label>
+          <label title="Atlas Seedream v5.0 Lite: 2K+ output for about $0.032 an image, a little below Pro in quality"><input type="radio" name="genEngine" value="seedream-lite">Seedream Lite</label>
         </div></div>
       <div class="gen-status" id="genStatus">Checking local Krea 2…</div>
       <div class="gen-grid">
@@ -2518,7 +2519,7 @@
       tone = local.busy ? "warn" : "ok";
     } else if (refs) {
       text = gen.refs.length > 2 ? "More than 2 images: Seedream edit combines them."
-        : engine === "seedream" || engine === "turbo" ? "Reference images are edited with Seedream."
+        : engine === "seedream" || engine === "seedream-lite" || engine === "turbo" ? "Reference images are edited with Seedream."
         : `Seedream edit will be used: Krea 2 edit isn't installed${edit.missing?.length ? ` (missing ${edit.missing.join(", ")})` : ""}.`;
       tone = "warn";
     } else if (!gen.options) text = "Could not read the image options; Generate still works.";
@@ -2617,10 +2618,11 @@
     try {
       const result = await post("/v1/images", body);
       const seconds = ((performance.now() - started) / 1000).toFixed(0);
-      const names = { "krea2-edit": "Krea 2 edit (local)", krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo", seedream: "Seedream" };
+      const names = { "krea2-edit": "Krea 2 edit (local)", krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo",
+        seedream: result.model?.includes("lite") ? "Seedream Lite" : "Seedream" };
       const box = $("genResult");
       box.hidden = false;
-      box.innerHTML = `<div class="row"><strong>${esc(names[result.engine] || result.model)}</strong><span class="hint">${seconds} s · ${result.assets.length} image${result.assets.length === 1 ? "" : "s"} in Generated${result.loras?.length ? ` · LoRAs: ${esc(result.loras.map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", "))}` : ""}</span></div>`
+      box.innerHTML = `<div class="row"><strong>${esc(names[result.engine] || result.model)}</strong><span class="hint">${seconds} s · ${result.assets.length} image${result.assets.length === 1 ? "" : "s"} in Generated${result.cost_usd ? ` · about $${result.cost_usd.toFixed(3)}` : ""}${result.loras?.length ? ` · LoRAs: ${esc(result.loras.map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", "))}` : ""}</span></div>`
         + (result.note ? `<div class="gen-status warn">${esc(result.note)}</div>` : "")
         + (result.tried?.length ? `<div class="hint">Fell back from: ${esc(result.tried.map((t) => typeof t === "string" ? t : `${t.engine || t.model}: ${t.skipped || t.error || ""}`).join(" · "))}</div>` : "")
         + `<div class="thumb-grid">${result.assets.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.id)}</span></a>`).join("")}</div>`;
