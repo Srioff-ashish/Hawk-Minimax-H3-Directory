@@ -86,9 +86,10 @@ AGENT_TOOLS = [
     },
     {
         "name": "set_persona",
-        "description": "Replace a persona when the user asks you to be or act like someone. name is the display name "
-        "shown in the chat (e.g. Maya). In a group chat pass speaker (a character's name) to change that character; "
-        "a new speaker name adds a character (up to 4).",
+        "description": "Set who a character is. To create several characters, call it once per character with speaker "
+        "set to that character's name (a new speaker adds a character, up to 4; in a fresh chat the first one replaces "
+        "the unnamed default). Pass speaker to change an existing character too. Without speaker (and a name that "
+        "isn't in the cast) it changes the lead, i.e. you. name is the display name shown in the chat (e.g. Maya).",
         "args": {"persona": "string (required)", "name": "string, optional", "speaker": "string, optional"},
     },
     {
@@ -193,10 +194,20 @@ def display_name(member: dict, index: int = 0, total: int = 1) -> str:
 
 
 def find_member(cast: list[dict], speaker: str) -> int | None:
-    key = (speaker or "").strip().lower()
+    """A character by id or name. Exact first; then a unique match on a first name or the start of a name, so
+    "Sonia" finds "Sonia Mausi" (models shorten names)."""
+    key = " ".join((speaker or "").strip().lstrip("@").lower().split())
+    if not key:
+        return None
+    names = [display_name(member, index, len(cast)).lower() for index, member in enumerate(cast)]
     for index, member in enumerate(cast):
-        if key and key in (member.get("id", "").lower(), display_name(member, index, len(cast)).lower()):
+        if key in (member.get("id", "").lower(), names[index]):
             return index
+    for test in (lambda name: name.split()[0] == key.split()[0],  # same first name: "Sonia" / "Nisha ji"
+                 lambda name: name.startswith(key) or key.startswith(name)):  # a shortened name: "Ana"
+        hits = [index for index, name in enumerate(names) if name and test(name)]
+        if len(hits) == 1:
+            return hits[0]
     return None
 
 
@@ -752,8 +763,8 @@ class AgentService:
                         await self._make_for(session_id, names[index], turn["make"])
                     else:
                         self._note(session_id, f"{names[index]} wanted something made, but this talk's limit is reached.", "warn")
-                if turn.get("pause"):
-                    return
+                if turn.get("pause") and set(spoke) >= set(range(len(cast))):
+                    return  # a pause counts once everyone has had a say; before that the talk goes on
 
     def _last_speaker(self, session_id: str) -> tuple[int | None, str]:
         """Who spoke last (a character's index, or None for the user) and what they said, to pick the first speaker."""
@@ -1156,6 +1167,9 @@ class AgentService:
         session = self.get_session(session_id)
         cast = [dict(member) for member in cast_of(session)]
         speaker = str(args.get("speaker") or "").strip()
+        name = str(args.get("name") or "").strip()
+        if not speaker and name and tool != "remove_character" and find_member(cast, name) is not None:
+            speaker = name  # a character named without speaker: edit that one, not the lead
         index = find_member(cast, speaker) if speaker else 0
         if tool == "remove_character":
             if index is None:
@@ -1166,9 +1180,17 @@ class AgentService:
         else:
             if index is None:  # a new speaker joins the chat
                 if tool == "set_avatar":
-                    raise RequestError(f"No character called {speaker!r}; add them with set_persona first.")
-                cast.append({"name": speaker, "persona": ""})
-                index = len(cast) - 1
+                    names = ", ".join(display_name(m, i, len(cast)) or "(unnamed lead)" for i, m in enumerate(cast))
+                    raise RequestError(f"No character called {speaker!r} (the cast is: {names}); add them with set_persona first.")
+                if not display_name(cast[0], 0, 1):
+                    # The chat's lead has no name yet (a fresh chat): the first named character takes its place
+                    # instead of joining next to an unnamed "character 1".
+                    cast[0] = {"id": cast[0].get("id") or uuid.uuid4().hex[:8], "name": speaker, "persona": "",
+                               "avatar_asset_id": "", "growth": [], "feelings": {}}
+                    index = 0
+                else:
+                    cast.append({"name": speaker, "persona": ""})
+                    index = len(cast) - 1
             member = cast[index]
             if args.get("name") is not None:
                 member["name"] = str(args["name"])

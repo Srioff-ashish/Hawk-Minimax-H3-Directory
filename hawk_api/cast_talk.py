@@ -35,10 +35,12 @@ YOUR MEMORY OF EARLIER IN THIS CHAT (your own point of view)
 HOW TO SPEAK
 - It is your turn. Say one short turn (1-3 sentences, at most about {words} words) as {name} only: never write anyone else's lines.
 - Talk to whoever the conversation calls for: usually the other characters. Address the user only when they spoke to you, asked something, or the moment really calls for it.
-- React to what was just said; bring your own opinions, moods and quirks; tease, agree, argue or change the subject the way {name} would.
+- React to what was just said, and move the conversation forward: every turn adds something new (an opinion, a question, a story, a tease, a disagreement, a decision). Never repeat or rephrase a point that was already made, by you or anyone else.
+- Bring your own opinions, moods and quirks; tease, agree, argue or change the subject the way {name} would.
+- If the user asked you all something, work it out among yourselves (argue, compare, persuade) before anyone turns back to the user with an answer.
 - Match the chat's language and style (Hinglish in Roman script if that is how it is going).
 - If you want an image or video made (a look to try, a photo of yourself, a scene), add "make" with a full description; the director makes it and everyone sees it. Only when it matters to the conversation.
-- Add "pause": true when the conversation reaches a natural end, needs the user's answer, or you have nothing more to say.{adaptive}
+- Add "pause": true only when the conversation has really run its course or cannot go on without the user; not just because someone could ask the user.{adaptive}
 
 Reply with only JSON: {{"say": "...", "to": "<a name, user, or all>"{make_field}{grow_field}, "pause": false}}
 
@@ -77,14 +79,19 @@ def visible_to(message: dict, member_id: str | None) -> bool:
 
 
 def mentioned(text: str, cast: list[dict], names: list[str], exclude: int | None = None) -> int | None:
-    """The first character named in text (as a word, or @Name), other than exclude."""
+    """The first character named in text (full name, a first name only they have, or @Name), other than exclude."""
+    firsts = [name.split()[0].lower() if name else "" for name in names]
     best = None
     for index, name in enumerate(names):
         if index == exclude or not name:
             continue
-        match = re.search(rf"(?<![\w@])@?{re.escape(name)}\b", text or "", re.IGNORECASE)
-        if match and (best is None or match.start() < best[0]):
-            best = (match.start(), index)
+        forms = [name]
+        if len(firsts[index]) >= 3 and firsts.count(firsts[index]) == 1:
+            forms.append(name.split()[0])  # "Sonia" for "Sonia Mausi"
+        for form in forms:
+            match = re.search(rf"(?<![\w@])@?{re.escape(form)}\b", text or "", re.IGNORECASE)
+            if match and (best is None or match.start() < best[0]):
+                best = (match.start(), index)
     return best[1] if best else None
 
 

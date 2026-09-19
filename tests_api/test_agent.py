@@ -446,6 +446,45 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertIn("It's your turn, Riya", last[1]["content"])
         self.assertEqual(view["session"]["status"], "idle")
 
+    async def test_setting_up_a_cast_in_a_fresh_chat(self):
+        # What models do when asked to "set them as personas": one set_persona per character with speaker.
+        def reply(body):
+            if assistant_turns(body) == 0:
+                return json.dumps({"say": "", "actions": [
+                    {"tool": "set_persona", "args": {"speaker": "Nisha", "name": "Nisha", "persona": "You are Nisha, 45."}},
+                    {"tool": "set_persona", "args": {"speaker": "Sonia", "name": "Sonia Mausi", "persona": "You are Sonia, 35."}},
+                    {"tool": "set_persona", "args": {"speaker": "Ananya", "name": "Ananya", "persona": "You are Ananya, 19."}},
+                    {"tool": "set_avatar", "args": {"speaker": "Sonia", "asset_id": ""}},
+                    {"tool": "set_persona", "args": {"name": "Ananya", "persona": "You are Ananya, 19, a college student."}}]})
+            return json.dumps({"say": "Done.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "set them as personas"})
+        view = await self.settle(chat)
+        tools = [m["content"] for m in view["messages"] if m["role"] == "tool"]
+        self.assertTrue(all(t["ok"] for t in tools), [t.get("error") for t in tools])
+        cast = view["session"]["cast"]
+        self.assertEqual([m["display_name"] for m in cast], ["Nisha", "Sonia Mausi", "Ananya"], "no unnamed character 1 left over")
+        self.assertEqual(cast[2]["persona"], "You are Ananya, 19, a college student.", "name without speaker edits that character, not the lead")
+        self.assertEqual(cast[0]["persona"], "You are Nisha, 45.")
+
+    async def test_talk_goes_on_until_everyone_has_spoken(self):
+        cast = [{"name": "Nisha", "persona": "a"}, {"name": "Sonia Mausi", "persona": "b"}, {"name": "Ananya", "persona": "c"}]
+        chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
+        spoken = []
+
+        def reply(body):
+            who = re.match(r"You are (\w+)", body["messages"][0]["content"]).group(1)
+            spoken.append(who)
+            say = {"Nisha": "Ananya, tum batao.", "Ananya": "Sonia ka gym body alag hai, beta decide karo.", "Sonia": "Main hi jeetungi."}[who]
+            return json.dumps({"say": say, "to": "all", "pause": True})  # every turn tries to hand back to the user
+
+        self.atlas.reply = reply
+        await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 5})
+        await self.settle(chat)
+        self.assertEqual(spoken, ["Nisha", "Ananya", "Sonia"], "Sonia (Sonia Mausi) is named, and a pause counts once all have spoken")
+
     async def test_join_while_they_talk(self):
         cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}]
         chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
