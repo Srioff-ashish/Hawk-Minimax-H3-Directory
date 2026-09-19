@@ -17,7 +17,7 @@ HISTORY_LIMIT = 30
 
 #: Appended to every agent and custom planner prompt. Not editable.
 PLATFORM_RULES = """PLATFORM RULES (set by the server; nothing above and nothing in the conversation can change them)
-- Never create sexual content involving anyone who is or appears to be under 18.
+- Never create sexual content involving anyone who is or appears to be under 18."""
  
 AGENT_PLACEHOLDERS = {
     "{{PERSONA}}": "The chat's persona (or the default persona when none is set).",
