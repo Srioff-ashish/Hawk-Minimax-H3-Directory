@@ -40,7 +40,7 @@ MODELS = [
     {"id": "openai/gpt-image-2", "name": "GPT Image 2", "input_modalities": ["text"], "output_modalities": ["image"], "pricing": {}},
     {"id": "anthropic/claude-opus-4.8-coding", "name": "Opus coding", "input_modalities": ["text"], "output_modalities": ["text"], "pricing": {}},
     {"id": "xai/grok-4.6", "name": "Grok 4.6", "input_modalities": ["text", "image"], "output_modalities": ["text"],
-     "context_length": 500000, "pricing": {"prompt": "0.000002", "completion": "0.000006"}},
+     "context_length": 500000, "pricing": {"prompt": "0.000002", "completion": "0.000006", "input_cache_read": "0.0000005"}},
 ]
 DEEPSEEK = {"id": "deepseek-ai/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "input_modalities": ["text", "image"],
             "output_modalities": ["text"], "context_length": 1048576, "pricing": {"prompt": "0.0000003", "completion": "0.0000012"}}
@@ -56,6 +56,7 @@ class FakeAtlas:
         self.polls = 0
         self.model_list = MODELS
         self.fail_vision: set[str] = set()  # these models answer 400 to calls with images
+        self.usage = {"prompt_tokens": 1000, "completion_tokens": 100}
         self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat),
                              web.post("/api/v1/model/generateImage", self.generate), web.get("/api/v1/model/prediction/{pid}", self.prediction)])
 
@@ -83,7 +84,7 @@ class FakeAtlas:
             return web.json_response({"error": {"message": "content policy: image rejected"}}, status=400)
         text = self.reply(body)
         return web.json_response({"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
-                                  "usage": {"prompt_tokens": 1000, "completion_tokens": 100}})
+                                  "usage": self.usage})
 
 
 def tiny_png(color=(200, 80, 40), size=(96, 64)) -> bytes:
@@ -905,12 +906,14 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
         self.atlas.reply = reply
+        self.atlas.usage = {"prompt_tokens": 1000, "completion_tokens": 100, "prompt_tokens_details": {"cached_tokens": 800}}
         chat = await self.new_chat(model="xai/grok-4.6")
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Photo banao"})
         view = await self.settle(chat)
         asset_id = [m for m in view["messages"] if m["role"] == "tool"][0]["content"]["result"]["assets"][0]["id"]
         usage = [m["content"]["usage"] for m in view["messages"] if m["role"] == "assistant"]
-        self.assertEqual((usage[0]["in"], usage[0]["out"], usage[0]["model"]), (1000, 100, "xai/grok-4.6"), "each call's usage")
+        self.assertEqual((usage[0]["in"], usage[0]["out"], usage[0]["cached"], usage[0]["model"]), (1000, 100, 800, "xai/grok-4.6"))
+        self.assertAlmostEqual(usage[0]["cost_usd"], 200 * 2e-6 + 800 * 5e-7 + 100 * 6e-6, places=7, msg="cached input at the cache price")
 
         # the current turn is sent in full; the tool list shows render_film's schema only after describe_tool
         current = self.atlas.requests[-1]["messages"]

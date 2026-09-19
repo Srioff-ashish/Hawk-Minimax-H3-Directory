@@ -59,7 +59,7 @@ class AtlasClient:
         }
 
     async def list_models(self, refresh: bool = False) -> list[dict]:
-        """Chat models on the account: ``[{id, name, vision, context, price_in, price_out}]``."""
+        """Chat models on the account: ``[{id, name, vision, context, price_in, price_out, price_cache}]``."""
         if not self.configured:
             return []
         stamp, cached = self._models
@@ -88,6 +88,8 @@ class AtlasClient:
                 "context": item.get("context_length"),
                 "price_in": _price(pricing.get("prompt")),
                 "price_out": _price(pricing.get("completion")),
+                # cached prompt tokens (a repeated prefix) bill at this lower rate; models without one bill them in full
+                "price_cache": _price(pricing.get("input_cache_read")) or _price(pricing.get("prompt")),
             })
         rank = {model_id: index for index, model_id in enumerate(FAVOURITES)}
         models.sort(key=lambda m: (rank.get(m["id"], len(rank)), m["name"].lower()))

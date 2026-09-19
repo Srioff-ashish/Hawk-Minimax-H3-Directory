@@ -665,14 +665,17 @@ class AgentService:
                 self.store.save_session(session)
 
     async def _add_usage(self, session_id: str, model: str, usage: dict) -> dict:
-        """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at list prices
-        (cached input tokens, when the provider reports them, may be billed lower)."""
+        """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at Atlas list
+        prices, with cached input tokens (a repeated prompt prefix) at the model's cheaper cache-read price."""
         session = self.get_session(session_id)
         info = await self.atlas.model_info(model) or {}
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
         details = usage.get("prompt_tokens_details") or {}
         cached = int((details.get("cached_tokens") if isinstance(details, dict) else 0) or usage.get("prompt_cache_hit_tokens") or 0)
-        cost = prompt * info.get("price_in", 0.0) + completion * info.get("price_out", 0.0)
+        cached = min(cached, prompt)
+        price_in = info.get("price_in", 0.0)
+        cost = ((prompt - cached) * price_in + cached * info.get("price_cache", price_in)
+                + completion * info.get("price_out", 0.0))
         totals = session.setdefault("usage", {"prompt_tokens": 0, "completion_tokens": 0, "cost_usd": 0.0, "steps": 0})
         totals["prompt_tokens"] += prompt
         totals["completion_tokens"] += completion

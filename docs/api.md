@@ -330,7 +330,7 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
   - **Compact button** (`POST /v1/agent/sessions/<id>/compact`): summarises all but the last 4 messages now and reports the estimated tokens per call before and after. It returns 409 while the agent is working.
 - **Runs on the server:** a message starts a background run that continues if you close the browser. Limits per message: 40 model steps and 3 hours. **Stop** ends it after the current step. A server restart marks a running chat as interrupted.
 - **Protocol:** Atlas does not advertise tool calling for Grok, so the model answers every turn with JSON: `{"say": "…", "actions": [{"tool": "…", "args": {…}}], "done": false}`. Replies in any other shape get one repair round.
-- **Cost:** each chat shows tokens used and the estimated cost from Atlas prices. Each reply shows its own call's tokens in and out; hover for the cost. Stored assistant messages carry `usage: {model, in, out, cached, cost_usd}`. `cached` is filled when the provider reports prompt-cache hits.
+- **Cost:** each chat shows tokens used and the estimated cost from Atlas prices. Each reply shows its own call's tokens in and out; hover for the cost. Stored assistant messages carry `usage: {model, in, out, cached, cost_usd}`. `cached` counts prompt-cache hits: the repeated start of each call (instructions, tool list, earlier history) that Atlas bills at the model's cheaper cache-read price, e.g. $0.03 instead of $0.30 per million tokens on DeepSeek V4.1 Flash, or $0.50 instead of $2 on Grok 4.6. The cost estimate uses that price.
 
 | Method | Path | |
 |---|---|---|
