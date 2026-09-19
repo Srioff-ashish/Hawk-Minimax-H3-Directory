@@ -1016,7 +1016,8 @@
     <div class="row"><h3 id="genTitle">Generate images</h3><div class="spacer"></div><button class="icon-btn" type="button" id="genClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
     <div class="modal-scroll" style="display:grid;gap:12px;padding-right:2px">
       <div class="field"><label class="label" for="genPrompt">Prompt</label>
-        <textarea class="textarea" id="genPrompt" rows="4" required placeholder="Describe the subject, outfit, setting, light, lens and mood. e.g. Candid portrait of a 28-year-old Delhi stylist on a rooftop at golden hour, linen kurta, 85mm, soft rim light"></textarea></div>
+        <textarea class="textarea" id="genPrompt" rows="4" required placeholder="Describe the subject, outfit, setting, light, lens and mood. e.g. Candid portrait of a 28-year-old Delhi stylist on a rooftop at golden hour, linen kurta, 85mm, soft rim light"></textarea>
+        <span class="hint" id="genTip" aria-live="polite"></span></div>
       <div class="field"><span class="label" id="genEngineLabel">Engine</span>
         <div class="segmented gen-engine" role="radiogroup" aria-labelledby="genEngineLabel">
           <label title="Krea 2 on this GPU when idle, else Z-Image Turbo, else Seedream"><input type="radio" name="genEngine" value="auto" checked>Auto</label>
@@ -2506,6 +2507,37 @@
       + `<button class="btn btn-sm" type="button" id="genAddRef">${gen.refs.length ? "+ Add" : "Choose images"}</button>`;
     renderGenOptions();
   }
+  // How to write the prompt for the engine that will run it (from each model's prompting guide): [words, tip, example].
+  const PROMPT_TIPS = {
+    krea: [[40, 100], "Krea 2: subject first in specific visual language (textures, fabric, skin), then camera terms (close-up, low-angle, 85mm, shallow depth of field), light, and a look word (editorial photography, film grain, candid phone snapshot). Plain descriptive phrases; no “masterpiece, 8K”.",
+      "Close-up editorial portrait of a 28-year-old Delhi stylist, textured linen kurta in rust, silver jhumkas, freckled skin, rooftop at golden hour, warm rim light from the right, 85mm, shallow depth of field, film grain, editorial photography"],
+    kreaEdit: [[4, 40], "Krea 2 edit: one plain instruction naming only what changes: put, place, replace, remove, turn, restage. With 2 images, image 1 is the scene and image 2 the person. Replace is reliable; removals and outfit swaps less so.",
+      "Put a retro red trenchcoat on her and turn her head to the left."],
+    turbo: [[80, 250], "Z-Image Turbo likes the most detail: subject (age, features, clothing, expression) → place, time and weather → camera, lens or film stock (e.g. Kodak Portra 400) → framing. No negative prompts: say what you want. Text in quotes.",
+      "A 65-year-old woman with silver hair and gentle wrinkles in a hand-knitted maroon cardigan, reading by a tall window with a contemplative expression. A cosy wood-panelled library, late afternoon, soft natural light falling across the pages. Shot on a Canon 5D with an 85mm lens, Kodak Portra 400 tones, shallow depth of field, framed from the waist up on the left third."],
+    seedream: [[30, 100], "Seedream 5: conversational sentences: subject and action, setting, light with direction (“soft window light from the left”), materials (“brushed aluminium, matte skin”), lens and mood. Text in double quotes with its placement. No negative prompts or “8K”.",
+      "A premium product photo of an amber-glass perfume bottle with a brushed-gold cap standing on white marble, a large softbox from camera left, soft reflections on the glass, 85mm, shallow depth of field, calm luxury mood. The label reads \"NOOR\" in thin gold capitals."],
+    seedreamEdit: [[10, 80], "Seedream edit: name what to change and say what stays (“Keep the lighting and composition exactly the same”). With several images, call them image 1, image 2 in the order chosen.",
+      "Make the mug matte black and remove the plant in the top-right corner. Keep the lighting, the table and the composition exactly the same."],
+  };
+  function genPromptEngine() {  // which engine the Generate button will actually use
+    const local = gen.options?.local || {};
+    const engine = genEngine();
+    if (gen.refs.length) {
+      const kreaEdit = gen.refs.length <= 2 && (engine === "local" || (engine === "auto" && !local.busy)) && local.installed && local.edit?.installed;
+      return kreaEdit ? "kreaEdit" : "seedreamEdit";
+    }
+    if (engine === "local" || (engine === "auto" && local.reachable && local.installed && !local.busy)) return "krea";
+    return engine === "seedream" || engine === "seedream-lite" ? "seedream" : "turbo";
+  }
+  function paintPromptTip() {
+    const [[lo, hi], tip, example] = PROMPT_TIPS[genPromptEngine()];
+    const words = ($("genPrompt").value.trim().match(/\S+/g) || []).length;
+    const count = !words ? "" : words < lo ? ` · ${words} words: add detail (${lo}–${hi} works best)` : words > hi ? ` · ${words} words: trim towards ${hi}` : ` · ${words} words ✓`;
+    $("genTip").textContent = tip + count;
+    $("genPrompt").placeholder = `e.g. ${example}`;
+  }
+  $("genPrompt").addEventListener("input", paintPromptTip);
   function renderGenOptions() {
     const local = gen.options?.local || {};
     const engine = genEngine();
@@ -2556,6 +2588,7 @@
     if ($("genLoras").dataset.html !== html) { $("genLoras").innerHTML = html; $("genLoras").dataset.html = html; }
     $("genSteps").disabled = !showLoras;
     paintLoraWarn();
+    paintPromptTip();
   }
   function paintLoraWarn() {
     const adult = (gen.options?.local?.loras || []).filter((l) => l.kind === "adult" && gen.loras[l.file]);
