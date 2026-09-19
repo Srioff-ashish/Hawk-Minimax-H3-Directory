@@ -308,7 +308,10 @@
   .agent-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
   .agent-title { flex: 1; min-width: 160px; border: 1px solid transparent; background: none; font-size: 15px; font-weight: 650; padding: 5px 8px; border-radius: 6px; }
   .agent-title:hover, .agent-title:focus { border-color: var(--line-strong); outline: none; background: var(--surface); }
-  .agent-persona { padding: 12px 14px; border-bottom: 1px solid var(--line); background: var(--surface-2); display: grid; gap: 8px; }
+  /* Scrolls inside the chat card (4 characters are taller than the card) with Save / Close pinned at its bottom. */
+  .agent-persona { padding: 12px 14px 0; border-bottom: 1px solid var(--line); background: var(--surface-2); display: grid; gap: 8px;
+    flex: 0 1 auto; min-height: 0; max-height: 78%; overflow-y: auto; overscroll-behavior: contain; }
+  .persona-actions { position: sticky; bottom: 0; z-index: 1; padding: 10px 0 12px; background: var(--surface-2); border-top: 1px solid var(--line); }
   .agent-thread { flex: 1; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 12px; background: var(--bg); }
   .agent-thread > * { flex-shrink: 0; }
   .att-thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -792,7 +795,7 @@
             <div class="cast-extra" id="castExtra"></div>
             <div class="row"><button class="btn btn-sm" id="castAdd" type="button">+ Add character</button><span class="hint">Up to 4 characters in one chat, like a group chat. Talk to one with @Name.</span></div>
             <div class="row" id="personaChips"></div>
-            <div class="row"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
+            <div class="row persona-actions"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
           </div>
           <div class="agent-thread" id="agentThread" aria-live="polite"></div>
           <div class="agent-composer">
