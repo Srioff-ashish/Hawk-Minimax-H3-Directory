@@ -105,6 +105,10 @@ After the render, the job's `loras_applied` lists what the LoRA Stack nodes actu
 
 To see what's on the pod: `GET /v1/options` (REST) or `list_options` (MCP) returns `available_loras`, `default_loras` (with `present: true/false`) and `lora_presets`.
 
+**Two families, one folder.** ComfyUI keeps every LoRA in `models/loras`, so the MiniMax H3 video LoRAs and the Krea 2 image LoRAs sit side by side. They are kept apart: renders only see the H3 files (the Krea 2 ones are left out of `available_loras` and of name matching, and asking for one is refused with "… is a Krea 2 image LoRA"), and `generate_image` only matches against the image catalogue, so an H3 file can never reach an image. This also settles names that exist in both, such as `mystic`.
+
+**Shipped defaults.** `deploy/loras.example.json` ships the turbo LoRA (required), `H3_Motion_BoosterV2` at 1.0 and `HMNSFW_AIO_V25` at 0.8, both optional. It carries a `version`: when a newer catalogue ships with the code, a pod's `loras.json` is replaced and the old one kept as `loras.json.bak`, so new defaults reach pods that already have a copy. Edit `loras.json` on the pod to change strengths, drop a default, or add your own.
+
 ---
 
 ## 3. Connect Claude

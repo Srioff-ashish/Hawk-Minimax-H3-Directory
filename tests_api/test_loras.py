@@ -122,3 +122,45 @@ class Applied(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class ShippedCatalogue(unittest.TestCase):
+    """The defaults that ship with the code, and how they reach a pod that already has a loras.json."""
+
+    def setUp(self):
+        import json
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="hawk_loras_")
+        self.path = os.path.join(self.tmp, "loras.json")
+        self.json = json
+
+    def test_video_defaults_are_the_turbo_lora_motion_booster_and_aio(self):
+        from hawk_api.loras import load_config
+        config = load_config(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                          "deploy", "loras.example.json"))
+        names = [(spec.name, spec.strength, spec.required) for spec in config.defaults]
+        self.assertEqual(names, [("minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", 1.0, True),
+                                 ("H3_Motion_BoosterV2.safetensors", 1.0, False),
+                                 ("HMNSFW_AIO_V25.safetensors", 0.8, False)])
+        self.assertTrue(all(not spec.name.lower().startswith("krea2") for spec in config.defaults),
+                        "image LoRAs never belong in the video defaults")
+
+    def test_a_newer_shipped_catalogue_replaces_an_older_copy(self):
+        from hawk_api.loras import load_config
+        with open(self.path, "w", encoding="utf-8") as handle:  # what a pod from before the new defaults has
+            self.json.dump({"version": 1, "defaults": [{"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                                                        "required": True, "turbo": True}], "presets": {}}, handle)
+        config = load_config(self.path)
+        self.assertIn("H3_Motion_BoosterV2.safetensors", [spec.name for spec in config.defaults],
+                      "the pod picks up new defaults instead of keeping the first copy for ever")
+        self.assertTrue(os.path.isfile(self.path + ".bak"), "the old file is kept")
+
+    def test_a_current_copy_is_left_alone(self):
+        from hawk_api.loras import load_config
+        mine = {"version": 2, "defaults": [{"name": "Minimax-h3_Singularity_64-fro95_lora.safetensors", "strength": 0.5}],
+                "presets": {}}
+        with open(self.path, "w", encoding="utf-8") as handle:
+            self.json.dump(mine, handle)
+        config = load_config(self.path)
+        self.assertEqual([spec.name for spec in config.defaults], ["Minimax-h3_Singularity_64-fro95_lora.safetensors"],
+                         "edits to a current catalogue are not overwritten")
+        self.assertFalse(os.path.isfile(self.path + ".bak"))

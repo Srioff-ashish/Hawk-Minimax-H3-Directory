@@ -159,7 +159,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         compact["planner_models"] = [model["id"] for model in options.get("planner_models") or []]
         return compact
 
-    @mcp.tool(description="LoRA files on the pod (models/loras), the default LoRAs the server adds (and whether they are present) and the presets from loras.json. Use a file name, or a unique part of it, in render_film settings.loras.")
+    @mcp.tool(description="Video LoRA files on the pod (the MiniMax H3 ones in models/loras), the default LoRAs the server adds to every render (and whether they are present) and the presets from loras.json. Use a file name, or a unique part of it, in render_film settings.loras. Krea 2 image LoRAs are not listed here and cannot be used in a render: image_options lists those, and they belong to generate_image.")
     async def list_loras() -> dict:
         options = await run(service.options())
         return {key: options[key] for key in ("available_loras", "default_loras", "lora_presets")}

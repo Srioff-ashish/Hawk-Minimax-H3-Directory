@@ -713,6 +713,35 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(failed["ok"])
         self.assertIn("seedream", failed["error"])
 
+    async def test_video_and_image_loras_stay_apart(self):
+        """One models/loras folder holds both families: a render must not reach for a Krea 2 LoRA, and the image
+        catalogue must not offer MiniMax H3 ones."""
+        files = self.fake.model_files
+        files["loras"] += ["krea2_mystic_xxx_v3.safetensors", "snofs_krea2.safetensors", "krea2_realism_v2.safetensors",
+                           "MysticXXX_MMH3-V4-ref2va.safetensors", "H3_Motion_BoosterV2.safetensors"]
+
+        listed = (await self.http.get("/v1/options")).json()["available_loras"]
+        self.assertIn("MysticXXX_MMH3-V4-ref2va.safetensors", listed, "video LoRAs are offered to renders")
+        self.assertNotIn("krea2_mystic_xxx_v3.safetensors", listed, "image LoRAs are not")
+        self.assertNotIn("snofs_krea2.safetensors", listed)
+
+        image_loras = [item["file"] for item in (await self.http.get("/v1/images/options")).json()["local"]["loras"]]
+        self.assertIn("krea2_mystic_xxx_v3.safetensors", image_loras)
+        self.assertNotIn("MysticXXX_MMH3-V4-ref2va.safetensors", image_loras, "video LoRAs stay out of images")
+        self.assertNotIn("H3_Motion_BoosterV2.safetensors", image_loras)
+
+        # "mystic" is ambiguous across the folder, but each family sees only its own file
+        render = await self.http.post("/v1/videos", json={"script": "A walk in the rain",
+                                                          "settings": {"loras": [{"name": "mystic"}]}})
+        self.assertEqual(render.status_code, 202, render.text)
+        applied = [lora["file"] for lora in render.json()["loras"]]
+        self.assertIn("MysticXXX_MMH3-V4-ref2va.safetensors", applied)
+
+        refused = await self.http.post("/v1/videos", json={"script": "A walk in the rain",
+                                                           "settings": {"loras": [{"name": "snofs_krea2.safetensors"}]}})
+        self.assertEqual(refused.status_code, 422, refused.text)
+        self.assertIn("image LoRA", refused.json()["error"], refused.text)
+
     async def test_local_krea_images_and_fallbacks(self):
         files = self.fake.model_files
         auto = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()

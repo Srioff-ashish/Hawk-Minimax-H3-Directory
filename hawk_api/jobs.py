@@ -385,8 +385,15 @@ class HawkService:
             self._model_cache[folder] = (time.monotonic(), files)
         return files
 
-    async def available_loras(self, refresh: bool = False) -> list[str]:
-        return await self.available_models("loras", refresh)
+    async def available_loras(self, refresh: bool = False, images: bool = False) -> list[str]:
+        """LoRA files for video renders. ComfyUI keeps one models/loras folder, so the Krea 2 image LoRAs sit next to
+        the MiniMax H3 ones; they are left out here (and video LoRAs never reach image generation, which matches
+        against its own catalogue). images=True returns the folder as it is."""
+        files = await self.available_models("loras", refresh)
+        if images:
+            return files
+        image_files = await self.local_images.lora_basenames()
+        return [f for f in files if os.path.basename(f).lower() not in image_files]
 
     async def choose_model(self, requested: str | None, folder: str, default: str) -> str:
         """A per-render base model or text encoder, matched like LoRA names."""
@@ -424,7 +431,21 @@ class HawkService:
             try:
                 return resolve_request(config, await self.available_loras(refresh=True), **kwargs)
             except LoraError as exc:
+                await self._reject_image_lora(specs, exc)
                 raise RequestError(str(exc), exc.details) from None
+
+    async def _reject_image_lora(self, specs, error) -> None:
+        """Say so plainly when a render asks for one of the Krea 2 image LoRAs instead of just "not found"."""
+        wanted = str(error.details.get("requested") or "").strip().lower()
+        if not wanted:
+            return
+        for name in await self.local_images.lora_basenames():
+            if wanted in (name, name.rsplit(".", 1)[0]) or (len(wanted) > 3 and wanted in name):
+                raise RequestError(
+                    f"{error.details['requested']!r} is a Krea 2 image LoRA; video renders use the MiniMax H3 LoRAs "
+                    "in models/loras. Use list_loras to see them, or generate_image for a picture.",
+                    {**error.details, "image_lora": name},
+                ) from None
 
     # ---------------------------------------------------------- info
 

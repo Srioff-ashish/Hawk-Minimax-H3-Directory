@@ -344,6 +344,11 @@ class LocalImageEngine:
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True))
         return items
 
+    async def lora_basenames(self) -> set[str]:
+        """File names in models/loras that belong to image generation: the curated catalogue plus any other Krea 2
+        file on the pod. Video renders exclude these, so the two model families never borrow each other's LoRAs."""
+        return {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue() if item.installed}
+
     async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS,
                             adult_default: bool = False
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:

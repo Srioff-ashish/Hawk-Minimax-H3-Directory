@@ -33,6 +33,8 @@ except ImportError as exc:  # pragma: no cover
 TOKEN = "test-token-0123456789abcdef"
 TURBO = "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
 REALISM = "styles/h3-realism-people-t2v-i2v-r2v.safetensors"
+MOTION = "H3_Motion_BoosterV2.safetensors"  # shipped defaults, added to every render
+AIO = "HMNSFW_AIO_V25.safetensors"
 PLAN_SCRIPT = json.dumps({
     "style": "Cinematic.",
     "segments": [
@@ -75,7 +77,7 @@ class FakeComfy:
         self.fail_image = None  # callable(prompt) -> error message for an image graph, or None
         self.log_lines = ["Starting server\n", "[Hawk H3] masked attention skips cuDNN on this Blackwell GPU\n"]
         self.model_files = {
-            "loras": [TURBO, REALISM],
+            "loras": [TURBO, REALISM, MOTION, AIO],
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
             "text_encoders": [CLIP_INT8, CLIP_BF16, "umt5_xxl.safetensors"],
         }
@@ -356,7 +358,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(response.status_code, 202, response.text)
         render = response.json()
-        self.assertEqual((render["steps"], [l["file"] for l in render["loras"]]), (8, [TURBO, REALISM]))
+        self.assertEqual((render["steps"], [l["file"] for l in render["loras"]]), (8, [TURBO, MOTION, AIO, REALISM]))
         self.assertIn("turbo", render["steps_reason"])
 
         render = await self.wait(render["id"])
@@ -364,7 +366,8 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         progress = render["progress"]
         self.assertEqual((progress["segments_done"], progress["segments_total"]), (2, 2), progress)
         self.assertEqual(progress["steps_total"], 5, "sampler steps are reported separately from segments")
-        self.assertEqual(render["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": REALISM, "strength": 0.7}])
+        self.assertEqual(render["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": MOTION, "strength": 1.0},
+                                                   {"file": AIO, "strength": 0.8}, {"file": REALISM, "strength": 0.7}])
         self.assertEqual(render["warnings"], [])
 
         # Same LoRAs again: ComfyUI serves the LoRA Stack from its cache and sends no report.
@@ -372,7 +375,8 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             "script": "Another walk", "settings": {"loras": [{"name": "realism", "strength": 0.7}]},
         })).json()["id"])
         self.assertEqual((again["status"], again["warnings"]), ("done", []), again)
-        self.assertEqual(again["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": REALISM, "strength": 0.7}])
+        self.assertEqual(again["loras_applied"], [{"file": TURBO, "strength": 1.0}, {"file": MOTION, "strength": 1.0},
+                                                  {"file": AIO, "strength": 0.8}, {"file": REALISM, "strength": 0.7}])
 
         async with httpx.AsyncClient() as browser:  # signed links need no token
             self.assertEqual((await browser.get(render["video_url"])).content, b"FINAL VIDEO BYTES")

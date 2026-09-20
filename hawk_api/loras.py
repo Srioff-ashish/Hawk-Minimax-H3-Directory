@@ -71,10 +71,23 @@ def parse_config(data, where: str = "loras.json") -> LoraConfig:
 
 def load_config(path: str) -> LoraConfig:
     """Read loras.json, creating it from deploy/loras.example.json on first use.
-    Read on every request so edits apply without restarting the gateway."""
+    Read on every request so edits apply without restarting the gateway. A newer catalogue shipped with the code
+    (a higher "version") replaces the copy, keeping the old one as loras.json.bak, so new defaults reach pods that
+    already have a loras.json. This mirrors the image catalogue in local_images.load_catalogue."""
     if not os.path.exists(path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         shutil.copyfile(EXAMPLE_CONFIG, path)
+    elif os.path.abspath(path) != os.path.abspath(EXAMPLE_CONFIG):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                stored = json.load(handle)
+            with open(EXAMPLE_CONFIG, "r", encoding="utf-8") as handle:
+                example = json.load(handle)
+            if int(example.get("version") or 1) > int(stored.get("version") or 1):
+                shutil.copyfile(path, path + ".bak")
+                shutil.copyfile(EXAMPLE_CONFIG, path)
+        except (OSError, ValueError, TypeError):
+            pass  # a broken or hand-written file is reported by the read below
     with open(path, "r", encoding="utf-8") as handle:
         try:
             data = json.load(handle)

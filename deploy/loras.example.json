@@ -1,13 +1,19 @@
 {
   "_comment": [
     "Copied to $DATA_DIR/loras.json on first start. Edit that copy; changes apply to the next request.",
-    "defaults: added to every render. required=true refuses renders when the file is missing on the pod.",
+    "version: a newer catalogue shipped with the code replaces the copy (the old one is kept as loras.json.bak).",
+    "defaults: added to every render. required=true refuses renders when the file is missing on the pod;",
+    "required=false skips it with a warning, so a pod without that file still renders.",
     "turbo=true (or 'turbo' in the file name) makes renders default to 8 steps instead of 30.",
     "presets: named extra sets a request picks with lora_preset.",
-    "name can be the exact path in models/loras, the file name, or a unique part of it."
+    "name can be the exact path in models/loras, the file name, or a unique part of it.",
+    "Only MiniMax H3 video LoRAs belong here: the Krea 2 image LoRAs live in image_loras.json."
   ],
+  "version": 2,
   "defaults": [
-    {"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", "strength": 1.0, "required": true, "turbo": true}
+    {"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", "strength": 1.0, "required": true, "turbo": true},
+    {"name": "H3_Motion_BoosterV2.safetensors", "strength": 1.0, "required": false},
+    {"name": "HMNSFW_AIO_V25.safetensors", "strength": 0.8, "required": false}
   ],
   "presets": {
     "realism": [
