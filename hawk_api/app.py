@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     drive = DriveBrowser(settings.drive_root)
     imports = ImportManager(service, drive)
     exporter = DriveExporter(service, drive)
+    service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
     mcp = build_mcp(service, drive=drive, imports=imports)
     mcp_app = mcp.streamable_http_app(
@@ -357,7 +358,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.put("/v1/drive/export", tags=["downloads"])
     async def drive_export_update(body: DriveExportSettings):
-        return exporter.save_settings(enabled=body.enabled, folder=body.folder, segments=body.segments)
+        return exporter.save_settings(enabled=body.enabled, folder=body.folder, segments=body.segments,
+                                     images=body.images, image_folder=body.image_folder)
 
     # ------------------------------------------------------------ prompts
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import mimetypes
 import os
 import shutil
@@ -16,6 +17,8 @@ import time
 import uuid
 
 from .jobs import HawkService, RequestError
+
+log = logging.getLogger("hawk_api.library")
 
 MEDIA_KINDS = ("image", "audio", "video")
 _EXTRA_TYPES = {".webp": "image/webp", ".m4a": "audio/mp4", ".opus": "audio/ogg", ".mkv": "video/x-matroska", ".heic": "image/heic"}
@@ -199,7 +202,8 @@ class ImportManager:
 DRIVE_ID_ATTRS = ("user.drive.id", "user.drive.item_id", "user.drive.file_id")
 DRIVE_ID_WAIT_SECONDS = 1800.0  # big videos can take a while to upload from the mount
 DRIVE_ID_POLL_SECONDS = 10.0
-EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False}
+EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False,
+                   "images": True, "image_folder": "Hawk H3/Images"}
 
 
 def drive_file_id(path: str) -> str | None:
@@ -250,17 +254,26 @@ class DriveExporter:
             pass
         return {**data, "mounted": self.browser.available, "root": self.browser.root}
 
-    def save_settings(self, *, enabled: bool | None = None, folder: str | None = None, segments: bool | None = None) -> dict:
+    def save_settings(self, *, enabled: bool | None = None, folder: str | None = None, segments: bool | None = None,
+                      images: bool | None = None, image_folder: str | None = None) -> dict:
         current = {k: v for k, v in self.settings().items() if k in EXPORT_DEFAULTS}
+        clean_folder = lambda value: "/".join(p for p in value.replace("\\", "/").split("/") if p and p not in (".", ".."))
         if enabled is not None:
             current["enabled"] = bool(enabled)
         if folder is not None:
-            clean = "/".join(part for part in folder.replace("\\", "/").split("/") if part and part not in (".", ".."))
+            clean = clean_folder(folder)
             if not clean:
                 raise RequestError("Give a Drive folder, e.g. Hawk H3/Videos.")
             current["folder"] = clean
         if segments is not None:
             current["segments"] = bool(segments)
+        if images is not None:
+            current["images"] = bool(images)
+        if image_folder is not None:
+            clean = clean_folder(image_folder)
+            if not clean:
+                raise RequestError("Give a Drive folder for images, e.g. Hawk H3/Images.")
+            current["image_folder"] = clean
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump(current, handle, indent=2)
@@ -305,6 +318,50 @@ class DriveExporter:
             raise
         except Exception as exc:
             self._set(job_id, status="failed", error=str(exc)[:300])
+
+    # --------------------------------------------------------- images
+
+    def schedule_assets(self, assets: list[dict]) -> bool:
+        """Copy freshly generated images into Drive, in the background. Never delays or fails the generation."""
+        config = self.settings()
+        if not config["images"] or not self.browser.available:
+            return False
+        ids = [a.get("id") for a in assets if a.get("id") and a.get("kind") == "image" and not a.get("duplicate")]
+        if not ids:
+            return False
+        task = asyncio.create_task(self.export_assets(ids))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return True
+
+    async def export_assets(self, asset_ids: list[str]) -> list[str]:
+        """One dated folder per day, the asset id in the name so two images of the same prompt never collide."""
+        config = self.settings()
+        written = []
+        for asset_id in asset_ids:
+            try:
+                asset = self.service.store.get_asset(asset_id)
+                if asset is None:
+                    continue
+                day = time.strftime("%Y-%m-%d", time.localtime(asset.get("created_at") or time.time()))
+                folder = f"{config['image_folder']}/{day}"
+                target_dir = os.path.join(self.browser.root, folder)
+                stem, ext = os.path.splitext(os.path.basename(asset["filename"]))
+                target = os.path.join(target_dir, f"{_slug(stem)[:60]}_{asset_id[:8]}{ext or '.png'}")
+                async with self._lock:  # one copy at a time, like the video export
+                    await asyncio.to_thread(os.makedirs, target_dir, exist_ok=True)
+                    local = self.service.local_asset_path(asset)
+                    if local:
+                        await asyncio.to_thread(shutil.copyfile, local, target)
+                    else:
+                        data = await self.service.asset_bytes(asset)
+                        await asyncio.to_thread(lambda: open(target, "wb").write(data))
+                written.append(f"{folder}/{os.path.basename(target)}")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # a Drive hiccup must never break image generation
+                log.warning("could not copy image %s to Drive: %s", asset_id, exc)
+        return written
 
     async def _export_files(self, job_id: str) -> str:
         job = self.service.get_job(job_id)

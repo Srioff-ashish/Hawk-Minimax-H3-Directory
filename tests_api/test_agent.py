@@ -751,7 +751,10 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         graph = list(self.fake.prompts.values())[-1]
         self.assertEqual(next(n["inputs"]["clip_name"] for n in graph.values() if n["class_type"] == "CLIPLoader"), "qwen3vl_4b_bf16.safetensors")
         files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
-        self.assertEqual([(c["lora_name"], c["strength_model"]) for c in chain], [("krea2_realism_v1.safetensors", 0.8), ("krea2_darkbrush.safetensors", 0.9)])
+        self.assertEqual([(c["lora_name"], c["strength_model"]) for c in chain],
+                         [("krea2_realism_v1.safetensors", 0.8), ("krea2_darkbrush.safetensors", 0.9),
+                          ("snofs_krea2.safetensors", 0.8), ("krea2_mystic_xxx_v3.safetensors", 0.5)],
+                         "the picked LoRAs, then the go-to adult pair that every local generation gets")
         self.assertEqual((nodes["KSampler"]["steps"], nodes["KSampler"]["cfg"], nodes["KSampler"]["scheduler"]), (8, 1.0, "simple"))
         self.assertEqual((nodes["EmptyLatentImage"]["width"], nodes["EmptyLatentImage"]["height"], nodes["EmptyLatentImage"]["batch_size"]), (1024, 1536, 2))
         self.assertTrue(nodes["CLIPTextEncode"]["text"].endswith(", muted minimalist sketch style"), "trigger word added")
@@ -1194,6 +1197,45 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         with open(path, "w") as handle:
             json.dump(data, handle)
         self.assertEqual(load_catalogue(path)[0].strength, 0.33, "edits to a current copy are kept")
+
+    async def test_local_generation_attaches_the_adult_pair_by_default(self):
+        from hawk_api.local_images import DEFAULT_ADULT_LORAS, LocalImageEngine
+
+        class Catalogue(LocalImageEngine):
+            def __init__(self, adult_default=True):
+                self.adult_default = adult_default
+                self.service = SimpleNamespace(available_models=self._files)
+
+            async def _files(self, _kind):
+                return list(DEFAULT_ADULT_LORAS) + ["krea2_realism_v2.safetensors"]
+
+            async def catalogue(self):
+                from hawk_api.local_images import ImageLora
+                return [ImageLora(file=DEFAULT_ADULT_LORAS[0], label="SNOFS", kind="adult", strength=0.8, installed=True),
+                        ImageLora(file=DEFAULT_ADULT_LORAS[1], label="Mystic XXX v3", kind="adult", strength=0.5, installed=True),
+                        ImageLora(file="krea2_nsfw_v4.safetensors", label="NSFW v4", kind="adult", strength=0.8, installed=True),
+                        ImageLora(file="krea2_realism_v2.safetensors", label="Realism v2", kind="realism", strength=0.7, installed=True)]
+
+        engine = Catalogue()
+        chosen, _, _ = await engine.resolve_loras(None, adult_default=True)
+        self.assertEqual([f for f, _ in chosen], list(DEFAULT_ADULT_LORAS), "nothing asked for: the go-to pair")
+        self.assertEqual([s for _, s in chosen], [0.8, 0.5], "at their recommended strengths")
+
+        chosen, _, _ = await engine.resolve_loras([{"name": "krea2_realism_v2.safetensors"}], adult_default=True)
+        self.assertEqual([f for f, _ in chosen], ["krea2_realism_v2.safetensors", *DEFAULT_ADULT_LORAS],
+                         "a realism pick keeps the pair too")
+
+        chosen, _, _ = await engine.resolve_loras([{"name": "krea2_nsfw_v4.safetensors"}], adult_default=True)
+        self.assertEqual([f for f, _ in chosen], ["krea2_nsfw_v4.safetensors"], "an explicit adult pick wins")
+
+        chosen, _, _ = await engine.resolve_loras(None, adult_default=False)
+        self.assertEqual(chosen, [], "edits and a disabled default get nothing")
+
+        # a LoRA nobody asked for must not quietly change steps, scheduler or sampler for ordinary images
+        _, used, _ = await engine.resolve_loras([{"name": "krea2_realism_v2.safetensors"}], adult_default=True)
+        self.assertEqual([i.automatic for i in used], [False, True, True])
+        _, used, _ = await engine.resolve_loras([{"name": "snofs_krea2.safetensors"}], adult_default=True)
+        self.assertEqual([i.automatic for i in used], [False], "asking for it yourself keeps its sampler hints")
 
     def test_a_third_character_is_not_talked_over(self):
         """Two characters naming each other every line used to lock the third out of the conversation."""

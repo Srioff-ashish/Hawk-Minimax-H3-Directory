@@ -175,6 +175,35 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual((await self.http.put("/v1/drive/export", json={"folder": "/.."})).status_code, 422)
 
+    async def test_generated_images_are_copied_to_drive(self):
+        from hawk_api.jobs import HawkService
+        from hawk_api.library import DriveBrowser, DriveExporter
+
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4
+        upload = await self.http.post("/v1/assets", files={"files": ("gen_emerald_lehenga_1.png", png, "image/png")},
+                                      data={"collection": "Generated"})
+        self.assertEqual(upload.status_code, 201, upload.text)
+        asset = upload.json()["assets"][0]
+
+        service = HawkService(self.settings)
+        exporter = DriveExporter(service, DriveBrowser(self.drive))
+        settings = exporter.settings()
+        self.assertEqual((settings["images"], settings["image_folder"]), (True, "Hawk H3/Images"))
+
+        written = await exporter.export_assets([asset["id"]])
+        self.assertEqual(len(written), 1, written)
+        day = time.strftime("%Y-%m-%d")
+        self.assertTrue(written[0].startswith(f"Hawk H3/Images/{day}/"), written[0])
+        self.assertTrue(written[0].endswith(f"_{asset['id'][:8]}.png"), "the asset id keeps two images apart")
+        with open(os.path.join(self.drive, written[0]), "rb") as handle:
+            self.assertEqual(handle.read(), png)
+
+        # the folder is configurable, and images can be turned off on their own
+        updated = (await self.http.put("/v1/drive/export", json={"images": False, "image_folder": "../Art//Stills"})).json()
+        self.assertEqual((updated["images"], updated["image_folder"], updated["enabled"]), (False, "Art/Stills", True))
+        self.assertFalse(exporter.schedule_assets([dict(asset, kind="image")]), "images off: nothing is copied")
+        self.assertEqual((await self.http.put("/v1/drive/export", json={"image_folder": "/.."})).status_code, 422)
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
     async def test_job_thumbnail(self):
         clip = os.path.join(self.tmp, "clip.mp4")

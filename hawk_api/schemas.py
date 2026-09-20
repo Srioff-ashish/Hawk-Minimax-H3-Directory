@@ -149,6 +149,8 @@ class DriveExportSettings(BaseModel):
     enabled: bool | None = Field(None, description="Copy every finished render into Google Drive.")
     folder: str | None = Field(None, description="Folder inside My Drive, e.g. Hawk H3/Videos (a dated subfolder is added).")
     segments: bool | None = Field(None, description="Also copy each segment file.")
+    images: bool | None = Field(None, description="Copy every generated image into Google Drive.")
+    image_folder: str | None = Field(None, description="Folder inside My Drive for generated images, e.g. Hawk H3/Images (a dated subfolder is added).")
 
 
 class PromptIn(BaseModel):

@@ -112,7 +112,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         "(e.g. 2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
         "$0.032, a little below Pro in quality. Results carry cost_usd for Atlas images. the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
         "[{name, strength}] from image_options, e.g. a realism or detail LoRA for photo portraits, a style LoRA for a look; follow "
-        "the GO-TO / AVOID notes; up to 3 adult LoRAs, only for fictional adults the user explicitly asked for. "
+        "the GO-TO / AVOID notes. The GO-TO adult pair (SNOFS + Mystic XXX) is attached to local generations automatically; naming your own adult LoRA replaces it, up to 3. "
         "Edits: with reference_asset_ids, 'auto' / 'local' use Krea 2 Identity Edit on this GPU when installed and idle (free; "
         "1 image, or 2: the scene first, then the person to place in it; plain-English instructions like 'Change her outfit "
         "to a red raincoat', 'Place this person at the cafe table'; ref_boost is the likeness dial: 4 default, 1 looser, "

@@ -340,6 +340,9 @@ def _combo_options(info: dict, name: str) -> list:
 
 
 class HawkService:
+    #: Set by create_app when Google Drive is mounted: generated images are copied there in the background.
+    drive_exporter = None
+
     def __init__(self, settings: Settings, store: Store | None = None, comfy: ComfyClient | None = None):
         self.settings = settings
         self.store = store or Store(settings.db_path)
@@ -891,7 +894,9 @@ class HawkService:
                 tags=["generated", engine_tag], source=source,
             )
             assets.append(self.asset_view(asset))
-        result = {"model": model, "engine": engine_tag, "assets": assets}
+        # create_app sets drive_exporter: new images are copied into Drive in the background, like finished renders
+        to_drive = bool(self.drive_exporter and self.drive_exporter.schedule_assets(assets))
+        result = {"model": model, "engine": engine_tag, "assets": assets, "saving_to_drive": to_drive}
         if notes:
             result["note"] = " ".join(notes)
         if tried:

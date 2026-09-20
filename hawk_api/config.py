@@ -53,6 +53,9 @@ class Settings:
     krea_unet: str = "krea2_turbo_fp8_scaled.safetensors"
     krea_clip: str = "qwen3vl_4b_fp8_scaled.safetensors"
     krea_vae: str = "qwen_image_vae.safetensors"
+    #: Local Krea 2 text-to-image attaches the go-to adult pair (SNOFS + Mystic XXX) unless the request names its
+    #: own adult LoRA. HAWK_KREA_ADULT_DEFAULT=0 turns it off; edits of uploaded photos never get them.
+    krea_adult_default: bool = True
     #: ComfyUI's input folder on this machine; imports copy files straight into it when set.
     comfy_input_dir: str = ""
     #: ComfyUI's output folder on this machine; videos are then served straight from disk (with byte ranges).
@@ -106,6 +109,7 @@ class Settings:
             krea_unet=_env("HAWK_KREA_UNET", cls.krea_unet),
             krea_clip=_env("HAWK_KREA_CLIP", cls.krea_clip),
             krea_vae=_env("HAWK_KREA_VAE", cls.krea_vae),
+            krea_adult_default=_env("HAWK_KREA_ADULT_DEFAULT", "1") not in ("0", "false", "no", "off"),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),
             drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),

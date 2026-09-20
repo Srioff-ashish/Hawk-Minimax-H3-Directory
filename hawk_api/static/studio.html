@@ -971,6 +971,9 @@
             <div class="field"><label class="label" for="driveExportFolder">Drive folder</label>
               <input class="input" id="driveExportFolder" placeholder="Hawk H3/Videos"><span class="hint">Inside My Drive. Videos go into a dated subfolder.</span></div>
             <label class="check"><input type="checkbox" id="driveExportSegments"> Also copy segment files</label>
+            <label class="check"><input type="checkbox" id="driveExportImages"> Copy every generated image to Google Drive</label>
+            <div class="field"><label class="label" for="driveExportImageFolder">Drive folder for images</label>
+              <input class="input" id="driveExportImageFolder" placeholder="Hawk H3/Images"><span class="hint">Inside My Drive. Images go into a dated subfolder.</span></div>
             <div class="row"><button class="btn btn-sm btn-primary" id="driveExportSave" type="button">Save</button><span class="hint" id="driveExportHint"></span></div>
           </div>
         </section>
@@ -3019,6 +3022,8 @@
     $("driveExportEnabled").checked = settings.enabled;
     $("driveExportFolder").value = settings.folder;
     $("driveExportSegments").checked = settings.segments;
+    $("driveExportImages").checked = settings.images;
+    $("driveExportImageFolder").value = settings.image_folder || "";
     $("driveExportHint").textContent = settings.mounted ? "" : "Mount Drive in the Colab notebook to turn this on.";
   }
   async function loadDriveExport() {
@@ -3028,7 +3033,8 @@
   $("driveExportSave").onclick = async () => {
     try {
       paintDriveExport(await api("/v1/drive/export", { method: "PUT", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ enabled: $("driveExportEnabled").checked, folder: $("driveExportFolder").value.trim() || "Hawk H3/Videos", segments: $("driveExportSegments").checked }) }));
+        body: JSON.stringify({ enabled: $("driveExportEnabled").checked, folder: $("driveExportFolder").value.trim() || "Hawk H3/Videos", segments: $("driveExportSegments").checked,
+          images: $("driveExportImages").checked, image_folder: $("driveExportImageFolder").value.trim() || "Hawk H3/Images" }) }));
       toast("Delivery settings saved");
     } catch (error) { toast("Could not save", error.message, "bad"); }
   };

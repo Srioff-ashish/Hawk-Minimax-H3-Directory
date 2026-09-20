@@ -64,6 +64,9 @@ def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | N
     return min(matches, key=lambda name: (rank(name), name)) if matches else None
 MAX_ADULT_LORAS = 3  # adult LoRAs one image may stack (SNOFS + Mystic XXX is the go-to pair)
 ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to over-cook Turbo
+# Local Krea 2 text-to-image attaches the go-to adult pair by default: base Krea 2 is coy without them. A request
+# that names its own adult LoRAs keeps those instead, and edits never get them (check_edit refuses them on uploads).
+DEFAULT_ADULT_LORAS = ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors")
 
 # Local generation has no provider-side moderation, so refuse prompts that point at minors.
 _MINOR = re.compile(
@@ -98,6 +101,7 @@ class ImageLora:
     scheduler: str | None = None
     sampler: str | None = None
     installed: bool = False
+    automatic: bool = False  # attached by default (the adult pair), not asked for: its sampler hints don't take over
 
     def view(self) -> dict:
         data = {k: v for k, v in self.__dict__.items() if v not in (None, "")}
@@ -111,6 +115,21 @@ class LocalResult:
     loras: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     warnings: list[str] = field(default_factory=list)
+
+
+def _names_adult(requested: list[dict], items: list) -> bool:
+    """True when the request already picks an adult LoRA, so the default pair is left out."""
+    for spec in requested:
+        key = str(spec.get("name") or "").strip().lower()
+        if not key:
+            continue
+        for item in items:
+            if getattr(item, "kind", "") != "adult":
+                continue
+            file = item.file.lower()
+            if key in (file, file.rsplit(".", 1)[0], item.label.lower()) or key in file:
+                return True
+    return False
 
 
 def check_prompt(prompt: str) -> None:
@@ -271,6 +290,7 @@ class LocalImageEngine:
         self.settings = service.settings
         self.path = os.path.join(self.settings.data_dir, "image_loras.json")
         self.boost_broken = False  # the likeness boost hit the Blackwell cuDNN error: edits run at 1.0 until restart
+        self.adult_default = getattr(self.settings, "krea_adult_default", True)  # the go-to pair on every generation
 
     # ------------------------------------------------------------ status
 
@@ -324,11 +344,19 @@ class LocalImageEngine:
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True))
         return items
 
-    async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS
+    async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS,
+                            adult_default: bool = False
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:
+        requested = list(requested or [])
+        items = [item for item in await self.catalogue() if item.installed]
+        automatic = set()
+        if adult_default and not _names_adult(requested, items):
+            # only what is actually installed, so a pod without the pair still generates
+            automatic = {name for name in DEFAULT_ADULT_LORAS
+                         if any(i.file == name or i.file.endswith("/" + name) for i in items)}
+            requested += [{"name": name} for name in DEFAULT_ADULT_LORAS if name in automatic]
         if not requested:
             return [], [], []
-        items = [item for item in await self.catalogue() if item.installed]
         files = await self.service.available_models("loras")
         chosen: list[tuple[str, float]] = []
         used: list[ImageLora] = []
@@ -345,6 +373,7 @@ class LocalImageEngine:
             strength = float(spec["strength"]) if spec.get("strength") is not None else item.strength
             if strength == 0:
                 continue
+            item.automatic = item.file.rsplit("/", 1)[-1] in automatic
             chosen.append((path, strength))
             used.append(item)
         adult = [(item, strength) for item, (_, strength) in zip(used, chosen) if item.kind == "adult"]
@@ -371,13 +400,15 @@ class LocalImageEngine:
             raise LocalImageError("Krea 2 is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
         if status["busy"] and not wait_if_busy:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
-        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)))
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
+                                                          adult_default=self.adult_default)
         width, height = parse_size(size)
         text = prompt.strip()
         for item in used:  # trigger words go in automatically
             if item.trigger and item.trigger.lower() not in text.lower():
                 text = f"{text}, {item.trigger}"
-        hint = next((item for item in used if item.steps or item.scheduler or item.sampler), None)
+        asked = [item for item in used if not item.automatic]
+        hint = next((item for item in (asked or used) if item.steps or item.scheduler or item.sampler), None)
         files = status["files"]
         graph = krea_graph(
             text, width=width, height=height, n=max(1, min(4, n)), seed=seed if seed is not None else int.from_bytes(os.urandom(6), "big"),
