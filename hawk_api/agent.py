@@ -224,7 +224,7 @@ class AgentStore:
         id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS agent_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
-        content TEXT NOT NULL, created_at REAL NOT NULL);
+        content TEXT NOT NULL, created_at REAL NOT NULL, excluded INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS agent_messages_session ON agent_messages(session_id, id);
     """
 
@@ -234,6 +234,9 @@ class AgentStore:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(self._SCHEMA)
+            columns = {row[1] for row in self._db.execute("PRAGMA table_info(agent_messages)")}
+            if "excluded" not in columns:  # a database from before messages could be forgotten
+                self._db.execute("ALTER TABLE agent_messages ADD COLUMN excluded INTEGER NOT NULL DEFAULT 0")
             self._db.commit()
 
     def save_session(self, session: dict) -> dict:
@@ -272,13 +275,45 @@ class AgentStore:
             self._db.commit()
         return {"id": cursor.lastrowid, "role": role, "content": content, "created_at": created}
 
-    def messages(self, session_id: str, after: int = 0) -> list[dict]:
+    def messages(self, session_id: str, after: int = 0, include_hidden: bool = False) -> list[dict]:
+        """The chat's messages. Forgotten ones (excluded) are left out unless include_hidden: every caller that
+        builds a model prompt uses the default, so a forgotten message is never sent to a model again."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, role, content, created_at FROM agent_messages WHERE session_id = ? AND id > ? ORDER BY id",
+                "SELECT id, role, content, created_at, excluded FROM agent_messages WHERE session_id = ? AND id > ?"
+                + ("" if include_hidden else " AND excluded = 0") + " ORDER BY id",
                 (session_id, after),
             ).fetchall()
-        return [{"id": row[0], "role": row[1], "content": json.loads(row[2]), "created_at": row[3]} for row in rows]
+        messages = [{"id": row[0], "role": row[1], "content": json.loads(row[2]), "created_at": row[3]} for row in rows]
+        if include_hidden:
+            for message, row in zip(messages, rows):
+                message["excluded"] = bool(row[4])
+        return messages
+
+    def get_message(self, session_id: str, message_id: int) -> dict | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT id, role, content, created_at, excluded FROM agent_messages WHERE session_id = ? AND id = ?",
+                (session_id, message_id),
+            ).fetchone()
+        return {"id": row[0], "role": row[1], "content": json.loads(row[2]), "created_at": row[3],
+                "excluded": bool(row[4])} if row else None
+
+    def set_excluded(self, session_id: str, message_ids: list[int], value: bool) -> None:
+        with self._lock:
+            self._db.executemany(
+                "UPDATE agent_messages SET excluded = ? WHERE session_id = ? AND id = ?",
+                [(1 if value else 0, session_id, message_id) for message_id in message_ids],
+            )
+            self._db.commit()
+
+    def delete_messages(self, session_id: str, message_ids: list[int]) -> None:
+        with self._lock:
+            self._db.executemany(
+                "DELETE FROM agent_messages WHERE session_id = ? AND id = ?",
+                [(session_id, message_id) for message_id in message_ids],
+            )
+            self._db.commit()
 
 
 # ---------------------------------------------------------------- helpers
@@ -552,9 +587,79 @@ class AgentService:
             await asyncio.gather(task, return_exceptions=True)
         self.store.delete_session(session_id)
 
+    # ------------------------------------------------------- forgetting
+
+    def _forget_group(self, session_id: str, message_id: int) -> tuple[dict, list[int]]:
+        """A message and what belongs with it: an assistant reply takes the tool results it produced."""
+        target = self.store.get_message(session_id, message_id)
+        if target is None:
+            raise NotFound(f"Message {message_id} is not in this chat.")
+        ids = [message_id]
+        if target["role"] == "assistant":
+            for message in self.store.messages(session_id, after=message_id, include_hidden=True):
+                if message["role"] not in ("tool", "note"):
+                    break
+                if message["role"] == "tool":
+                    ids.append(message["id"])
+        return target, ids
+
+    def _rebuild_after_forgetting(self, session_id: str, ids: list[int]) -> bool:
+        """Compaction may already have folded these messages into the chat summary or a character's memory. Clear
+        whatever covers them, so the next call rebuilds it from what is left instead of repeating forgotten text."""
+        session = self.get_session(session_id)
+        oldest = min(ids)
+        rebuilt = False
+        if session.get("summary") and oldest <= session.get("summary_upto", 0):
+            session.update(summary="", summary_upto=0)
+            rebuilt = True
+        cast = [dict(member) for member in cast_of(session)]
+        for member in cast:
+            if member.get("memory") and oldest <= member.get("memory_upto", 0):
+                member.update(memory="", memory_upto=0)
+                rebuilt = True
+        if rebuilt:
+            session["cast"] = cast
+            self.store.save_session(session)
+        return rebuilt
+
+    def forget_message(self, session_id: str, message_id: int, mode: str = "hide") -> dict:
+        """Take a message out of the conversation the models see. "hide" keeps the bubble in Studio, greyed out and
+        restorable; "purge" removes it for good. An assistant reply takes its tool results with it."""
+        self.get_session(session_id)
+        if session_id in self._tasks:
+            raise Conflict("The agent is working; forget once it has finished.")
+        if mode not in ("hide", "purge"):
+            raise RequestError('mode must be "hide" or "purge".')
+        _, ids = self._forget_group(session_id, message_id)
+        rebuilt = self._rebuild_after_forgetting(session_id, ids)
+        if mode == "purge":
+            self.store.delete_messages(session_id, ids)
+        else:
+            self.store.set_excluded(session_id, ids, True)
+        return {"session": self.get_session(session_id), "forgotten": ids, "mode": mode, "rebuilt": rebuilt}
+
+    def restore_message(self, session_id: str, message_id: int) -> dict:
+        """Put a hidden message back into the conversation the models see."""
+        self.get_session(session_id)
+        if session_id in self._tasks:
+            raise Conflict("The agent is working; restore once it has finished.")
+        _, ids = self._forget_group(session_id, message_id)
+        self.store.set_excluded(session_id, ids, False)
+        return {"session": self.get_session(session_id), "restored": ids}
+
+    def forget_last(self, session_id: str) -> dict:
+        """The Forget last reply button: hide the newest reply and the tool results that came with it."""
+        self.get_session(session_id)
+        if session_id in self._tasks:  # checked before looking for a reply: a busy chat is a conflict, not a 404
+            raise Conflict("The agent is working; forget once it has finished.")
+        last = next((m for m in reversed(self.store.messages(session_id)) if m["role"] == "assistant"), None)
+        if last is None:
+            raise NotFound("There is no reply to forget in this chat yet.")
+        return self.forget_message(session_id, last["id"], "hide")
+
     def view(self, session_id: str, after: int = 0) -> dict:
         session = self.get_session(session_id)
-        messages = self.store.messages(session_id, after)
+        messages = self.store.messages(session_id, after, include_hidden=True)
         for message in messages:  # fresh signed thumbnails for attached files
             for attachment in message["content"].get("attachments") or [] if message["role"] == "user" else []:
                 asset = self.service.store.get_asset(attachment.get("asset_id", ""))

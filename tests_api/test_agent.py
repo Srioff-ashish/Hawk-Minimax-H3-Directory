@@ -1069,6 +1069,114 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         again = (await self.http.post(f"/v1/agent/sessions/{chat}/compact")).json()
         self.assertFalse(again["compacted"])
 
+    async def test_forgetting_a_reply_keeps_it_out_of_the_prompt_until_restored(self):
+        self.atlas.reply = lambda body: json.dumps({"say": "Nisha wore the emerald lehenga.", "actions": [], "done": True})
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "What did she wear?"})
+        view = await self.settle(chat)
+        reply = [m for m in view["messages"] if m["role"] == "assistant"][-1]
+
+        forgotten = await self.http.delete(f"/v1/agent/sessions/{chat}/messages/{reply['id']}")
+        self.assertEqual(forgotten.status_code, 200, forgotten.text)
+        self.assertEqual(forgotten.json()["forgotten"], [reply["id"]])
+        self.assertFalse(forgotten.json()["rebuilt"], "nothing was summarised yet")
+
+        view = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()
+        kept = next(m for m in view["messages"] if m["id"] == reply["id"])
+        self.assertTrue(kept["excluded"], "the bubble stays in Studio, marked")
+
+        self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": [], "done": True})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "and after that?"})
+        await self.settle(chat)
+        sent = "\n".join(m["content"] for m in self.atlas.requests[-1]["messages"])
+        self.assertNotIn("emerald lehenga", sent, "a forgotten reply is never sent again")
+        self.assertIn("What did she wear?", sent, "the rest of the chat is untouched")
+
+        restored = await self.http.post(f"/v1/agent/sessions/{chat}/messages/{reply['id']}/restore")
+        self.assertEqual(restored.status_code, 200, restored.text)
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "once more"})
+        await self.settle(chat)
+        self.assertIn("emerald lehenga", "\n".join(m["content"] for m in self.atlas.requests[-1]["messages"]))
+
+    async def test_forget_last_takes_the_tool_results_with_it_and_purge_removes_the_row(self):
+        def reply(body):
+            if assistant_turns(body):
+                return json.dumps({"say": "Here it is.", "actions": [], "done": True})
+            return json.dumps({"say": "Looking.", "actions": [{"tool": "list_references", "args": {}}]})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "references dikhao"})
+        view = await self.settle(chat)
+        with_tool = [m for m in view["messages"] if m["role"] == "assistant"][0]
+        tool_row = next(m for m in view["messages"] if m["role"] == "tool")
+
+        result = (await self.http.post(f"/v1/agent/sessions/{chat}/forget_last")).json()
+        self.assertEqual(result["forgotten"], [[m for m in view["messages"] if m["role"] == "assistant"][-1]["id"]])
+
+        forgotten = (await self.http.delete(f"/v1/agent/sessions/{chat}/messages/{with_tool['id']}")).json()
+        self.assertIn(tool_row["id"], forgotten["forgotten"], "a reply takes its tool results with it")
+        hidden = self.agent.store.messages(chat)
+        self.assertEqual([m["id"] for m in hidden if m["role"] in ("assistant", "tool")], [],
+                         "nothing the model said is left in the prompt")
+
+        purged = await self.http.delete(f"/v1/agent/sessions/{chat}/messages/{with_tool['id']}?mode=purge")
+        self.assertEqual(purged.status_code, 200, purged.text)
+        view = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()
+        self.assertNotIn(with_tool["id"], [m["id"] for m in view["messages"]], "purged rows are gone from Studio too")
+        self.assertNotIn(tool_row["id"], [m["id"] for m in view["messages"]])
+        self.assertEqual((await self.http.delete(f"/v1/agent/sessions/{chat}/messages/{with_tool['id']}")).status_code, 404)
+
+    async def test_forgetting_a_summarised_reply_rebuilds_the_summary(self):
+        self.agent.compact_tokens, self.agent.keep_messages = 1, 2
+
+        def reply(body):
+            if "response_format" not in body:
+                return "SUMMARY: talked about the emerald lehenga"
+            return json.dumps({"say": "Noted.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat()
+        for text in ("first", "second", "third"):
+            await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": text})
+            view = await self.settle(chat)
+        session = view["session"]
+        self.assertTrue(session["summary"], "the chat has been summarised")
+        old = next(m for m in view["messages"] if m["id"] <= session["summary_upto"] and m["role"] == "assistant")
+
+        result = (await self.http.delete(f"/v1/agent/sessions/{chat}/messages/{old['id']}")).json()
+        self.assertTrue(result["rebuilt"], "the summary covered it, so it is dropped")
+        self.assertEqual(result["session"]["summary"], "")
+        self.assertEqual(result["session"]["summary_upto"], 0)
+
+    async def test_forgetting_waits_for_the_agent_to_finish(self):
+        self.atlas.delay = 0.3
+        self.atlas.reply = lambda body: json.dumps({"say": "Working.", "actions": [{"tool": "list_references", "args": {}}]})
+        chat = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "go"})
+        await asyncio.sleep(0.2)
+        busy = await self.http.post(f"/v1/agent/sessions/{chat}/forget_last")
+        self.assertEqual(busy.status_code, 409)
+        await self.http.post(f"/v1/agent/sessions/{chat}/stop")
+        await self.settle(chat)
+
+    def test_databases_from_before_forgetting_still_open(self):
+        import sqlite3
+
+        from hawk_api.agent import AgentStore
+        path = os.path.join(tempfile.mkdtemp(), "old.sqlite3")
+        db = sqlite3.connect(path)
+        db.execute("CREATE TABLE agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, "
+                   "role TEXT NOT NULL, content TEXT NOT NULL, created_at REAL NOT NULL)")
+        db.execute("INSERT INTO agent_messages (session_id, role, content, created_at) VALUES ('s', 'user', '{}', 1)")
+        db.commit()
+        db.close()
+        store = AgentStore(path)  # migrates the column in
+        self.assertEqual([m["id"] for m in store.messages("s")], [1])
+        store.set_excluded("s", [1], True)
+        self.assertEqual(store.messages("s"), [])
+        self.assertTrue(store.messages("s", include_hidden=True)[0]["excluded"])
+
 
 class Pieces(unittest.IsolatedAsyncioTestCase):
     def test_image_lora_catalogue_upgrades(self):
@@ -1086,6 +1194,27 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         with open(path, "w") as handle:
             json.dump(data, handle)
         self.assertEqual(load_catalogue(path)[0].strength, 0.33, "edits to a current copy are kept")
+
+    def test_a_third_character_is_not_talked_over(self):
+        """Two characters naming each other every line used to lock the third out of the conversation."""
+        from hawk_api.cast_talk import next_speaker
+        cast = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        names = ["Nisha", "Sonia Mausi", "Ananya"]
+        spoke, index = [], 0
+        for _ in range(12):  # Nisha and Ananya keep addressing each other by name
+            said = "Ananya, dekh na" if index == 0 else "Nisha, tu bata"
+            index = next_speaker(cast, names, index, said, spoke)
+            spoke.append(index)
+        self.assertIn(1, spoke, "Sonia Mausi gets the floor")
+        gaps = [n for n, who in enumerate(spoke) if who == 1]
+        self.assertLessEqual(max(b - a for a, b in zip(gaps, gaps[1:])) if len(gaps) > 1 else gaps[0], 4,
+                             "and keeps getting it, at least every few turns")
+
+    def test_naming_still_decides_a_normal_turn(self):
+        from hawk_api.cast_talk import next_speaker
+        cast = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
+        names = ["Nisha", "Sonia Mausi", "Ananya"]
+        self.assertEqual(next_speaker(cast, names, 0, "Ananya, tera kya plan hai?", [1, 2, 0]), 2)
 
     def test_parse_reply(self):
         self.assertEqual(parse_reply('```json\n{"say": "a", "actions": [{"tool": "x"}]}\n```'),

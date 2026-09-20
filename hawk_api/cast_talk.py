@@ -16,6 +16,7 @@ MAX_FEELINGS = 6  # notes per relationship before they are condensed
 MERGED_FEELINGS = 3
 USER_KEY = "user"
 TURN_WORDS = 60  # a spoken turn stays short, like a real conversation
+STARVED_TURNS = 3  # passed over for longer than one rotation: this character speaks next, whoever was named
 
 CHARACTER_TURN_PROMPT = """You are {name}, one of the characters in a group chat. Stay fully in character.
 
@@ -96,13 +97,16 @@ def mentioned(text: str, cast: list[dict], names: list[str], exclude: int | None
 
 
 def next_speaker(cast: list[dict], names: list[str], last_index: int | None, last_text: str, spoke: list[int]) -> int:
-    """Who talks next: the character just named or asked; else whoever has waited longest (never the same twice)."""
-    named = mentioned(last_text, cast, names, exclude=last_index)
-    if named is not None:
-        return named
+    """Who talks next: the character just named or asked; else whoever has waited longest (never the same twice).
+    Naming yields to anyone passed over for more than a rotation, so two characters who keep naming each other
+    can't leave a third out of the conversation."""
     order = [i for i in range(len(cast)) if i != last_index] or [0]
     waited = {i: (len(spoke) - 1 - max((n for n, s in enumerate(spoke) if s == i), default=-10_000)) for i in order}
-    return max(order, key=lambda i: (waited[i], -i))
+    starved = [i for i in order if waited[i] >= max(STARVED_TURNS, len(cast))]  # never spoken counts as starved
+    named = mentioned(last_text, cast, names, exclude=last_index)
+    if named is not None and (not starved or named in starved):
+        return named
+    return max(starved or order, key=lambda i: (waited[i], -i))
 
 
 def parse_turn(text: str) -> dict | None:

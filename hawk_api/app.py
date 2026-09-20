@@ -437,6 +437,25 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def agent_stop(session_id: str):
         return agent.public(agent.request_stop(session_id))
 
+    @app.delete("/v1/agent/sessions/{session_id}/messages/{message_id}", tags=["agent"])
+    async def agent_forget(session_id: str, message_id: int, mode: str = "hide"):
+        """Take a message out of what the models see: mode "hide" keeps a greyed-out bubble you can restore,
+        "purge" removes it for good. An assistant reply takes its tool results with it."""
+        result = agent.forget_message(session_id, message_id, mode)
+        return {**result, "session": agent.public(result["session"])}
+
+    @app.post("/v1/agent/sessions/{session_id}/messages/{message_id}/restore", tags=["agent"])
+    async def agent_restore(session_id: str, message_id: int):
+        """Put a hidden message back into the conversation the models see."""
+        result = agent.restore_message(session_id, message_id)
+        return {**result, "session": agent.public(result["session"])}
+
+    @app.post("/v1/agent/sessions/{session_id}/forget_last", tags=["agent"])
+    async def agent_forget_last(session_id: str):
+        """Hide the newest reply and the tool results that came with it."""
+        result = agent.forget_last(session_id)
+        return {**result, "session": agent.public(result["session"])}
+
     @app.delete("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_delete(session_id: str):
         await agent.delete_session(session_id)

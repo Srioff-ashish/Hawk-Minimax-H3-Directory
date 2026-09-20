@@ -299,9 +299,14 @@
   .agent-layout > * { min-width: 0; min-height: 0; }
   .agent-list { display: flex; flex-direction: column; overflow: hidden; }
   .agent-sessions { flex: 1; overflow: auto; padding: 6px; display: grid; gap: 2px; align-content: start; }
-  .agent-session { display: grid; gap: 2px; text-align: left; padding: 9px 10px; border-radius: 8px; border: 0; background: none; cursor: pointer; color: var(--ink); }
+  .agent-session { display: grid; gap: 2px; text-align: left; padding: 9px 30px 9px 10px; border-radius: 8px; border: 0; background: none; cursor: pointer; color: var(--ink); width: 100%; }
   .agent-session:hover { background: var(--surface-2); }
   .agent-session[aria-current="true"] { background: var(--brand-soft); }
+  .agent-session-row { position: relative; display: block; }
+  .row-del { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); border: 0; background: none; cursor: pointer;
+    color: var(--muted); font-size: 16px; line-height: 1; padding: 4px 6px; border-radius: 6px; opacity: 0; }
+  .agent-session-row:hover .row-del, .agent-session-row:focus-within .row-del { opacity: 1; }
+  .row-del:hover { background: var(--bad-soft, var(--surface-2)); color: var(--bad, var(--ink)); }
   .agent-session strong { font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
   .agent-session span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .agent-chat { display: flex; flex-direction: column; overflow: hidden; }
@@ -329,6 +334,12 @@
   .bubble.user a { color: inherit; text-decoration: underline; }
   .msg-meta { font-size: 11.5px; color: var(--muted); display: flex; gap: 6px; align-items: center; }
   .msg-meta.user { align-self: flex-end; }
+  .msg-actions { display: inline-flex; gap: 2px; opacity: 0; transition: opacity .12s; }
+  .msg-meta:hover .msg-actions, .msg-actions:focus-within { opacity: 1; }
+  .msg-actions button { border: 0; background: none; cursor: pointer; color: var(--muted); font: inherit; padding: 1px 5px; border-radius: 6px; }
+  .msg-actions button:hover { background: var(--surface-2); color: var(--ink); }
+  .forgotten-tag { font-style: italic; }
+  .bubble.forgotten { opacity: .5; border: 1px dashed var(--muted); box-shadow: none; }
   .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
   .who svg { width: 18px; height: 18px; border-radius: 5px; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; background: var(--surface-2); border: 1px solid var(--line); }
@@ -780,6 +791,8 @@
             </span>
             <span class="hint" id="agentUsage" title="Model tokens and estimated cost for this chat"></span>
             <button class="btn btn-sm" id="agentCompact" type="button" title="Summarise all but the last few messages, so every later call sends fewer tokens. The full chat stays here.">🗜 Compact</button>
+            <button class="btn btn-sm" id="agentForgetLast" type="button" title="Hide the newest reply (and its tool results) from the model. It stays here, greyed out, and you can restore it.">🙈 Forget last reply</button>
+            <button class="btn btn-sm btn-ghost" id="agentDelete" type="button" title="Delete this chat and all its messages">🗑 Delete chat</button>
           </div>
           <div class="agent-persona" id="agentPersonaPanel" hidden>
             <label class="label" for="agentPersona">Who should the agent be? It shapes its tone and creative choices; safety rules always apply.</label>
@@ -3097,16 +3110,50 @@
     const running = agent.sessions.filter((s) => s.status === "running" || s.status === "stopping").length;
     $("agentBusy").hidden = !running;
     $("agentSessions").innerHTML = agent.sessions.length ? agent.sessions.map((s) => `
+      <div class="agent-session-row">
       <button class="agent-session" type="button" data-session="${s.id}" aria-current="${s.id === agent.current}">
         <div class="row-line">${castStack(s, "sm") ? `<span class="cast-stack">${castStack(s, "sm")}</span>` : ""}<div style="display:grid;gap:2px;min-width:0">
         <strong>${s.status === "running" || s.status === "stopping" ? '<span class="dot ok" style="box-shadow:none"></span>' : ""}${esc(s.title)}</strong>
         <span>${castOf(s).length > 1 ? `${esc(castOf(s).map((m) => m.display_name).join(" & "))} · ` : s.persona_name ? `${esc(s.persona_name)} · ` : ""}${esc((s.model || "").replace(/^[^/]+\//, ""))} · ${ago(s.updated_at)}</span></div></div>
-      </button>`).join("") : `<p class="hint" style="padding:10px;margin:0">No chats yet.</p>`;
+      </button>
+      <button class="row-del" type="button" data-del="${s.id}" title="Delete chat" aria-label="Delete ${esc(s.title)}">×</button>
+      </div>`).join("") : `<p class="hint" style="padding:10px;margin:0">No chats yet.</p>`;
   }
   $("agentSessions").addEventListener("click", (event) => {
+    const remove = event.target.closest("[data-del]");
+    if (remove) { event.stopPropagation(); deleteAgentChat(remove.dataset.del); return; }
     const item = event.target.closest("[data-session]");
     if (item) location.hash = `#agent/${item.dataset.session}`;
   });
+
+  async function deleteAgentChat(id) {
+    const session = agent.sessions.find((s) => s.id === id);
+    if (!session || !confirm(`Delete "${session.title}" permanently? The whole chat and its messages go.`)) return;
+    try {
+      if (session.status === "running" || session.status === "stopping") await post(`/v1/agent/sessions/${id}/stop`, {});
+      await api(`/v1/agent/sessions/${id}`, { method: "DELETE" });
+    } catch (error) {
+      return toast(error.status === 409 ? "The agent is still working" : "Could not delete the chat",
+        error.status === 409 ? "Wait for it, or press Stop." : error.message, "bad");
+    }
+    agent.sessions = agent.sessions.filter((s) => s.id !== id);
+    toast("Chat deleted", esc(session.title), "", 3000);
+    if (agent.current === id) {
+      clearAgentDraft(id);
+      agent.current = null;
+      storage.remove("hawkH3AgentChat");
+      const next = agent.sessions[0];
+      if (next) { history.replaceState(null, "", `#agent/${next.id}`); await openAgentSession(next.id); }
+      else {  // no chats left: the same empty state showAgentPage falls back to
+        history.replaceState(null, "", "#agent");
+        agent.lastId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+        renderAgentEmpty();
+        $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
+        $("agentForgetLast").disabled = $("agentDelete").disabled = $("agentCompact").disabled = true;
+      }
+    }
+    renderAgentSessions();
+  }
 
   function renderAgentEmpty() {
     $("agentThread").innerHTML = `<div class="agent-empty">
@@ -3191,6 +3238,8 @@
     $("agentUsage").title = `Model tokens and estimated cost for this chat: ${(usage.prompt_tokens || 0).toLocaleString()} in`
       + `${usage.cached_tokens ? ` (${usage.cached_tokens.toLocaleString()} cached)` : ""}, ${(usage.completion_tokens || 0).toLocaleString()} out, ${usage.steps || 0} calls`;
     $("agentCompact").disabled = running;
+    $("agentForgetLast").disabled = running;
+    $("agentDelete").disabled = false;
     if (agent.modelsLoaded && $("agentModel").value !== session.model) fillAgentModels();
     renderAgentSessions();
     const typing = $("agentThread").querySelector(".typing");
@@ -3225,6 +3274,38 @@
     const open = event.target.closest("[data-open-job]");
     if (open) openDrawer(open.dataset.openJob);
   });
+  $("agentThread").addEventListener("click", (event) => {
+    const forget = event.target.closest("[data-forget]");
+    const purge = event.target.closest("[data-purge]");
+    const restore = event.target.closest("[data-restore]");
+    if (forget) forgetAgentMessage(forget.dataset.forget, "hide");
+    else if (purge && confirm("Delete this message permanently? It goes from the chat and from the model's context.")) forgetAgentMessage(purge.dataset.purge, "purge");
+    else if (restore) forgetAgentMessage(restore.dataset.restore, "restore");
+  });
+
+  async function reloadAgentThread() {  // the ?after= poll never revisits older messages, so redraw from the start
+    agent.lastId = 0;
+    agent.rendered.clear();
+    agent.jobCards.clear();
+    $("agentThread").innerHTML = "";
+    await pollAgent();
+  }
+
+  async function forgetAgentMessage(messageId, mode) {
+    const id = agent.current;
+    try {
+      const result = mode === "restore"
+        ? await post(`/v1/agent/sessions/${id}/messages/${messageId}/restore`, {})
+        : await api(`/v1/agent/sessions/${id}/messages/${messageId}?mode=${mode}`, { method: "DELETE" });
+      await reloadAgentThread();
+      const what = mode === "restore" ? "Restored" : mode === "purge" ? "Message deleted" : "Forgotten";
+      toast(what, result.rebuilt ? "The chat summary and character memories will be rebuilt without it on the next reply."
+        : mode === "hide" ? "The model won't see it again. Hover the bubble to restore it." : "", "", 5000);
+    } catch (error) {
+      toast(error.status === 409 ? "The agent is still working" : "Could not do that",
+        error.status === 409 ? "Wait for it, or press Stop." : error.message, "bad");
+    }
+  }
 
   // Each character's face and name on their lines: "Maya" with her avatar, else the Hawk logo and "Agent".
   const castOf = (session = currentSession()) => (session?.cast?.length ? session.cast : []);
@@ -3281,21 +3362,34 @@
     const thread = $("agentThread");
     thread.querySelector(".agent-empty")?.remove();
     const typing = thread.querySelector(".typing");
-    const add = (html) => { if (typing) typing.insertAdjacentHTML("beforebegin", html); else thread.insertAdjacentHTML("beforeend", html); };
+    const tag = ` data-message="${message.id}"`;  // so Forget, Restore and Delete can find every part of a message
+    const add = (html) => {
+      const marked = html.replace(/<div class="(msg-meta|bubble|note-line)/g, `<div${tag} class="$1`)
+                         .replace(/<details class="tool-card"/g, `<details${tag} class="tool-card"`);
+      if (typing) typing.insertAdjacentHTML("beforebegin", marked); else thread.insertAdjacentHTML("beforeend", marked);
+    };
     const c = message.content || {};
     const time = new Date(message.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const forgotten = message.excluded ? " forgotten" : "";
+    // Forget hides a message from the model but keeps it here; Delete removes it for good.
+    const actions = (role) => role === "user" || role === "assistant" ? `<span class="msg-actions">`
+      + (message.excluded
+        ? `<button type="button" data-restore="${message.id}" title="Send this to the model again">↩ Restore</button>`
+        : `<button type="button" data-forget="${message.id}" title="Keep it here, but stop sending it to the model">🙈 Forget</button>`)
+      + `<button type="button" data-purge="${message.id}" title="Delete this message for good">🗑</button></span>`
+      + (message.excluded ? `<span class="forgotten-tag">not sent to the model</span>` : "") : "";
     if (message.role === "user") {
       const attachments = c.attachments || [];
       const images = attachments.filter((f) => f.thumb_url).map((f) => `<a href="${esc(f.file_url || f.thumb_url)}" target="_blank" rel="noopener" title="${esc(f.filename)} · ${esc(f.asset_id)}"><img class="att-thumb" src="${esc(f.thumb_url)}" alt="${esc(f.filename)}" loading="lazy"></a>`).join("");
       const others = attachments.filter((f) => !f.thumb_url).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
       const whisperTo = c.private_to ? castOf().find((m) => m.id === c.private_to)?.display_name || "one character" : "";
-      add(`<div class="msg-meta user">${whisperTo ? `<span class="whisper-tag">🤫 whispered to ${esc(whisperTo)}</span> · ` : ""}You · ${time}</div><div class="bubble user${whisperTo ? " private" : ""}">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
+      add(`<div class="msg-meta user">${whisperTo ? `<span class="whisper-tag">🤫 whispered to ${esc(whisperTo)}</span> · ` : ""}You · ${time}${actions("user")}</div><div class="bubble user${whisperTo ? " private" : ""}${forgotten}">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
       const secret = c.private_to ? `<span class="whisper-tag"> · 🤫 private</span>` : "";
       const toWho = (to) => to && !/^(all|everyone)$/i.test(to) ? ` → ${esc(/^(user|you)$/i.test(to) ? "you" : to)}` : "";
-      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}</div><div class="bubble agent${c.private_to ? " private" : ""}">${linkify(line.say)}</div>`));
-      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}</div><div class="bubble agent">${linkify(c.say)}</div>`);
+      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}${i ? "" : actions("assistant")}</div><div class="bubble agent${c.private_to ? " private" : ""}${forgotten}">${linkify(line.say)}</div>`));
+      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}${actions("assistant")}</div><div class="bubble agent${forgotten}">${linkify(c.say)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
       const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;
@@ -3587,6 +3681,18 @@
     try { updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/stop`, {})); toast("Stopping after the current step", "", "warn", 3000); }
     catch (error) { toast("Could not stop", error.message, "bad"); }
   };
+  $("agentForgetLast").onclick = async () => {
+    try {
+      const result = await post(`/v1/agent/sessions/${agent.current}/forget_last`, {});
+      await reloadAgentThread();
+      toast("Last reply forgotten", result.rebuilt ? "The chat summary and character memories will be rebuilt without it on the next reply."
+        : "The model won't see it again. Hover the bubble to restore it.", "", 5000);
+    } catch (error) {
+      toast(error.status === 409 ? "The agent is still working" : "Could not forget it",
+        error.status === 409 ? "Wait for it, or press Stop." : error.message, "bad");
+    }
+  };
+  $("agentDelete").onclick = () => deleteAgentChat(agent.current);
 
   async function showAgentPage(sessionId) {
     await loadAgentModels();
@@ -3599,6 +3705,7 @@
       agent.current = null;
       renderAgentEmpty();
       $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
+      $("agentForgetLast").disabled = $("agentDelete").disabled = $("agentCompact").disabled = true;
       fillAgentModels();
     }
   }
