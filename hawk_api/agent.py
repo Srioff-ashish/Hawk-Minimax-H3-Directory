@@ -1024,20 +1024,21 @@ class AgentService:
 
     def _take_ownership(self, session: dict, action: dict, result, asked_by: str = "") -> dict | None:
         """Mark the assets (and the render job) a call produced as that character's own."""
-        owner = self._owner_for(session, action, asked_by)
-        if not owner or not isinstance(result, dict):
+        if not isinstance(result, dict):
             return None
-        for asset in result.get("assets") or []:
-            asset_id = asset.get("id") or asset.get("asset_id")
-            if not asset_id:
-                continue
+        assets = [a for a in result.get("assets") or [] if a.get("id") or a.get("asset_id")]
+        job = result["id"] if result.get("kind") in ("plan", "render") and result.get("id") else None
+        owner = self._owner_for(session, action, asked_by) if (assets or job) else None
+        if not owner:  # a call that made nothing (inspect_image, list_references) belongs to nobody
+            return None
+        for asset in assets:
             try:
-                self.service.update_asset(asset_id, owner=owner)
+                self.service.update_asset(asset.get("id") or asset["asset_id"], owner=owner)
                 asset["by"] = owner
             except (NotFound, RequestError):
                 continue
-        if result.get("kind") in ("plan", "render") and result.get("id"):
-            self.service.set_job_owner(result["id"], owner)
+        if job:
+            self.service.set_job_owner(job, owner)
         return owner
 
 

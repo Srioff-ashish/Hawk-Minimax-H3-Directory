@@ -735,6 +735,10 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored["by"]["name"], "Ananya")
         self.assertIn("by ananya", [t.lower() for t in stored["tags"]], "and it is findable in the library")
 
+        inspected = [m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] != "generate_image"]
+        self.assertTrue(all("by" not in m["content"] for m in inspected),
+                        "a call that makes nothing belongs to nobody")
+
         # a picture of several characters: one of the ones in it owns it, never somebody who isn't
         session = self.agent.get_session(chat)
         action = {"tool": "generate_image", "args": {"prompt": "Nisha and Sonia Mausi laughing on a rooftop"}}
