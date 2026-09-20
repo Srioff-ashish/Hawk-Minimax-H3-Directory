@@ -340,6 +340,7 @@
   .msg-actions button:hover { background: var(--surface-2); color: var(--ink); }
   .forgotten-tag { font-style: italic; }
   .bubble.forgotten { opacity: .5; border: 1px dashed var(--muted); box-shadow: none; }
+  .bubble.narration { font-style: italic; background: var(--surface-2); }
   .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
   .who svg { width: 18px; height: 18px; border-radius: 5px; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; background: var(--surface-2); border: 1px solid var(--line); }
@@ -3318,7 +3319,8 @@
   function memberFor(speaker, session = currentSession()) {
     const cast = castOf(session);
     const key = (speaker || "").trim().toLowerCase();
-    return key ? cast.find((m) => (m.display_name || "").toLowerCase() === key) || null : cast[0] || null;
+    if (key) return cast.find((m) => (m.display_name || "").toLowerCase() === key) || null;
+    return cast.length > 1 ? null : cast[0] || null;  // in a group chat an unnamed reply is the director, not the lead
   }
   function whoHtml(speaker, session = currentSession()) {
     const member = memberFor(speaker, session);
@@ -3395,7 +3397,7 @@
       const secret = c.private_to ? `<span class="whisper-tag"> · 🤫 private</span>` : "";
       const toWho = (to) => to && !/^(all|everyone)$/i.test(to) ? ` → ${esc(/^(user|you)$/i.test(to) ? "you" : to)}` : "";
       if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}${i ? "" : actions("assistant")}</div><div class="bubble agent${c.private_to ? " private" : ""}${forgotten}">${linkify(line.say)}</div>`));
-      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}${actions("assistant")}</div><div class="bubble agent${forgotten}">${linkify(c.say)}</div>`);
+      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}${actions("assistant")}</div><div class="bubble agent narration${forgotten}">${linkify(c.say)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
       const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;

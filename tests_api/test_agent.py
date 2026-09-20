@@ -713,6 +713,34 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(failed["ok"])
         self.assertIn("seedream", failed["error"])
 
+    async def test_a_group_reply_without_lines_still_names_its_speakers(self):
+        """Kimi K2.5 answered a three-character chat with plain "say", so every bubble showed as the lead."""
+        cast = [{"name": "Nisha", "persona": "sharp-tongued stylist"}, {"name": "Sonia Mausi", "persona": "warm aunt"},
+                {"name": "Ananya", "persona": "shy photographer"}]
+        chat = await self.new_chat(cast=cast)
+
+        self.atlas.reply = lambda body: json.dumps({
+            "say": "Nisha: emerald lehenga lo.\nSonia Mausi: beta, pehle khana khao.\nAnanya: ...light achhi hai.",
+            "actions": [], "done": True})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Kya pehnu?"})
+        view = await self.settle(chat)
+        reply = [m for m in view["messages"] if m["role"] == "assistant"][-1]["content"]
+        self.assertEqual([line["speaker"] for line in reply["lines"]], ["Nisha", "Sonia Mausi", "Ananya"])
+        self.assertNotIn("narrator", reply)
+
+        # the group format is restated last, after the editable prompt's own REPLY FORMAT
+        system = self.atlas.requests[-1]["messages"][0]["content"]
+        self.assertIn("REPLY FORMAT IN THIS GROUP CHAT", system)
+        self.assertGreater(system.index("REPLY FORMAT IN THIS GROUP CHAT"), system.index("REPLY FORMAT"))
+
+        # nobody named: kept as narration rather than put in the lead's mouth
+        self.atlas.reply = lambda body: json.dumps({"say": "Inspection done, scores below.", "actions": [], "done": True})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Aur?"})
+        view = await self.settle(chat)
+        reply = [m for m in view["messages"] if m["role"] == "assistant"][-1]["content"]
+        self.assertNotIn("lines", reply)
+        self.assertTrue(reply["narrator"])
+
     async def test_video_and_image_loras_stay_apart(self):
         """One models/loras folder holds both families: a render must not reach for a Krea 2 LoRA, and the image
         catalogue must not offer MiniMax H3 ones."""

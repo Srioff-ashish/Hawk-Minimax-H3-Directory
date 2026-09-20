@@ -319,6 +319,28 @@ class AgentStore:
 # ---------------------------------------------------------------- helpers
 
 
+def split_spoken_lines(say: str, cast: list[dict]) -> list[dict]:
+    """A group-chat reply that came back as plain "say", split into lines by the names it uses.
+
+    Models that ignore the "lines" format usually still write "Nisha: ...\nSonia Mausi: ...". Recovering the speakers
+    keeps the bubbles attributed; anything that names nobody is left alone for the caller to mark as the narrator."""
+    if not say or len(cast) < 2:
+        return []
+    names = [display_name(member, index, len(cast)) for index, member in enumerate(cast)]
+    pattern = "|".join(re.escape(name) for name in names if name)
+    if not pattern:
+        return []
+    hits = list(re.finditer(rf"^[ \t*_]*({pattern})[ \t]*[:\u2014-][ \t]*", say, re.IGNORECASE | re.MULTILINE))
+    lines = []
+    for index, hit in enumerate(hits):
+        end = hits[index + 1].start() if index + 1 < len(hits) else len(say)
+        spoken = say[hit.end():end].strip()
+        member = find_member(cast, hit.group(1))
+        if spoken and member is not None:
+            lines.append({"speaker": names[member], "say": spoken})
+    return lines[:MAX_LINES]
+
+
 def parse_reply(text: str) -> dict | None:
     """The model's JSON action object, tolerating code fences or a sentence around it."""
     text = (text or "").strip()
@@ -818,6 +840,13 @@ class AgentService:
                 self._note(session_id, "Your last reply was not the required JSON object. Reply again with only the JSON object.", "repair")
                 continue
             repairs = 0
+            cast = cast_of(session)
+            if len(cast) > 1 and not reply.get("lines") and reply.get("say"):
+                recovered = split_spoken_lines(reply["say"], cast)
+                if recovered:  # the model wrote "Nisha: ..." in one block instead of using "lines"
+                    reply["lines"] = recovered
+                else:
+                    reply["narrator"] = True  # nobody is speaking: the UI shows it without a character's name
             content = {"raw": text[:8000], **reply, "usage": call}
             if private_to:
                 content["private_to"] = private_to
@@ -1475,6 +1504,18 @@ class AgentService:
             pipeline=INSTRUCTIONS.strip(),
             tools=await self._catalog(session),
         )
+        cast = cast_of(session)
+        if len(cast) > 1:
+            # The editable prompt ends with the single-voice REPLY FORMAT ({"say": ...}); some models follow whatever
+            # comes last, so a group chat restates its own format after it and that one wins.
+            names = ", ".join(display_name(member, index, len(cast)) for index, member in enumerate(cast))
+            system += (
+                "\n\nREPLY FORMAT IN THIS GROUP CHAT (this replaces the format above)\n"
+                '{"lines": [{"speaker": "<one of: ' + names + '>", "say": "what that character says"}], '
+                '"actions": [{"tool": "tool_name", "args": {}}], "done": false}\n'
+                "Never reply with \"say\" here: every spoken word belongs to a named character, and a reply with no "
+                "\"lines\" reaches the user with no name on it."
+            )
         messages = [{"role": "system", "content": system}]
         if session.get("summary"):
             messages.append({"role": "system", "content": f"SUMMARY OF THE EARLIER CONVERSATION:\n{session['summary']}"})
