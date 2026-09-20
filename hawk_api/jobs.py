@@ -287,14 +287,6 @@ class Store:
             rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC").fetchall()
         return [json.loads(row[0]) for row in rows]
 
-    def set_job_owner(self, job_id: str, owner: dict) -> None:
-        """Whose video this is, in a group chat. Missing jobs are ignored: ownership is never worth an error."""
-        job = self.store.get_job(job_id)
-        if job is None or not owner:
-            return
-        job["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
-        self.store.save_job(job)
-
     def delete_asset(self, asset_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
@@ -608,6 +600,14 @@ class HawkService:
             asset["filename"] = os.path.basename(filename.strip())
         self.store.add_asset(asset)
         return asset
+
+    def set_job_owner(self, job_id: str, owner: dict) -> None:
+        """Whose video this is, in a group chat. Missing jobs are ignored: ownership is never worth an error."""
+        job = self.store.get_job(job_id)
+        if job is None or not owner:
+            return
+        job["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
+        self.store.save_job(job)
 
     def delete_asset(self, asset_id: str) -> None:
         asset = self.store.get_asset(asset_id)

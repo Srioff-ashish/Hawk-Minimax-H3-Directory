@@ -749,6 +749,24 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         asked = self.agent._owner_for(session, {"tool": "generate_image", "args": {"prompt": "a diya"}}, asked_by="Sonia Mausi")
         self.assertEqual(asked["name"], "Sonia Mausi")
 
+        # a render belongs to a character too, and the job itself carries it
+        def render_reply(body):
+            made = any("TOOL RESULT render_film" in m["content"] for m in body["messages"] if m["role"] == "user")
+            return json.dumps({"lines": [{"speaker": "Nisha", "say": "Bana rahi hoon."}],
+                               "actions": [] if made else [{"tool": "render_film", "by": "Nisha",
+                                   "args": {"script": "Nisha walks onto the terrace", "settings": {"megapixels": 0.4}}}],
+                               "done": made})
+
+        self.atlas.reply = render_reply
+        film = await self.new_chat(cast=cast)
+        await self.http.post(f"/v1/agent/sessions/{film}/messages", json={"text": "Ek chhota video banao"})
+        view = await self.settle(film)
+        render = [m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "render_film"][-1]
+        self.assertTrue(render["content"]["ok"], render["content"].get("error"))
+        self.assertEqual(render["content"]["by"]["name"], "Nisha")
+        job = (await self.http.get(f"/v1/jobs/{render['content']['result']['id']}")).json()
+        self.assertEqual(job["by"]["name"], "Nisha", "the job carries its owner, not just the chat message")
+
     async def test_a_group_reply_without_lines_still_names_its_speakers(self):
         """Kimi K2.5 answered a three-character chat with plain "say", so every bubble showed as the lead."""
         cast = [{"name": "Nisha", "persona": "sharp-tongued stylist"}, {"name": "Sonia Mausi", "persona": "warm aunt"},
