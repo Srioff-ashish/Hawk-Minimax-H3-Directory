@@ -920,7 +920,10 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(edit.status_code, 201, edit.text)
         edit = edit.json()
         self.assertEqual((edit["engine"], edit["model"]), ("krea2-edit", "krea2/identity-edit"))
-        self.assertEqual([l["file"] for l in edit["loras"]], ["Krea2/krea2_identity_edit_v1_2.safetensors", "krea2_realism_v1.safetensors"])
+        self.assertEqual([l["file"] for l in edit["loras"]],
+                         ["Krea2/krea2_identity_edit_v1_2.safetensors", "krea2_realism_v1.safetensors",
+                          "snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"],
+                         "editing a picture made here is a fictional character, so it gets the adult pair too")
         graph = list(self.fake.prompts.values())[-1]
         by = {n["class_type"]: n["inputs"] for n in graph.values()}
         chain = [n["inputs"] for n in graph.values() if n["class_type"] == "LoraLoaderModelOnly"]
@@ -977,6 +980,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Refused", refused.text)
         fine = await self.http.post("/v1/images", json={"prompt": "Change the background to a beach", "reference_asset_ids": [photo]})
         self.assertEqual(fine.json()["engine"], "krea2-edit")
+        self.assertEqual([l["file"] for l in fine.json()["loras"]], ["Krea2/krea2_identity_edit_v1_2.safetensors"],
+                         "a photo edit never gets the adult pair: it may be a real person")
         derived = fine.json()["assets"][0]["id"]  # made from the photo: still counts as the photo, edit after edit
         again = (await self.http.post("/v1/images", json={"prompt": "Same, sunset", "reference_asset_ids": [derived]})).json()["assets"][0]["id"]
         for ref in (derived, again):
@@ -1343,7 +1348,7 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([f for f, _ in chosen], ["krea2_nsfw_v4.safetensors"], "an explicit adult pick wins")
 
         chosen, _, _ = await engine.resolve_loras(None, adult_default=False)
-        self.assertEqual(chosen, [], "edits and a disabled default get nothing")
+        self.assertEqual(chosen, [], "a photo edit and a disabled default get nothing")
 
         # a LoRA nobody asked for must not quietly change steps, scheduler or sampler for ordinary images
         _, used, _ = await engine.resolve_loras([{"name": "krea2_realism_v2.safetensors"}], adult_default=True)
