@@ -71,29 +71,35 @@ def parse_config(data, where: str = "loras.json") -> LoraConfig:
 
 def load_config(path: str) -> LoraConfig:
     """Read loras.json, creating it from deploy/loras.example.json on first use.
-    Read on every request so edits apply without restarting the gateway. A newer catalogue shipped with the code
-    (a higher "version") replaces the copy, keeping the old one as loras.json.bak, so new defaults reach pods that
-    already have a loras.json. This mirrors the image catalogue in local_images.load_catalogue."""
+    Read on every request so edits apply without restarting the gateway. Defaults added to the shipped catalogue
+    since the copy was made are merged in (_with_new_defaults), so new defaults reach pods that already have a
+    loras.json without overwriting anything written there."""
     if not os.path.exists(path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         shutil.copyfile(EXAMPLE_CONFIG, path)
-    elif os.path.abspath(path) != os.path.abspath(EXAMPLE_CONFIG):
-        try:
-            with open(path, "r", encoding="utf-8") as handle:
-                stored = json.load(handle)
-            with open(EXAMPLE_CONFIG, "r", encoding="utf-8") as handle:
-                example = json.load(handle)
-            if int(example.get("version") or 1) > int(stored.get("version") or 1):
-                shutil.copyfile(path, path + ".bak")
-                shutil.copyfile(EXAMPLE_CONFIG, path)
-        except (OSError, ValueError, TypeError):
-            pass  # a broken or hand-written file is reported by the read below
     with open(path, "r", encoding="utf-8") as handle:
         try:
             data = json.load(handle)
         except json.JSONDecodeError as exc:
             raise LoraError(f"{path} is not valid JSON: {exc}") from None
-    return parse_config(data, path)
+    return parse_config(_with_new_defaults(data, path), path)
+
+
+def _with_new_defaults(data, path: str):
+    """Defaults added to the shipped catalogue since this pod's copy was written still apply, the way the image
+    catalogue picks up new LoRAs. Only names the copy doesn't list are added, so edits on the pod are kept; to
+    switch a shipped default off, leave it in loras.json with strength 0 rather than deleting it."""
+    if not isinstance(data, dict) or os.path.abspath(path) == os.path.abspath(EXAMPLE_CONFIG):
+        return data
+    try:
+        with open(EXAMPLE_CONFIG, "r", encoding="utf-8") as handle:
+            example = json.load(handle)
+    except (OSError, ValueError):
+        return data
+    known = {_stem(str(item.get("name") or "")) for item in data.get("defaults") or [] if isinstance(item, dict)}
+    fresh = [item for item in example.get("defaults") or []
+             if isinstance(item, dict) and _stem(str(item.get("name") or "")) not in known]
+    return {**data, "defaults": list(data.get("defaults") or []) + fresh} if fresh else data
 
 
 def _normalise(path: str) -> str:

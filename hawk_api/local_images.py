@@ -345,9 +345,12 @@ class LocalImageEngine:
         return items
 
     async def lora_basenames(self) -> set[str]:
-        """File names in models/loras that belong to image generation: the curated catalogue plus any other Krea 2
-        file on the pod. Video renders exclude these, so the two model families never borrow each other's LoRAs."""
-        return {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue() if item.installed}
+        """File names in models/loras that belong to image generation: the curated catalogue, any other Krea 2 file
+        on the pod, and the Krea 2 Identity Edit LoRA (which the catalogue leaves out because edit() applies it
+        itself). Video renders exclude these, so the two model families never borrow each other's LoRAs."""
+        names = {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue() if item.installed}
+        files = await self.service.available_models("loras")
+        return names | {f.rsplit("/", 1)[-1].lower() for f in files if EDIT_LORA.search(f.rsplit("/", 1)[-1])}
 
     async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS,
                             adult_default: bool = False

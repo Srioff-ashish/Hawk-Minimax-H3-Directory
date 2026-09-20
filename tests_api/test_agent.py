@@ -718,12 +718,15 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         catalogue must not offer MiniMax H3 ones."""
         files = self.fake.model_files
         files["loras"] += ["krea2_mystic_xxx_v3.safetensors", "snofs_krea2.safetensors", "krea2_realism_v2.safetensors",
-                           "MysticXXX_MMH3-V4-ref2va.safetensors", "H3_Motion_BoosterV2.safetensors"]
+                           "MysticXXX_MMH3-V4-ref2va.safetensors", "H3_Motion_BoosterV2.safetensors",
+                           "Krea2/krea2_identity_edit_v1_2.safetensors"]
 
         listed = (await self.http.get("/v1/options")).json()["available_loras"]
         self.assertIn("MysticXXX_MMH3-V4-ref2va.safetensors", listed, "video LoRAs are offered to renders")
         self.assertNotIn("krea2_mystic_xxx_v3.safetensors", listed, "image LoRAs are not")
         self.assertNotIn("snofs_krea2.safetensors", listed)
+        self.assertNotIn("Krea2/krea2_identity_edit_v1_2.safetensors", listed,
+                         "the identity-edit LoRA belongs to image edits, not to renders")
 
         image_loras = [item["file"] for item in (await self.http.get("/v1/images/options")).json()["local"]["loras"]]
         self.assertIn("krea2_mystic_xxx_v3.safetensors", image_loras)

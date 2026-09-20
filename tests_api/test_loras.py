@@ -144,23 +144,24 @@ class ShippedCatalogue(unittest.TestCase):
         self.assertTrue(all(not spec.name.lower().startswith("krea2") for spec in config.defaults),
                         "image LoRAs never belong in the video defaults")
 
-    def test_a_newer_shipped_catalogue_replaces_an_older_copy(self):
+    def test_new_shipped_defaults_reach_a_pod_that_already_has_a_copy(self):
         from hawk_api.loras import load_config
         with open(self.path, "w", encoding="utf-8") as handle:  # what a pod from before the new defaults has
-            self.json.dump({"version": 1, "defaults": [{"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
-                                                        "required": True, "turbo": True}], "presets": {}}, handle)
-        config = load_config(self.path)
-        self.assertIn("H3_Motion_BoosterV2.safetensors", [spec.name for spec in config.defaults],
-                      "the pod picks up new defaults instead of keeping the first copy for ever")
-        self.assertTrue(os.path.isfile(self.path + ".bak"), "the old file is kept")
+            self.json.dump({"defaults": [{"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                                          "required": True, "turbo": True}], "presets": {}}, handle)
+        names = [spec.name for spec in load_config(self.path).defaults]
+        self.assertEqual(names, ["minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
+                                 "H3_Motion_BoosterV2.safetensors", "HMNSFW_AIO_V25.safetensors"])
+        with open(self.path, "r", encoding="utf-8") as handle:
+            self.assertEqual(len(self.json.load(handle)["defaults"]), 1, "the pod's own file is never rewritten")
 
-    def test_a_current_copy_is_left_alone(self):
+    def test_the_pods_own_settings_win(self):
         from hawk_api.loras import load_config
-        mine = {"version": 2, "defaults": [{"name": "Minimax-h3_Singularity_64-fro95_lora.safetensors", "strength": 0.5}],
-                "presets": {}}
+        mine = {"defaults": [{"name": "H3_Motion_BoosterV2.safetensors", "strength": 0},
+                             {"name": "HMNSFW_AIO_V25.safetensors", "strength": 0.4}], "presets": {}}
         with open(self.path, "w", encoding="utf-8") as handle:
             self.json.dump(mine, handle)
-        config = load_config(self.path)
-        self.assertEqual([spec.name for spec in config.defaults], ["Minimax-h3_Singularity_64-fro95_lora.safetensors"],
-                         "edits to a current catalogue are not overwritten")
-        self.assertFalse(os.path.isfile(self.path + ".bak"))
+        applied = {spec.name: spec.strength for spec in load_config(self.path).defaults}
+        self.assertEqual(applied["H3_Motion_BoosterV2.safetensors"], 0.0, "strength 0 switches a shipped default off")
+        self.assertEqual(applied["HMNSFW_AIO_V25.safetensors"], 0.4, "a strength set on the pod is kept")
+        self.assertIn("minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", applied, "and the rest still arrive")

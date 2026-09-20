@@ -1,7 +1,8 @@
 {
   "_comment": [
     "Copied to $DATA_DIR/loras.json on first start. Edit that copy; changes apply to the next request.",
-    "version: a newer catalogue shipped with the code replaces the copy (the old one is kept as loras.json.bak).",
+    "New defaults shipped here later are merged into that copy when it is read; the copy is never rewritten.",
+    "To switch a shipped default off on a pod, keep its line in loras.json with strength 0.",
     "defaults: added to every render. required=true refuses renders when the file is missing on the pod;",
     "required=false skips it with a warning, so a pod without that file still renders.",
     "turbo=true (or 'turbo' in the file name) makes renders default to 8 steps instead of 30.",
