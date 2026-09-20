@@ -287,6 +287,14 @@ class Store:
             rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC").fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def set_job_owner(self, job_id: str, owner: dict) -> None:
+        """Whose video this is, in a group chat. Missing jobs are ignored: ownership is never worth an error."""
+        job = self.store.get_job(job_id)
+        if job is None or not owner:
+            return
+        job["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
+        self.store.save_job(job)
+
     def delete_asset(self, asset_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
@@ -579,10 +587,14 @@ class HawkService:
                 counts[tag] = counts.get(tag, 0) + 1
         return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
-    def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None) -> dict:
+    def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None,
+                     owner=None) -> dict:
         asset = self.store.get_asset(asset_id)
         if asset is None:
             raise NotFound(f"No asset {asset_id!r}.")
+        if owner:  # the character who made it, in a group chat: {"name", "member", "session"}
+            asset["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
+            add_tags = list(add_tags or []) + [f"by {owner.get('name')}"] if owner.get("name") else add_tags
         if collection is not None and collection.strip():
             asset["collection"] = collection.strip()
         if tags is not None:
@@ -1414,6 +1426,7 @@ class HawkService:
             "resumable": job.get("resumable", False),
             "warnings": job.get("warnings", []),
             "title": job_title(job),
+            "by": job.get("by"),  # the character whose video this is, in a group chat
         }
         if job["kind"] == "render":
             view.update(

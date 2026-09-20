@@ -17,6 +17,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import threading
@@ -814,9 +815,10 @@ class AgentService:
             return True
         return False
 
-    async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "") -> dict | None:
+    async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "") -> dict | None:
         """The full agent (persona or cast, tools, pipeline) works until it replies without actions. Returns the last
-        reply, or None when it stopped. private_to: the user whispered to one character, so the answer is private too."""
+        reply, or None when it stopped. private_to: the user whispered to one character, so the answer is private too.
+        asked_by: the character who asked for this while they were talking, so what it makes belongs to them."""
         started = time.monotonic()
         steps = repairs = 0
         reply = None
@@ -858,7 +860,7 @@ class AgentService:
             for action in reply["actions"]:
                 if session_id in self._stop:
                     break
-                await self._execute(session_id, action)
+                await self._execute(session_id, action, asked_by)
 
     # ------------------------------------------------------------ let them talk
 
@@ -996,10 +998,53 @@ class AgentService:
             return [f"[{content.get('speaker')} asked for this to be made: {content.get('text', '')}]"]
         return []
 
+    def _owner_for(self, session: dict, action: dict, asked_by: str = "") -> dict | None:
+        """Who owns what this call makes, in a group chat.
+
+        The character marked on the action wins, then the one the character asked for it; a picture or video of
+        several characters belongs to a random one of them, which is how a group photo gets an owner at all. With
+        nobody named anywhere, a random member of the cast takes it."""
+        cast = cast_of(session)
+        if len(cast) < 2:
+            return None
+        names = [display_name(member, index, len(cast)) for index, member in enumerate(cast)]
+        text = json.dumps(action.get("args") or {}, ensure_ascii=False)
+        named = [index for index, name in enumerate(names)
+                 if name and re.search(rf"(?<![\w@])@?{re.escape(name.split()[0])}\b", text, re.IGNORECASE)]
+        index = find_member(cast, str(action.get("by") or "").strip())
+        if index is None and len(named) == 1:
+            index = named[0]
+        elif index is None and len(named) > 1:
+            index = random.choice(named)  # a group shot: one of the characters in it owns it
+        if index is None:
+            index = find_member(cast, asked_by)
+        if index is None:
+            index = random.randrange(len(cast))
+        return {"name": names[index], "member": cast[index].get("id", ""), "session": session["id"]}
+
+    def _take_ownership(self, session: dict, action: dict, result, asked_by: str = "") -> dict | None:
+        """Mark the assets (and the render job) a call produced as that character's own."""
+        owner = self._owner_for(session, action, asked_by)
+        if not owner or not isinstance(result, dict):
+            return None
+        for asset in result.get("assets") or []:
+            asset_id = asset.get("id") or asset.get("asset_id")
+            if not asset_id:
+                continue
+            try:
+                self.service.update_asset(asset_id, owner=owner)
+                asset["by"] = owner
+            except (NotFound, RequestError):
+                continue
+        if result.get("kind") in ("plan", "render") and result.get("id"):
+            self.service.set_job_owner(result["id"], owner)
+        return owner
+
+
     async def _make_for(self, session_id: str, speaker: str, request: str) -> None:
         """A character asked for something to be made: the director, with its tools, makes it and presents it."""
         self.store.add_message(session_id, "note", {"text": request, "kind": "make", "speaker": speaker})
-        await self._director_turn(session_id, MAKE_STEPS)
+        await self._director_turn(session_id, MAKE_STEPS, asked_by=speaker)
 
     async def _remember(self, session: dict, member_id: str, force: bool = False) -> bool:
         """Fold older parts of the chat into one character's own memory (its point of view), with the cheap model."""
@@ -1118,7 +1163,7 @@ class AgentService:
                 engine = "local" if generator.startswith("krea2") else "turbo" if generator.startswith("z-image") else "seedream"
                 self._failed_engines.setdefault(session_id, set()).add(engine)
 
-    async def _execute(self, session_id: str, action: dict) -> None:
+    async def _execute(self, session_id: str, action: dict, asked_by: str = "") -> None:
         name, args = action["tool"], action["args"]
         stepped = self._step_up_engine(session_id, args) if name == "generate_image" else None
         if stepped:
@@ -1142,8 +1187,11 @@ class AgentService:
             result, ok = {"_error": str(exc) or type(exc).__name__}, False
         if stepped and ok and isinstance(result, dict):
             result = {**result, "engine_note": f"An earlier take failed inspection, so engine auto used {stepped} this time."}
+        owner = self._take_ownership(self.get_session(session_id), action, result, asked_by) if ok else None
         content = {"tool": name, "args": args, "ok": ok, "result": result if ok else None,
                    "error": None if ok else result.get("_error")}
+        if owner:
+            content["by"] = owner
         job_id = result.get("id") if ok and isinstance(result, dict) and result.get("kind") in ("plan", "render") else None
         if job_id:
             content["job_id"] = job_id
@@ -1236,8 +1284,8 @@ class AgentService:
                 if latest:
                     push("user", f"(STAGE DIRECTION, not the user: while the characters talk, {who} asked for this to be made: "
                                  f"{content.get('text', '')}. Make it now with your tools (the characters' avatars as picture "
-                                 f"references where they appear), then reply with one short line from {who} presenting it, "
-                                 "with \"done\": true.)")
+                                 f"references where they appear, and \"by\": \"{who}\" on the calls so it is {who}'s own), "
+                                 f"then reply with one short line from {who} presenting it, with \"done\": true.)")
                 else:
                     push("user", f"(Earlier, {who} asked for this to be made: {content.get('text', '')})")
             elif role == "note" and content.get("kind") in ("repair", "error", "warn"):
@@ -1487,8 +1535,7 @@ class AgentService:
             "- If the user writes @Name, only that character answers. Otherwise one or two characters who fit answer; "
             "if the user asks everyone (everyone, all, sab, dono), each answers.\n"
             f"- At most {MAX_LINES} lines per reply. Never write the user's lines.\n"
-            "- Mark who does a tool call with \"by\": \"<name>\" in the action. A picture or video of a character uses that "
-            "character's avatar as a picture reference (role picture); a scene with several characters uses all their avatars.\n"
+            "- Mark who does a tool call with \"by\": \"<name>\" in the action: what it makes belongs to that character, and the library shows it as theirs. A picture or video of a character uses that character's avatar as a picture reference (role picture); a scene with several characters uses all their avatars, and one of them owns it.\n"
             "- set_persona / set_avatar / remove_character take speaker to act on one character.\n"
             "- Private feelings belong to one character: that character acts on them, but the others don't know them "
             "unless they have been said aloud in the chat."

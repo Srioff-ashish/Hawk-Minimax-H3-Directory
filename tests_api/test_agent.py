@@ -713,6 +713,38 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(failed["ok"])
         self.assertIn("seedream", failed["error"])
 
+    async def test_characters_own_what_they_make(self):
+        cast = [{"name": "Nisha", "persona": "stylist"}, {"name": "Sonia Mausi", "persona": "aunt"},
+                {"name": "Ananya", "persona": "photographer"}]
+        chat = await self.new_chat(cast=cast)
+
+        def reply(body):
+            if assistant_turns(body):
+                return json.dumps({"lines": [{"speaker": "Ananya", "say": "Yeh lo."}], "actions": [], "done": True})
+            return json.dumps({"lines": [{"speaker": "Ananya", "say": "Main khichti hoon."}],
+                               "actions": [{"tool": "generate_image", "by": "Ananya",
+                                            "args": {"prompt": "a marigold garland on a door", "engine": "turbo"}}]})
+
+        self.atlas.reply = reply
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Ek photo chahiye"})
+        view = await self.settle(chat)
+        tool = [m for m in view["messages"] if m["role"] == "tool"][-1]
+        self.assertEqual(tool["content"]["by"]["name"], "Ananya", "the character marked on the call owns it")
+        asset_id = tool["content"]["result"]["assets"][0]["id"]
+        stored = self.agent.service.store.get_asset(asset_id)
+        self.assertEqual(stored["by"]["name"], "Ananya")
+        self.assertIn("by ananya", [t.lower() for t in stored["tags"]], "and it is findable in the library")
+
+        # a picture of several characters: one of the ones in it owns it, never somebody who isn't
+        session = self.agent.get_session(chat)
+        action = {"tool": "generate_image", "args": {"prompt": "Nisha and Sonia Mausi laughing on a rooftop"}}
+        owners = {self.agent._owner_for(session, action)["name"] for _ in range(40)}
+        self.assertEqual(owners, {"Nisha", "Sonia Mausi"}, "a group shot is owned by one of the two in it")
+
+        # nobody named anywhere: the character who asked for it while they were talking
+        asked = self.agent._owner_for(session, {"tool": "generate_image", "args": {"prompt": "a diya"}}, asked_by="Sonia Mausi")
+        self.assertEqual(asked["name"], "Sonia Mausi")
+
     async def test_a_group_reply_without_lines_still_names_its_speakers(self):
         """Kimi K2.5 answered a three-character chat with plain "say", so every bubble showed as the lead."""
         cast = [{"name": "Nisha", "persona": "sharp-tongued stylist"}, {"name": "Sonia Mausi", "persona": "warm aunt"},

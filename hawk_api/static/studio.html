@@ -3405,7 +3405,7 @@
       add(`<details class="tool-card"><summary><span class="${c.ok ? "tool-ok" : "tool-bad"}">${c.ok ? "✓" : "✕"}</span><span class="mono">${esc(c.tool)}</span><span class="hint">${label}</span></summary>
         <div class="code">args ${esc(args.length > 3000 ? `${args.slice(0, 3000)}…` : args)}</div><div class="code">${c.ok ? "result" : "error"} ${esc((result || "").length > 6000 ? `${result.slice(0, 6000)}…` : result || "")}</div></details>`);
       const shown = (c.ok && Array.isArray(c.result?.assets) ? c.result.assets : []).filter((a) => a.thumb_url && c.tool !== "list_references");
-      if (shown.length) add(`<div class="thumb-grid">${shown.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.id || a.asset_id || "")}</span></a>`).join("")}</div>`);
+      if (shown.length) add(`<div class="thumb-grid">${shown.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}${a.by?.name ? ` · made by ${esc(a.by.name)}` : ""}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.by?.name || a.id || a.asset_id || "")}</span></a>`).join("")}</div>`);
       const jobId = c.job_id || (c.tool === "wait_for_job" && c.result?.id);
       if (jobId && c.tool !== "wait_for_job") {
         const card = agentJobCard(jobId);
