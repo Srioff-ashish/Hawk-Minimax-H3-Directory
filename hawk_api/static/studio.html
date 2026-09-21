@@ -1109,7 +1109,7 @@
         <div class="field" id="genBoostField" hidden style="margin-top:6px"><label class="label" for="genBoost">Likeness (Krea 2 edit)</label>
           <div class="range"><input type="range" id="genBoost" min="0.5" max="10" step="0.5" value="4"><output id="genBoostOut">4.0</output></div>
           <span class="hint">4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.</span></div></div>
-      <div class="field" id="genLoraField"><span class="label">Krea 2 LoRAs</span><span class="hint">Local only. Trigger words are added for you. Stack as many as you like, up to 3 adult LoRAs. SNOFS + Mystic XXX is the go-to pair.</span>
+      <div class="field" id="genLoraField"><span class="label">LoRAs</span><span class="hint">For whichever local engine runs. Trigger words are added for you. Stack as many as you like, up to 3 adult ones. Each model only loads its own family; the defaults are set in Connect &amp; settings.</span>
         <div class="lora-list" id="genLoras"></div><div class="gen-status warn" id="genLoraWarn" hidden></div></div>
       <div id="genResult" hidden style="display:grid;gap:8px"></div>
     </div>
@@ -2602,31 +2602,50 @@
   }
   // How to write the prompt for the engine that will run it (from each model's prompting guide): [words, tip, example].
   const PROMPT_TIPS = {
-    krea: [[40, 100], "Krea 2: subject first in specific visual language (textures, fabric, skin), then camera terms (close-up, low-angle, 85mm, shallow depth of field), light, and a look word (editorial photography, film grain, candid phone snapshot). Plain descriptive phrases; no “masterpiece, 8K”.",
+    klein: [[40, 120], "FLUX.2 Klein: plain descriptive sentences. Subject with age and features, what they wear and the fabric, the place, light with a direction, then lens and mood. It follows long prompts closely, so say what you want rather than piling on style words.",
+      "A 26-year-old woman in a green cotton saree with a gold zari border, standing in a haveli courtyard, soft morning light from the left, 85mm, shallow depth of field, warm natural tones"],
+    kleinEdit: [[6, 60], "Klein edit: one instruction naming only what changes, and say what must stay. It takes several references -- call them image 1, image 2 in the order you added them -- and folds each one in, so it can combine subjects from different pictures.",
+      "Put the woman from image 2 at the table in image 1, keep her face and the lighting exactly as they are."],
+    krea2: [[40, 100], "Krea 2: subject first in specific visual language (textures, fabric, skin), then camera terms (close-up, low-angle, 85mm, shallow depth of field), light, and a look word (editorial photography, film grain, candid phone snapshot). Plain descriptive phrases; no \u201cmasterpiece, 8K\u201d.",
       "Close-up editorial portrait of a 28-year-old Delhi stylist, textured linen kurta in rust, silver jhumkas, freckled skin, rooftop at golden hour, warm rim light from the right, 85mm, shallow depth of field, film grain, editorial photography"],
-    kreaEdit: [[4, 40], "Krea 2 edit: one plain instruction naming only what changes: put, place, replace, remove, turn, restage. With 2 images, image 1 is the scene and image 2 the person. Replace is reliable; removals and outfit swaps less so.",
+    krea2Edit: [[4, 40], "Krea 2 Identity Edit: one plain instruction naming only what changes: put, place, replace, remove, turn, restage. With 2 images, image 1 is the scene and image 2 the person. Replace is reliable; removals and outfit swaps less so.",
       "Put a retro red trenchcoat on her and turn her head to the left."],
-    turbo: [[80, 250], "Z-Image Turbo likes the most detail: subject (age, features, clothing, expression) → place, time and weather → camera, lens or film stock (e.g. Kodak Portra 400) → framing. No negative prompts: say what you want. Text in quotes.",
+    zimage: [[80, 250], "Z-Image Turbo likes the most detail: subject (age, features, clothing, expression) \u2192 place, time and weather \u2192 camera, lens or film stock (e.g. Kodak Portra 400) \u2192 framing. No negative prompts: say what you want. Text in quotes.",
       "A 65-year-old woman with silver hair and gentle wrinkles in a hand-knitted maroon cardigan, reading by a tall window with a contemplative expression. A cosy wood-panelled library, late afternoon, soft natural light falling across the pages. Shot on a Canon 5D with an 85mm lens, Kodak Portra 400 tones, shallow depth of field, framed from the waist up on the left third."],
-    seedream: [[30, 100], "Seedream 5: conversational sentences: subject and action, setting, light with direction (“soft window light from the left”), materials (“brushed aluminium, matte skin”), lens and mood. Text in double quotes with its placement. No negative prompts or “8K”.",
+    turbo: [[80, 250], "Atlas z-image/turbo: the same model as the local Z-Image, so the same guidance -- lots of detail, subject then place then camera then framing. No negative prompts.",
+      "A 65-year-old woman with silver hair in a maroon cardigan reading by a tall window, late afternoon light across the pages, Canon 5D, 85mm, Kodak Portra 400 tones, waist-up on the left third."],
+    seedream: [[30, 100], "Seedream 5: conversational sentences: subject and action, setting, light with direction (\u201csoft window light from the left\u201d), materials (\u201cbrushed aluminium, matte skin\u201d), lens and mood. Text in double quotes with its placement. No negative prompts or \u201c8K\u201d.",
       "A premium product photo of an amber-glass perfume bottle with a brushed-gold cap standing on white marble, a large softbox from camera left, soft reflections on the glass, 85mm, shallow depth of field, calm luxury mood. The label reads \"NOOR\" in thin gold capitals."],
-    seedreamEdit: [[10, 80], "Seedream edit: name what to change and say what stays (“Keep the lighting and composition exactly the same”). With several images, call them image 1, image 2 in the order chosen.",
+    seedreamEdit: [[10, 80], "Seedream edit: name what to change and say what stays (\u201cKeep the lighting and composition exactly the same\u201d). With several images, call them image 1, image 2 in the order chosen.",
       "Make the mug matte black and remove the plant in the top-right corner. Keep the lighting, the table and the composition exactly the same."],
   };
-  function genPromptEngine() {  // which engine the Generate button will actually use
+  const genAction = () => (gen.refs.length ? "edit" : "generate");
+  function genLadder() {
+    return (gen.options || {})[genAction() === "edit" ? "edit_ladder" : "generate_ladder"] || [];
+  }
+  function plannedEngine() {
+    // the server says which rung it would actually use; picking one in the dialog overrides that
+    const picked = genEngine();
+    if (picked !== "auto") return picked;
+    return (gen.options?.would_use || {})[genAction()] || "";
+  }
+  function loraSetFor(id) {
     const local = gen.options?.local || {};
-    const engine = genEngine();
-    if (gen.refs.length) {
-      const kreaEdit = gen.refs.length <= 2 && (engine === "local" || (engine === "auto" && !local.busy)) && local.installed && local.edit?.installed;
-      return kreaEdit ? "kreaEdit" : "seedreamEdit";
-    }
-    if (engine === "local" || (engine === "auto" && local.reachable && local.installed && !local.busy)) return "krea";
-    return engine === "seedream" || engine === "seedream-lite" ? "seedream" : "turbo";
+    if (!id) return [];
+    if (id === "krea2") return local.loras || [];
+    return (local.engines || {})[id]?.loras || [];
+  }
+  function tipKey() {
+    const id = plannedEngine(), edit = genAction() === "edit";
+    if (id === "klein") return edit ? "kleinEdit" : "klein";
+    if (id === "krea2") return edit ? "krea2Edit" : "krea2";
+    if (id === "zimage" || id === "turbo") return id;
+    return edit ? "seedreamEdit" : "seedream";
   }
   function paintPromptTip() {
-    const [[lo, hi], tip, example] = PROMPT_TIPS[genPromptEngine()];
+    const [[lo, hi], tip, example] = PROMPT_TIPS[tipKey()] || PROMPT_TIPS.seedream;
     const words = ($("genPrompt").value.trim().match(/\S+/g) || []).length;
-    const count = !words ? "" : words < lo ? ` · ${words} words: add detail (${lo}–${hi} works best)` : words > hi ? ` · ${words} words: trim towards ${hi}` : ` · ${words} words ✓`;
+    const count = !words ? "" : words < lo ? ` \u00b7 ${words} words: add detail (${lo}\u2013${hi} works best)` : words > hi ? ` \u00b7 ${words} words: trim towards ${hi}` : ` \u00b7 ${words} words \u2713`;
     $("genTip").textContent = tip + count;
     $("genPrompt").placeholder = `e.g. ${example}`;
   }
@@ -2634,40 +2653,47 @@
   function renderGenOptions() {
     paintGenEngines();
     const local = gen.options?.local || {};
-    const engine = genEngine();
-    const refs = gen.refs.length > 0;
-    const edit = local.edit || {};
-    const kreaEdit = refs && gen.refs.length <= 2 && (engine === "auto" || engine === "local") && local.installed && edit.installed;
+    const rows = genLadder();
+    const id = plannedEngine();
+    const row = rows.find((r) => r.engine === id);
     const status = $("genStatus");
-    let text, tone = "";
-    if (refs && kreaEdit) {
-      text = local.busy ? `Krea 2 edit is ready, but the GPU is busy. Auto will use Seedream edit now; pick Krea 2 to wait.`
-        : `Krea 2 edit runs on this GPU${gen.refs.length === 2 ? ": image 1 is the scene, image 2 the person to place in it" : ""}. Write the change as an instruction, e.g. “Change her outfit to a red raincoat”.`;
-      tone = local.busy ? "warn" : "ok";
-    } else if (refs) {
-      text = gen.refs.length > 2 ? "More than 2 images: Seedream edit combines them."
-        : engine === "seedream" || engine === "seedream-lite" || engine === "turbo" ? "Reference images are edited with Seedream."
-        : `Seedream edit will be used: Krea 2 edit isn't installed${edit.missing?.length ? ` (missing ${edit.missing.join(", ")})` : ""}.`;
-      tone = "warn";
-    } else if (!gen.options) text = "Could not read the image options; Generate still works.";
-    else if (!local.reachable) { text = "ComfyUI isn't reachable, so Krea 2 is unavailable. Auto uses Z-Image Turbo."; tone = "warn"; }
-    else if (!local.installed) { text = `Krea 2 isn't installed on the pod (missing ${(local.missing || []).join(", ")}). Run the Krea 2 install cell in the notebook. Auto uses Z-Image Turbo.`; tone = "warn"; }
-    else if (local.busy) { text = `Krea 2 is ready, but the GPU is busy (${local.queue} job${local.queue === 1 ? "" : "s"} in the queue). Auto will use Z-Image Turbo now; pick Krea 2 to wait.`; tone = "warn"; }
-    else { text = `Krea 2 is ready on this GPU · ${(local.loras || []).filter((l) => l.installed).length} LoRAs installed${local.files?.clip ? ` · encoder ${local.files.clip.replace(/\.safetensors$/, "")}` : ""}.`; tone = "ok"; }
-    if (!refs && engine === "turbo") text += " Z-Image Turbo: about $0.01 an image.";
+    let text, tone = "ok";
+    if (!gen.options) { text = "Could not read the image options; Generate still works."; tone = ""; }
+    else if (!row) { text = "No engine is enabled for this. Turn one on in Connect & settings."; tone = "warn"; }
+    else {
+      const cost = row.where === "local" ? "free, on this GPU" : `about $${row.cost_usd} an image`;
+      text = `${row.label} will make this image (${cost}).`;
+      // name the rungs above it that were passed over, so a paid engine is never a surprise
+      const above = rows.slice(0, rows.indexOf(row)).filter((r) => r.enabled && !r.ready);
+      if (above.length) { text += ` Skipping ${above.map((r) => `${r.label} \u2014 ${r.why_not}`).join("; ")}`; tone = "warn"; }
+      if (row.where === "local" && local.busy) {
+        const busy = gen.options.busy || {};
+        text += busy.mode === "wait"
+          ? ` The GPU is busy (${local.queue} in the queue); it will wait up to ${busy.max_wait_seconds}s rather than pay.`
+          : ` The GPU is busy (${local.queue} in the queue), so a paid engine will pick this up instead.`;
+        tone = "warn";
+      }
+      if (genAction() === "edit" && gen.refs.length > row.max_refs) {
+        text += ` ${row.label} takes at most ${row.max_refs} reference images.`; tone = "warn";
+      }
+    }
     status.textContent = text;
     status.className = `gen-status ${tone}`;
-    const showLoras = (kreaEdit || (!refs && (engine === "auto" || engine === "local"))) && local.installed;
-    $("genBoostField").hidden = !kreaEdit;
-    $("genBoost").disabled = edit.boost === false;
-    $("genBoostField").querySelector(".hint").textContent = edit.boost === false
+
+    const krea2Edit = id === "krea2" && genAction() === "edit";
+    $("genBoostField").hidden = !krea2Edit;
+    $("genBoost").disabled = (local.edit || {}).boost === false;
+    $("genBoostField").querySelector(".hint").textContent = (local.edit || {}).boost === false
       ? "The likeness boost fails on this GPU until ComfyUI is restarted with the updated Hawk nodes; edits run at 1.0."
       : "4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.";
     const sizeDefault = $("genSize").querySelector('option[value=""]');
-    if (sizeDefault) sizeDefault.textContent = refs ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
-    $("genSteps").placeholder = kreaEdit ? "10" : "8";
-    $("genLoraField").hidden = !showLoras;
-    const installed = (local.loras || []).filter((l) => l.installed);
+    if (sizeDefault) sizeDefault.textContent = genAction() === "edit" ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
+    $("genSteps").placeholder = krea2Edit ? "10" : id === "klein" ? "4" : "8";
+
+    // LoRAs belong to whichever local engine will run, and only that engine's family loads cleanly
+    const installed = loraSetFor(row && row.where === "local" ? id : "").filter((l) => l.installed);
+    $("genLoraField").hidden = !(row && row.where === "local");
+    $("genLoraField").querySelector(".label").textContent = `${row ? row.label : ""} LoRAs`;
     const html = installed.length ? installed.map((l) => {
       const pick = gen.loras[l.file];
       const [lo, hi] = l.range?.length === 2 ? l.range : [0, 2];
@@ -2675,17 +2701,17 @@
       return `<div class="lora-row" data-on="${!!pick}" data-lora="${esc(l.file)}">
         <input type="checkbox" aria-label="Use ${esc(l.label || l.file)}" ${pick ? "checked" : ""}>
         <div><span class="lora-name">${esc(l.label || l.file)}</span><span class="lora-kind ${l.kind === "adult" ? "adult" : ""}">${esc(l.kind || "")}</span>
-          <span class="hint">${esc(l.notes || l.file)}${l.trigger ? ` · trigger “${esc(l.trigger)}”` : ""}${l.range ? ` · works ${esc(lo)}–${esc(hi)}` : ""}</span></div>
+          <span class="hint">${esc(l.notes || l.file)}${l.trigger ? ` \u00b7 trigger \u201c${esc(l.trigger)}\u201d` : ""}${l.range ? ` \u00b7 works ${esc(lo)}\u2013${esc(hi)}` : ""}</span></div>
         <div class="range"><input type="range" min="${min}" max="${max}" step="0.05" value="${esc(value)}" aria-label="Strength" ${pick ? "" : "disabled"}><output>${Number(value).toFixed(2)}</output></div>
       </div>`;
-    }).join("") : `<span class="hint">No Krea 2 LoRAs installed yet. Add them in the notebook's Krea 2 cell; the catalogue is in DATA_DIR/image_loras.json.</span>`;
+    }).join("") : `<span class="hint">No ${row ? row.label : ""} LoRAs installed on this pod.</span>`;
     if ($("genLoras").dataset.html !== html) { $("genLoras").innerHTML = html; $("genLoras").dataset.html = html; }
-    $("genSteps").disabled = !showLoras;
+    $("genSteps").disabled = !(row && row.where === "local");
     paintLoraWarn();
     paintPromptTip();
   }
   function paintLoraWarn() {
-    const adult = (gen.options?.local?.loras || []).filter((l) => l.kind === "adult" && gen.loras[l.file]);
+    const adult = loraSetFor(plannedEngine()).filter((l) => l.kind === "adult" && gen.loras[l.file]);
     const total = adult.reduce((sum, l) => sum + Math.abs(gen.loras[l.file].strength), 0);
     const warn = $("genLoraWarn");
     warn.hidden = $("genLoraField").hidden || adult.length < 2 || total <= 1.0;

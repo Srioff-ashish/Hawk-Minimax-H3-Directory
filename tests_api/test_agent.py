@@ -618,7 +618,11 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         # the agent reads the live order from image_options, so an edited prompt can't leave it stale
         options = (await self.http.get("/v1/images/options")).json()
-        self.assertEqual(options["would_use"]["generate"], "klein")
+        # would_use is what will actually run, not just the first enabled rung: no local engine is
+        # installed in this fixture, so the walk reaches the cheapest paid one
+        self.assertEqual(options["would_use"]["generate"], "turbo")
+        ready = [r["engine"] for r in options["generate_ladder"] if r["ready"] and r["enabled"]]
+        self.assertEqual(ready, ["turbo", "seedream"], "the disabled lite engine is ready but not in play")
         self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]],
                          ["klein", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
@@ -629,6 +633,9 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(made["engine"], "seedream")
         self.assertNotIn("tried", made, "it was first, so nothing was skipped to reach it")
         self.assertEqual((await self.http.get("/v1/images/options")).json()["would_use"]["generate"], "seedream")
+        gen = {r["engine"]: r for r in (await self.http.get("/v1/images/options")).json()["generate_ladder"]}
+        self.assertEqual(gen["krea2"]["lora_family"], "krea2", "the dialog needs this to offer the right LoRAs")
+        self.assertEqual(gen["seedream"]["lora_family"], "", "an Atlas engine takes none")
 
         # every engine is listed with whether it can actually run, so the UI can show them all honestly
         ladder = {r["engine"]: r for r in (await self.http.get("/v1/images/options")).json()["generate_ladder"]}

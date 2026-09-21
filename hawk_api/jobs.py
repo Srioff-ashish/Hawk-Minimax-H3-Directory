@@ -996,7 +996,7 @@ class HawkService:
                     ready, why = True, ""
             rows.append({"engine": spec.id, "label": spec.label, "where": spec.where, "enabled": row["enabled"],
                          "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs,
-                         "ready": ready, "why_not": why})
+                         "lora_family": spec.lora_family, "ready": ready, "why_not": why})
         return rows
 
     async def image_options(self) -> dict:
@@ -1008,7 +1008,8 @@ class HawkService:
             "default_engine": self.settings.image_engine,
             "generate_ladder": ladders["generate"],
             "edit_ladder": ladders["edit"],
-            "would_use": {action: (self.image_ladder(action) or [None])[0] for action in ("generate", "edit")},
+            "would_use": {action: ((await self.ready_image_engines(action)) or [None])[0]
+                          for action in ("generate", "edit")},
             "busy": engines["busy"],
             "engine_warnings": engines["warnings"],
             "system": await self.comfy.system_stats(),
