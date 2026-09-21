@@ -609,6 +609,32 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         too_big = await self.http.post("/v1/images", json={"prompt": "Lamp", "size": "4096x4096", "engine": "turbo"})
         self.assertEqual(too_big.status_code, 422)
 
+    async def test_the_engine_order_is_a_setting(self):
+        view = (await self.http.get("/v1/images/engines")).json()
+        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["krea2", "turbo", "seedream"])
+        self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["krea2", "seedream"])
+        self.assertEqual(view["busy"]["mode"], "fall_through", "unchanged until the user says otherwise")
+
+        # the agent reads the live order from image_options, so an edited prompt can't leave it stale
+        options = (await self.http.get("/v1/images/options")).json()
+        self.assertEqual(options["would_use"]["generate"], "krea2")
+        self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]], ["krea2", "turbo", "seedream"])
+        self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
+
+        # put Seedream first and the next image goes straight there, with no local attempt to skip past
+        await self.http.put("/v1/images/engines", json={"generate": [{"engine": "seedream"}, {"engine": "krea2"}]})
+        made = (await self.http.post("/v1/images", json={"prompt": "A chai stall"})).json()
+        self.assertEqual(made["engine"], "seedream")
+        self.assertNotIn("tried", made, "it was first, so nothing was skipped to reach it")
+        self.assertEqual((await self.http.get("/v1/images/options")).json()["would_use"]["generate"], "seedream")
+
+        # an engine that cannot do the job is named rather than quietly dropped
+        bad = await self.http.put("/v1/images/engines", json={"edit": [{"engine": "zimage"}]})
+        self.assertEqual(bad.status_code, 422)
+        self.assertIn("Z-Image Turbo", bad.json()["error"])
+        self.assertEqual([r["engine"] for r in (await self.http.get("/v1/images/engines")).json()["edit"] if r["enabled"]],
+                         ["krea2", "seedream"], "a refused save changes nothing")
+
     async def test_inspect_image_then_upgrade_to_seedream(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
         reviews = []

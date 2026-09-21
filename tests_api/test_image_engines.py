@@ -1,7 +1,10 @@
 """The image engine registry: capabilities, aliases, LoRA families and ladder order."""
 
+import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -180,6 +183,94 @@ class LegacyTags(unittest.TestCase):
     def test_no_generator_means_no_engine(self):
         self.assertEqual(ie.id_for_generator(""), "")
         self.assertEqual(ie.id_for_generator("   "), "")
+
+
+class Store(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        self.store = ie.ImageEngineStore(self.dir)
+
+    def test_an_unconfigured_pod_behaves_as_it_always_did(self):
+        self.assertEqual(self.store.order("generate"), ["krea2", "turbo", "seedream"])
+        self.assertEqual(self.store.order("edit"), ["krea2", "seedream"])
+        self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
+
+    def test_saving_an_order_survives_a_reload(self):
+        self.store.save(generate=[{"engine": "klein"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
+        self.assertEqual(ie.ImageEngineStore(self.dir).order("generate"), ["klein", "krea2", "zimage", "seedream"])
+
+    def test_an_engine_left_out_of_a_saved_order_comes_back_switched_off(self):
+        view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "seedream"}])
+        rows = {row["engine"]: row["enabled"] for row in view["generate"]}
+        self.assertEqual(rows["turbo"], False)
+        self.assertNotIn("turbo", self.store.order("generate"))
+
+    def test_a_disabled_engine_keeps_its_place(self):
+        self.store.save(generate=[{"engine": "klein"}, {"engine": "krea2", "enabled": False}, {"engine": "seedream"}])
+        order = [row["engine"] for row in self.store.settings()["generate"]]
+        self.assertEqual(order[:3], ["klein", "krea2", "seedream"], "off, but still second")
+        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+
+    def test_only_the_parts_given_are_changed(self):
+        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
+        self.store.save(busy_mode="wait")
+        self.assertEqual(self.store.order("generate"), ["klein", "seedream"], "the order was not touched")
+        self.assertEqual(self.store.wait_seconds(), 120.0)
+
+    def test_waiting_zero_seconds_is_falling_through(self):
+        view = self.store.save(busy_mode="wait", busy_max_wait_seconds=0)
+        self.assertEqual(view["busy"]["mode"], "fall_through")
+
+    def test_a_wait_longer_than_a_render_is_capped(self):
+        view = self.store.save(busy_mode="wait", busy_max_wait_seconds=99999)
+        self.assertEqual(view["busy"]["max_wait_seconds"], ie.MAX_WAIT_SECONDS)
+
+    def test_an_unknown_engine_is_refused(self):
+        with self.assertRaises(ie.SettingsError) as caught:
+            self.store.save(generate=[{"engine": "midjourney"}])
+        self.assertIn("midjourney", str(caught.exception))
+
+    def test_listing_an_engine_twice_is_refused(self):
+        with self.assertRaises(ie.SettingsError):
+            self.store.save(generate=[{"engine": "krea2"}, {"engine": "local"}])
+
+    def test_a_generate_only_engine_in_the_edit_order_is_named_not_dropped(self):
+        with self.assertRaises(ie.SettingsError) as caught:
+            self.store.save(edit=[{"engine": "krea2"}, {"engine": "zimage"}])
+        self.assertIn("Z-Image Turbo", str(caught.exception), "say which one, do not silently drop it")
+
+    def test_switching_everything_off_is_refused(self):
+        with self.assertRaises(ie.SettingsError):
+            self.store.save(generate=[{"engine": "krea2", "enabled": False}])
+
+    def test_a_refused_save_changes_nothing_on_disk(self):
+        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
+        with self.assertRaises(ie.SettingsError):
+            self.store.save(generate=[{"engine": "nope"}])
+        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+
+    def test_all_paid_warns_and_all_local_warns(self):
+        view = self.store.save(generate=[{"engine": "seedream"}, {"engine": "turbo"}])
+        self.assertTrue(any("billed to Atlas" in w for w in view["warnings"]))
+        view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "klein"}])
+        self.assertTrue(any("ComfyUI is busy" in w for w in view["warnings"]))
+
+    def test_a_mixed_ladder_warns_about_nothing(self):
+        view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "seedream"}],
+                               edit=[{"engine": "krea2"}, {"engine": "seedream"}])
+        self.assertEqual(view["warnings"], [])
+
+    def test_a_corrupt_file_falls_back_to_the_defaults(self):
+        with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
+            handle.write("{ not json")
+        self.assertEqual(self.store.order("generate"), ["krea2", "turbo", "seedream"])
+
+    def test_the_file_is_written_atomically(self):
+        self.store.save(busy_mode="wait")
+        with open(os.path.join(self.dir, "image_engines.json")) as handle:
+            self.assertIn("busy", json.load(handle))
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "image_engines.json.tmp")))
 
 
 if __name__ == "__main__":

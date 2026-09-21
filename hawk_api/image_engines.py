@@ -12,6 +12,10 @@ all import it without a cycle.
 
 from __future__ import annotations
 
+import json
+import os
+import threading
+import time
 from dataclasses import dataclass
 
 # Atlas model ids. These live here rather than in jobs.py because a descriptor names them.
@@ -203,3 +207,139 @@ def full_order(stored: list[dict] | None, action: str = "generate") -> list[dict
             rows.append({"engine": engine_id, "enabled": bool((row or {}).get("enabled", True))})
     rows += [{"engine": e.id, "enabled": False} for e in ENGINES.values() if e.id not in seen and e.supports(action)]
     return rows
+
+
+#: How the ladders start out on a pod that has never been configured: what the gateway did before it was
+#: a setting. Studio switches the new local engines on once they are installed.
+DEFAULTS = {
+    "generate": [
+        {"engine": "krea2", "enabled": True},
+        {"engine": "turbo", "enabled": True},
+        {"engine": "seedream", "enabled": True},
+        {"engine": "klein", "enabled": False},
+        {"engine": "zimage", "enabled": False},
+        {"engine": "seedream-lite", "enabled": False},
+    ],
+    "edit": [
+        {"engine": "krea2", "enabled": True},
+        {"engine": "seedream", "enabled": True},
+        {"engine": "klein", "enabled": False},
+        {"engine": "seedream-lite", "enabled": False},
+    ],
+    "busy": {"mode": "fall_through", "max_wait_seconds": 120},
+}
+BUSY_MODES = ("wait", "fall_through")
+MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
+
+
+class SettingsError(ValueError):
+    """A ladder the gateway would not be able to use. Raised to the caller as a 422."""
+
+
+class ImageEngineStore:
+    """``DATA_DIR/image_engines.json``: which engines are tried, in what order, and what a busy GPU means.
+
+    Read on every request, so an edit in Studio applies to the next image without a restart.
+    """
+
+    def __init__(self, data_dir: str):
+        self.path = os.path.join(data_dir, "image_engines.json")
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _write(self, data: dict) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        tmp = f"{self.path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+        os.replace(tmp, self.path)
+
+    def settings(self) -> dict:
+        """Stored ladders, with any engine the file predates appended switched off."""
+        stored = self._load()
+        busy = dict(DEFAULTS["busy"])
+        if isinstance(stored.get("busy"), dict):
+            if stored["busy"].get("mode") in BUSY_MODES:
+                busy["mode"] = stored["busy"]["mode"]
+            try:
+                busy["max_wait_seconds"] = max(0, min(MAX_WAIT_SECONDS, int(stored["busy"]["max_wait_seconds"])))
+            except (KeyError, TypeError, ValueError):
+                pass
+        return {
+            "generate": full_order(stored.get("generate") or DEFAULTS["generate"], "generate"),
+            "edit": full_order(stored.get("edit") or DEFAULTS["edit"], "edit"),
+            "busy": busy,
+        }
+
+    def order(self, action: str = "generate") -> list[str]:
+        """The enabled engine ids for this action, best first."""
+        return order(self.settings().get(action), action)
+
+    def wait_seconds(self) -> float:
+        busy = self.settings()["busy"]
+        return float(busy["max_wait_seconds"]) if busy["mode"] == "wait" else 0.0
+
+    def warnings(self, data: dict | None = None) -> list[str]:
+        data = data or self.settings()
+        found = []
+        for action in ("generate", "edit"):
+            live = [ENGINES[row["engine"]] for row in data[action] if row["enabled"]]
+            if not live:
+                continue  # save() refuses this; an older file could still hold it
+            if not any(engine.local for engine in live):
+                found.append(f"No local engine is on for {action}: every image will be billed to Atlas.")
+            elif all(engine.local for engine in live):
+                found.append(f"Only local engines are on for {action}: it fails when ComfyUI is busy or down.")
+        return found
+
+    def view(self) -> dict:
+        data = self.settings()
+        return {**data, "warnings": self.warnings(data), "engines": [
+            {"id": e.id, "label": e.label, "where": e.where, "generate": e.generate, "edit": e.edit,
+             "max_refs": e.max_refs, "lora_family": e.lora_family, "price_key": e.price_key}
+            for e in ENGINES.values()]}
+
+    @staticmethod
+    def _clean(rows, action: str) -> list[dict]:
+        cleaned, seen = [], set()
+        for row in rows:
+            name = str((row or {}).get("engine") or "")
+            engine_id = resolve(name)
+            if not engine_id:
+                raise SettingsError(f"No image engine {name!r}; use one of: {', '.join(ENGINES)}.")
+            if engine_id in seen:
+                raise SettingsError(f"{ENGINES[engine_id].label} is listed twice in the {action} order.")
+            seen.add(engine_id)
+            if not ENGINES[engine_id].supports(action):
+                # say which one, rather than dropping it and leaving the user wondering where it went
+                raise SettingsError(f"{ENGINES[engine_id].label} can't {action} images, so it can't be in that order.")
+            cleaned.append({"engine": engine_id, "enabled": bool((row or {}).get("enabled", True))})
+        if not any(row["enabled"] for row in cleaned):
+            raise SettingsError(f"Leave at least one engine on for {action}, or no image can be made.")
+        return cleaned
+
+    def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None) -> dict:
+        """Update the parts that were given. Anything left as None keeps its current value."""
+        with self._lock:
+            current = self.settings()
+            if generate is not None:
+                current["generate"] = self._clean(generate, "generate")
+            if edit is not None:
+                current["edit"] = self._clean(edit, "edit")
+            if busy_mode is not None:
+                if busy_mode not in BUSY_MODES:
+                    raise SettingsError(f"busy mode should be {' or '.join(BUSY_MODES)}.")
+                current["busy"]["mode"] = busy_mode
+            if busy_max_wait_seconds is not None:
+                current["busy"]["max_wait_seconds"] = max(0, min(MAX_WAIT_SECONDS, int(busy_max_wait_seconds)))
+            if current["busy"]["mode"] == "wait" and not current["busy"]["max_wait_seconds"]:
+                current["busy"]["mode"] = "fall_through"  # waiting zero seconds is falling through
+            self._write({**current, "updated_at": time.time()})
+        return self.view()

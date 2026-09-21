@@ -22,11 +22,13 @@ from .library import DriveBrowser, DriveExporter, ImportManager
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
 from .config import Settings
+from .image_engines import SettingsError
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
-    AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageRequest, PlanRequest, PromptIn,
+    AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
+    ImageRequest, PlanRequest, PromptIn,
     UrlAssetRequest, VideoRequest,
 )
 
@@ -275,6 +277,21 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def image_options():
         """Image engines: local Krea 2 (installed? busy?) with its LoRA catalogue, and the Atlas models."""
         return await service.image_options()
+
+    @app.get("/v1/images/engines", tags=["assets"])
+    async def image_engines_settings():
+        """Which image engines are tried, in what order, and what a busy GPU means."""
+        return service.image_engines.view()
+
+    @app.put("/v1/images/engines", tags=["assets"])
+    async def image_engines_update(body: ImageEngineSettings):
+        try:
+            return service.image_engines.save(
+                generate=None if body.generate is None else [r.model_dump() for r in body.generate],
+                edit=None if body.edit is None else [r.model_dump() for r in body.edit],
+                busy_mode=body.busy_mode, busy_max_wait_seconds=body.busy_max_wait_seconds)
+        except SettingsError as exc:
+            raise RequestError(str(exc)) from None
 
     @app.get("/studio", include_in_schema=False)
     async def studio_page():

@@ -153,6 +153,18 @@ class DriveExportSettings(BaseModel):
     image_folder: str | None = Field(None, description="Folder inside My Drive for generated images, e.g. Hawk H3/Images (a dated subfolder is added).")
 
 
+class ImageEngineRung(BaseModel):
+    engine: str = Field(description="Engine id from /v1/images/engines, e.g. klein, krea2, zimage, turbo, seedream.")
+    enabled: bool = Field(True, description="Off keeps its place in the order but is never tried.")
+
+
+class ImageEngineSettings(BaseModel):
+    generate: list[ImageEngineRung] | None = Field(None, description="Order tried for text-only images, best first.")
+    edit: list[ImageEngineRung] | None = Field(None, description="Order tried when reference_asset_ids are given, best first.")
+    busy_mode: str | None = Field(None, description='What an image does while ComfyUI renders a video: "wait" or "fall_through" to a paid engine.')
+    busy_max_wait_seconds: int | None = Field(None, ge=0, le=300, description="How long to wait before falling through.")
+
+
 class PromptIn(BaseModel):
     text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
 

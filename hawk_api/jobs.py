@@ -77,8 +77,6 @@ SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 
 # Estimated USD per image on Atlas (discounted list prices, Sept 2026); reported as cost_usd so the agent can budget.
 IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032}
 SEEDREAM_EXTRA_REFERENCE = 0.003  # each reference image after the first
-#: Order engine "auto" tries. Studio takes this over in a later commit; until then it is what it always was.
-DEFAULT_LADDER = ("krea2", "turbo", "seedream")
 
 
 def _text_only_image_model(model: str) -> bool:
@@ -355,6 +353,7 @@ class HawkService:
         self.comfy = comfy or ComfyClient(settings.comfy_url)
         self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
         self.prompts = PromptStore(settings.data_dir)
+        self.image_engines = image_engines.ImageEngineStore(settings.data_dir)
         #: Called with the job id when a render finishes (e.g. the Google Drive exporter).
         self.render_done_hooks: list = []
         self.local_images = LocalImageEngine(self)
@@ -892,8 +891,8 @@ class HawkService:
         raise last_error or RequestError("No image engine could make this image.")
 
     def image_ladder(self, action: str = "generate") -> list[str]:
-        """Engine ids to try for this action, best first. Becomes a Studio setting in a later commit."""
-        return [e for e in DEFAULT_LADDER if image_engines.get(e).supports(action)]
+        """Engine ids to try for this action, best first, as Studio has them ordered."""
+        return self.image_engines.order(action)
 
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""
@@ -911,10 +910,25 @@ class HawkService:
             steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
         return local, "krea2/turbo"
 
+    def _ladder_view(self, action: str, settings: dict) -> list[dict]:
+        rows = []
+        for row in settings[action]:
+            spec = image_engines.get(row["engine"])
+            rows.append({"engine": spec.id, "label": spec.label, "where": spec.where, "enabled": row["enabled"],
+                         "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs})
+        return rows
+
     async def image_options(self) -> dict:
         local = await self.local_images.status()
+        engines = self.image_engines.view()
+        ladders = {action: self._ladder_view(action, engines) for action in ("generate", "edit")}
         return {
             "default_engine": self.settings.image_engine,
+            "generate_ladder": ladders["generate"],
+            "edit_ladder": ladders["edit"],
+            "would_use": {action: (self.image_ladder(action) or [None])[0] for action in ("generate", "edit")},
+            "busy": engines["busy"],
+            "engine_warnings": engines["warnings"],
             "local": local,
             "atlas": {"configured": self.atlas.configured, "text_to_image": self.settings.image_model,
                       "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,
