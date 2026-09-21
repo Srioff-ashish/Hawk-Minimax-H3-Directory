@@ -984,30 +984,6 @@
           </div>
         </section>
         <section class="card">
-          <div class="card-head"><h2>Image engines</h2><span class="chip" id="engineHostChip">Checking…</span></div>
-          <div class="card-body" style="display:grid;gap:14px">
-            <span class="hint">Engines are tried top to bottom, and the first one that answers makes the image. Switch one off to skip it without losing its place. The agent and your chat connectors follow this order too.</span>
-            <div class="field"><label class="label">Making an image from text</label><div id="engineListGenerate" class="engine-list"></div></div>
-            <div class="field"><label class="label">Editing an image (with reference images)</label><div id="engineListEdit" class="engine-list"></div></div>
-            <div class="field"><label class="label" for="engineBusyMode">While a video render is using the GPU</label>
-              <select class="select" id="engineBusyMode">
-                <option value="wait">Wait for it, then make the image here (free)</option>
-                <option value="fall_through">Don't wait — move down to a paid engine</option>
-              </select>
-              <span class="hint">Waiting keeps images on your own GPU instead of billing Atlas for them.</span></div>
-            <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
-              <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
-            <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
-            <div class="field"><label class="label">LoRAs each model attaches on its own</label>
-              <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
-              <div id="engineDefaults" class="engine-list" style="margin-top:8px"></div>
-              <div style="font-size:12px;color:var(--ink-2);margin:10px 0 4px">MiniMax H3 (video renders)</div>
-              <div id="videoDefaults" class="engine-list"></div></div>
-            <div id="engineWarnings"></div>
-            <div class="row"><button class="btn btn-sm btn-primary" id="engineSave" type="button">Save</button><span class="hint" id="engineHint"></span></div>
-          </div>
-        </section>
-        <section class="card">
           <div class="card-head"><h2>Video delivery</h2><span class="chip" id="driveMountChip">Checking Drive…</span></div>
           <div class="card-body" style="display:grid;gap:14px">
             <div class="field"><label class="label" for="playbackSource">Play and download from</label>
@@ -1021,6 +997,34 @@
             <div class="field"><label class="label" for="driveExportImageFolder">Drive folder for images</label>
               <input class="input" id="driveExportImageFolder" placeholder="Hawk H3/Images"><span class="hint">Inside My Drive. Images go into a dated subfolder.</span></div>
             <div class="row"><button class="btn btn-sm btn-primary" id="driveExportSave" type="button">Save</button><span class="hint" id="driveExportHint"></span></div>
+          </div>
+        </section>
+        <section class="card" style="grid-column:1/-1">
+          <div class="card-head"><h2>Image engines</h2><span class="chip" id="engineHostChip">Checking…</span></div>
+          <div class="card-body" style="display:grid;gap:14px">
+            <span class="hint">Engines are tried top to bottom, and the first one that answers makes the image. Switch one off to skip it without losing its place. The agent and your chat connectors follow this order too.</span>
+            <div class="grid grid-2">
+              <div class="field"><label class="label">Making an image from text</label><div id="engineListGenerate" class="engine-list"></div></div>
+              <div class="field"><label class="label">Editing an image (with reference images)</label><div id="engineListEdit" class="engine-list"></div></div>
+            </div>
+            <div class="field"><label class="label" for="engineBusyMode">While a video render is using the GPU</label>
+              <select class="select" id="engineBusyMode">
+                <option value="wait">Wait for it, then make the image here (free)</option>
+                <option value="fall_through">Don't wait — move down to a paid engine</option>
+              </select>
+              <span class="hint">Waiting keeps images on your own GPU instead of billing Atlas for them.</span></div>
+            <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
+              <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
+            <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
+            <div class="field"><label class="label">LoRAs each model attaches on its own</label>
+              <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
+              <div class="grid grid-2" style="margin-top:8px;align-items:start">
+                <div id="engineDefaults" class="engine-list"></div>
+                <div><div style="font-size:12px;color:var(--ink-2);margin:0 0 4px">MiniMax H3 (video renders)</div>
+                  <div id="videoDefaults" class="engine-list"></div></div>
+              </div></div>
+            <div id="engineWarnings"></div>
+            <div class="row"><button class="btn btn-sm btn-primary" id="engineSave" type="button">Save</button><span class="hint" id="engineHint"></span></div>
           </div>
         </section>
       </div>
