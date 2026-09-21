@@ -315,7 +315,8 @@ class LocalImageEngine:
             return {"installed": False, "busy": False, "reachable": False, "missing": [], "error": str(exc), "loras": []}
         return {"installed": not missing, "busy": busy, "queue": queue, "reachable": reachable, "missing": missing,
                 "model": files.get("unet", s.krea_unet), "files": files, "edit": await self.edit_status(),
-                "loras": [lora.view() for lora in await self.catalogue()]}
+                # this status block is Krea 2's, so it lists Krea 2's LoRAs; other families have their own engines
+                "loras": [lora.view() for lora in await self.catalogue("krea2")]}
 
     async def edit_status(self) -> dict:
         """Krea 2 Identity Edit: the comfyui-krea2edit nodes and the identity-edit LoRA."""
@@ -366,10 +367,15 @@ class LocalImageEngine:
         return names | {f.rsplit("/", 1)[-1].lower() for f in files if EDIT_LORA.search(f.rsplit("/", 1)[-1])}
 
     async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS,
-                            adult_default: bool = False
+                            adult_default: bool = False, family: str = "krea2",
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:
+        """Match the requested LoRAs against the ones this engine can actually load.
+
+        Only ``family``'s files are candidates: a Klein LoRA in a Krea 2 graph does not fail, it just makes
+        a worse image, so the wrong family must never be reachable by name.
+        """
         requested = list(requested or [])
-        items = [item for item in await self.catalogue() if item.installed]
+        items = [item for item in await self.catalogue(family) if item.installed]
         automatic = set()
         if adult_default and not _names_adult(requested, items):
             # only what is actually installed, so a pod without the pair still generates
@@ -422,7 +428,7 @@ class LocalImageEngine:
         if status["busy"] and not wait_if_busy:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
-                                                          adult_default=self.adult_default)
+                                                          adult_default=self.adult_default, family="krea2")
         width, height = parse_size(size)
         text = prompt.strip()
         for item in used:  # trigger words go in automatically
@@ -468,7 +474,7 @@ class LocalImageEngine:
         # refuses them there anyway, and would fail every ordinary photo edit if they were attached blindly.
         photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
-                                                          adult_default=self.adult_default and not photo)
+                                                          adult_default=self.adult_default and not photo, family="krea2")
         check_edit(prompt, sources, used, self.service.store.get_asset)
         if size:
             width, height = parse_size(size)

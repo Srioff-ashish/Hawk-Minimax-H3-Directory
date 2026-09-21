@@ -930,6 +930,14 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         # two rungs were still below it; a refusal must not walk down to one of them, least of all a paid one
         self.assertEqual(len(self.atlas.image_requests), spent, "a refused prompt never reaches a paid engine")
 
+        # a LoRA for another local engine must not be reachable from a Krea 2 image, by any name
+        self.fake.model_files["loras"] += ["klein_snofs.safetensors", "zit_mystic_xxx.safetensors"]
+        for name in ("klein_snofs", "zit_mystic_xxx"):
+            wrong = await self.http.post("/v1/images", json={"prompt": "A lamp", "loras": [{"name": name}]})
+            self.assertEqual(wrong.status_code, 422, f"{name} is not a Krea 2 LoRA")
+        images = (await self.http.get("/v1/images/options")).json()["local"]["loras"]
+        self.assertNotIn("klein_snofs.safetensors", [l["file"] for l in images], "another engine's LoRA isn't offered")
+
         moved = await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "z-image"})
         self.assertEqual(moved.status_code, 422, "engine z-image now means the local engine, which isn't wired up")
         self.assertIn("local", moved.json()["error"].lower())
@@ -1369,7 +1377,7 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
             async def _files(self, _kind):
                 return list(DEFAULT_ADULT_LORAS) + ["krea2_realism_v2.safetensors"]
 
-            async def catalogue(self):
+            async def catalogue(self, family=""):
                 from hawk_api.local_images import ImageLora
                 return [ImageLora(file=DEFAULT_ADULT_LORAS[0], label="SNOFS", kind="adult", strength=0.8, installed=True),
                         ImageLora(file=DEFAULT_ADULT_LORAS[1], label="Mystic XXX v3", kind="adult", strength=0.5, installed=True),
