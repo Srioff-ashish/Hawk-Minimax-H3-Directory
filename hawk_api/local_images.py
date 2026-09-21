@@ -250,6 +250,7 @@ def load_catalogue(path: str) -> list[ImageLora]:
             file=str(entry["file"]), kind=str(entry.get("kind") or "other").lower(), label=str(entry.get("label") or ""),
             strength=float(entry.get("strength", 0.8)), range=(float(low), float(high)), trigger=str(entry.get("trigger") or ""),
             notes=str(entry.get("notes") or ""), steps=entry.get("steps"), scheduler=entry.get("scheduler"), sampler=entry.get("sampler"),
+            family=str(entry.get("family") or "krea2"),
         ))
     return items
 
@@ -558,10 +559,12 @@ class LocalImageEngine:
         if adult_default and not _names_adult(requested, items):
             stored = self.service.image_engines.defaults(family)
             wanted = stored if stored is not None else [{"name": n} for n in DEFAULT_ADULT_LORAS.get(family, ())]
-            # only what is actually installed, so a pod missing one of them still generates
+            # never add one the request already names, or it is applied twice at double strength
+            asked = {str(spec.get("name") or "").strip().lower().removesuffix(".safetensors") for spec in requested}
             automatic = {str(entry.get("name") or "") for entry in wanted
                          if any(i.file == entry.get("name") or i.file.endswith("/" + str(entry.get("name")))
-                                for i in items)}
+                                for i in items)  # only what is installed, so a pod missing one still generates
+                         and str(entry.get("name") or "").lower().removesuffix(".safetensors") not in asked}
             requested += [dict(entry) for entry in wanted if entry.get("name") in automatic]
         if not requested:
             return [], [], []

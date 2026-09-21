@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. When this example's version goes up, the copy is replaced (the old one is kept as image_loras.json.bak). kind: realism, detail, style, adult. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
     {
@@ -11,7 +11,8 @@
         0.5,
         1.0
       ],
-      "notes": "Older photorealism LoRA; prefer Realism v2 when installed."
+      "notes": "Older photorealism LoRA; prefer Realism v2 when installed.",
+      "family": "krea2"
     },
     {
       "file": "krea2_realism_v2.safetensors",
@@ -22,7 +23,8 @@
         0.5,
         1.0
       ],
-      "notes": "Newer photorealism LoRA: skin, light, lens character. Good default for photo portraits; use instead of v1."
+      "notes": "Newer photorealism LoRA: skin, light, lens character. Good default for photo portraits; use instead of v1.",
+      "family": "krea2"
     },
     {
       "file": "krea2_realistic_snapshot.safetensors",
@@ -33,7 +35,8 @@
         1.0,
         2.0
       ],
-      "notes": "Candid phone-snapshot look: natural flash, casual framing, less polish."
+      "notes": "Candid phone-snapshot look: natural flash, casual framing, less polish.",
+      "family": "krea2"
     },
     {
       "file": "krea2_enhancer.safetensors",
@@ -44,7 +47,8 @@
         0.4,
         1.0
       ],
-      "notes": "AVOID: gives poor results on this setup. Don't use it unless the user asks by name; use the photo-detail slider for crispness."
+      "notes": "AVOID: gives poor results on this setup. Don't use it unless the user asks by name; use the photo-detail slider for crispness.",
+      "family": "krea2"
     },
     {
       "file": "snofs_photodetail_slider.safetensors",
@@ -55,7 +59,8 @@
         0.5,
         2.0
       ],
-      "notes": "Pulls images back to photographic detail; raise towards 2 if results drift anime or plastic."
+      "notes": "Pulls images back to photographic detail; raise towards 2 if results drift anime or plastic.",
+      "family": "krea2"
     },
     {
       "file": "krea2_mystic_xxx_v3.safetensors",
@@ -69,7 +74,8 @@
       "steps": 12,
       "scheduler": "beta",
       "sampler": "euler",
-      "notes": "GO-TO adult LoRA, together with SNOFS: the best adult results so far. Fictional adults only."
+      "notes": "GO-TO adult LoRA, together with SNOFS: the best adult results so far. Fictional adults only.",
+      "family": "krea2"
     },
     {
       "file": "snofs_krea2.safetensors",
@@ -80,7 +86,8 @@
         0.5,
         1.0
       ],
-      "notes": "GO-TO adult LoRA, together with Mystic XXX: the best adult results so far. Fictional adults only."
+      "notes": "GO-TO adult LoRA, together with Mystic XXX: the best adult results so far. Fictional adults only.",
+      "family": "krea2"
     },
     {
       "file": "krea2_nsfw_master_turbo.safetensors",
@@ -91,7 +98,8 @@
         0.5,
         1.0
       ],
-      "notes": "Adult content tuned for Turbo. Add as a third adult LoRA only when SNOFS + Mystic XXX aren't enough. Fictional adults only."
+      "notes": "Adult content tuned for Turbo. Add as a third adult LoRA only when SNOFS + Mystic XXX aren't enough. Fictional adults only.",
+      "family": "krea2"
     },
     {
       "file": "krea2_nsfw_v4.safetensors",
@@ -102,7 +110,8 @@
         0.5,
         1.0
       ],
-      "notes": "Adult content LoRA (Civitai 2725430). Alternative third adult LoRA when SNOFS + Mystic XXX aren't enough. Fictional adults only."
+      "notes": "Adult content LoRA (Civitai 2725430). Alternative third adult LoRA when SNOFS + Mystic XXX aren't enough. Fictional adults only.",
+      "family": "krea2"
     },
     {
       "file": "krea2_darkbrush.safetensors",
@@ -114,7 +123,8 @@
         1.0
       ],
       "trigger": "muted minimalist sketch style",
-      "notes": "Official Krea 2 style LoRA: muted minimalist ink sketch."
+      "notes": "Official Krea 2 style LoRA: muted minimalist ink sketch.",
+      "family": "krea2"
     },
     {
       "file": "krea2_sunsetblur.safetensors",
@@ -126,7 +136,92 @@
         1.0
       ],
       "trigger": "ethereal motion blur style",
-      "notes": "Official Krea 2 style LoRA: dreamy motion blur, sunset tones."
+      "notes": "Official Krea 2 style LoRA: dreamy motion blur, sunset tones.",
+      "family": "krea2"
+    },
+    {
+      "file": "klein_snofs.safetensors",
+      "family": "klein",
+      "kind": "adult",
+      "label": "SNOFS (Klein)",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "notes": "GO-TO adult LoRA for FLUX.2 Klein, the Klein 9b build of SNOFS. Fictional adults only."
+    },
+    {
+      "file": "klein_nsfw_no_face_change.safetensors",
+      "family": "klein",
+      "kind": "adult",
+      "label": "Klein NSFW (no face change)",
+      "strength": 0.7,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "GO-TO with SNOFS: adult content while leaving the face alone, which is what makes a character hold across shots."
+    },
+    {
+      "file": "klein_nsfw_unlocked.safetensors",
+      "family": "klein",
+      "kind": "adult",
+      "label": "Klein NSFW Unlocked",
+      "strength": 0.7,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "Broader adult coverage. Use instead of SNOFS, not with it."
+    },
+    {
+      "file": "klein_nipple_detail.safetensors",
+      "family": "klein",
+      "kind": "detail",
+      "label": "NippleDiffusion (Klein)",
+      "strength": 0.6,
+      "range": [
+        0.4,
+        0.8
+      ],
+      "notes": "Anatomical detail only; stacks with an adult LoRA rather than replacing one."
+    },
+    {
+      "file": "klein_realism_engine.safetensors",
+      "family": "klein",
+      "kind": "realism",
+      "label": "Realism Engine (Klein)",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "notes": "Photographic skin and light. Safe to stack with anything."
+    },
+    {
+      "file": "zit_mystic_xxx.safetensors",
+      "family": "zit",
+      "kind": "adult",
+      "label": "Mystic XXX (Z-Image)",
+      "strength": 0.7,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "GO-TO adult LoRA for Z-Image Turbo, the ZIT build of Mystic XXX. Fictional adults only."
+    },
+    {
+      "file": "zit_betternudes.safetensors",
+      "family": "zit",
+      "kind": "adult",
+      "label": "PhotoReal BetterNudes (Z-Image)",
+      "strength": 0.7,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "Alternative to Mystic XXX for Z-Image; use one or the other."
     }
   ]
 }

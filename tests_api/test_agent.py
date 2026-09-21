@@ -1537,6 +1537,11 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         _, used, _ = await engine.resolve_loras([{"name": "snofs_krea2.safetensors"}], adult_default=True)
         self.assertEqual([i.automatic for i in used], [False], "asking for it yourself keeps its sampler hints")
 
+        # naming one of the defaults must not apply it twice at double strength
+        chosen, _, _ = await engine.resolve_loras([{"name": "snofs_krea2.safetensors", "strength": 0.9}], adult_default=True)
+        self.assertEqual([f for f, _ in chosen].count("snofs_krea2.safetensors"), 1, "added once, not twice")
+        self.assertEqual(dict(chosen)["snofs_krea2.safetensors"], 0.9, "at the strength that was asked for")
+
         # Studio's panel replaces the shipped pair for that family, and an empty list switches it off
         picked = Catalogue(stored=[{"name": "krea2_nsfw_v4.safetensors", "strength": 0.6}])
         chosen, _, _ = await picked.resolve_loras(None, adult_default=True)

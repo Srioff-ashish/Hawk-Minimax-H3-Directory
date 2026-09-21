@@ -2692,6 +2692,9 @@
 
     // LoRAs belong to whichever local engine will run, and only that engine's family loads cleanly
     const installed = loraSetFor(row && row.where === "local" ? id : "").filter((l) => l.installed);
+    // switching engine leaves picks from the old family behind; sending those is a 422
+    const mine = new Set(installed.map((l) => l.file));
+    Object.keys(gen.loras).forEach((file) => { if (!mine.has(file)) delete gen.loras[file]; });
     $("genLoraField").hidden = !(row && row.where === "local");
     $("genLoraField").querySelector(".label").textContent = `${row ? row.label : ""} LoRAs`;
     const html = installed.length ? installed.map((l) => {
