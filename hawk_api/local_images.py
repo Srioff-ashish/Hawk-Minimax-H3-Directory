@@ -494,6 +494,22 @@ class LocalImageEngine:
         # the full-rank file first, then the r128 / r64 low-VRAM variants; newest version first
         return min(matches, key=lambda n: ("_r64" in n, "_r128" in n, [-int(x) for x in re.findall(r"\d+", n)])) if matches else None
 
+    async def wait_until_idle(self, seconds: float) -> bool:
+        """Poll until ComfyUI's queue drains, or the budget runs out. True when it drained.
+
+        Polls busy() and never status(): status re-lists every model folder, so polling it for two minutes
+        would be two minutes of model listings.
+        """
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            busy, _ = await self.busy()
+            if not busy:
+                return True
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return False
+            await asyncio.sleep(min(POLL_SECONDS, left))
+
     async def busy(self) -> tuple[bool, int]:
         running, pending = await self.service.comfy.queue_state()
         return bool(running or pending), len(running) + len(pending)
@@ -581,7 +597,7 @@ class LocalImageEngine:
 
     # ------------------------------------------------------------ generate
 
-    def _ready(self, status: dict, engine: str, action: str = "generate") -> None:
+    async def _ready(self, status: dict, engine: str, action: str = "generate", wait_seconds: float = 0.0) -> None:
         """Raise unless this engine can run right now. Never fatal: the ladder may have somewhere else to go."""
         label = image_engines.get(engine).label
         if not status.get("reachable"):
@@ -590,6 +606,8 @@ class LocalImageEngine:
             raise LocalImageError(f"{label} is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
         if action == "edit" and not status["edit"]["installed"]:
             raise LocalImageError(f"{label} can't edit here (missing " + ", ".join(status["edit"]["missing"]) + ").")
+        if status["busy"] and wait_seconds > 0 and await self.wait_until_idle(wait_seconds):
+            return  # the render finished while we waited, so this engine can have the GPU
         if status["busy"]:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
 
@@ -609,11 +627,12 @@ class LocalImageEngine:
         return await self._collect(prompt_id)
 
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
-                       loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False,
-                       max_adult_loras: int = MAX_ADULT_LORAS, engine: str = "krea2") -> LocalResult:
+                       loras: list[dict] | None = None, steps: int | None = None,
+                       max_adult_loras: int = MAX_ADULT_LORAS, engine: str = "krea2",
+                       wait_seconds: float = 0.0) -> LocalResult:
         check_prompt(prompt)
         status = await self.status(engine)
-        self._ready(status, engine)
+        await self._ready(status, engine, wait_seconds=wait_seconds)
         spec = image_engines.get(engine)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
                                                           adult_default=self.adult_default, family=spec.lora_family)
@@ -649,11 +668,11 @@ class LocalImageEngine:
 
     async def edit_klein(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
                          seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
-                         max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
+                         max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0) -> LocalResult:
         """FLUX.2 Klein edit: every reference folded in through its own ReferenceLatent."""
         check_prompt(prompt)
         status = await self.status("klein")
-        self._ready(status, "klein", "edit")
+        await self._ready(status, "klein", "edit", wait_seconds=wait_seconds)
         photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
                                                           adult_default=self.adult_default and not photo, family="klein")
@@ -674,7 +693,7 @@ class LocalImageEngine:
 
     async def edit(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1, seed: int | None = None,
                    loras: list[dict] | None = None, steps: int | None = None, ref_boost: float | None = None,
-                   wait_if_busy: bool = False, max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
+                   wait_seconds: float = 0.0, max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
         """Edit one image (or put the person from a second image into the first) with Krea 2 Identity Edit."""
         check_prompt(prompt)
         if not 1 <= len(sources) <= 2:
@@ -686,7 +705,9 @@ class LocalImageEngine:
             raise LocalImageError("Krea 2 is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
         if not status["edit"]["installed"]:
             raise LocalImageError("Krea 2 edit is not installed (missing " + ", ".join(status["edit"]["missing"]) + ").")
-        if status["busy"] and not wait_if_busy:
+        if status["busy"] and wait_seconds > 0 and await self.wait_until_idle(wait_seconds):
+            pass  # the render finished while we waited
+        elif status["busy"]:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
         # Editing a picture made here means a fictional character, so the go-to adult pair applies as it does to
         # generation. Anything tracing back to an uploaded photo may be a real person and never gets them; check_edit

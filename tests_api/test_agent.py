@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 
@@ -1018,7 +1019,21 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         # klein and zimage are not installed in this fixture, so the busy Krea 2 is further down "tried"
         self.assertTrue(any("busy" in t["skipped"] for t in busy["tried"]), busy["tried"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})).status_code, 422)
+
+        # waiting: with a budget it holds for the render instead of paying, and still falls through on timeout
+        await self.http.put("/v1/images/engines", json={"busy_mode": "wait", "busy_max_wait_seconds": 1})
+        started = time.monotonic()
+        waited = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
+        self.assertGreaterEqual(time.monotonic() - started, 1.0, "it actually waited for the GPU")
+        self.assertEqual(waited["engine"], "z-image", "still falls through rather than hanging forever")
+        await self.http.put("/v1/images/engines", json={"busy_mode": "fall_through"})
         self.fake.running.pop("render")
+
+        # once the GPU is free the wait costs nothing and the local engine runs
+        await self.http.put("/v1/images/engines", json={"busy_mode": "wait", "busy_max_wait_seconds": 60})
+        quick = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
+        self.assertEqual(quick["engine"], "krea2")
+        await self.http.put("/v1/images/engines", json={"busy_mode": "fall_through"})
 
         # Krea 2 Identity Edit: needs the comfyui-krea2edit nodes and the LoRA; auto falls back to Seedream edit
         character = made["assets"][0]["id"]

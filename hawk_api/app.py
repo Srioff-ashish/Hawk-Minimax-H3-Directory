@@ -23,12 +23,13 @@ from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
 from .config import Settings
 from .image_engines import SettingsError
+from .loras import LoraError, default_status, load_config, save_defaults
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, PlanRequest, PromptIn,
+    ImageRequest, PlanRequest, PromptIn, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest,
 )
 
@@ -294,6 +295,21 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                 defaults=None if body.defaults is None else {f: [r.model_dump() for r in rows] for f, rows in body.defaults.items()})
         except SettingsError as exc:
             raise RequestError(str(exc)) from None
+
+    @app.get("/v1/loras/defaults", tags=["renders"])
+    async def video_lora_defaults():
+        """The MiniMax H3 LoRAs every render starts with, and whether each one is on this pod."""
+        config = load_config(settings.loras_path)
+        return {"defaults": default_status(config, await service.available_loras(refresh=True))}
+
+    @app.put("/v1/loras/defaults", tags=["renders"])
+    async def video_lora_defaults_update(body: VideoLoraDefaults):
+        try:
+            save_defaults(settings.loras_path, [r.model_dump() for r in body.defaults])
+        except LoraError as exc:
+            raise RequestError(str(exc)) from None
+        config = load_config(settings.loras_path)
+        return {"defaults": default_status(config, await service.available_loras(refresh=True))}
 
     @app.get("/studio", include_in_schema=False)
     async def studio_page():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import unittest
@@ -34,6 +35,9 @@ CONFIG = parse_config(
         "presets": {"realism": [{"name": "realism-people", "strength": 0.8}]},
     }
 )
+
+
+from hawk_api import loras
 
 
 class ResolveName(unittest.TestCase):
@@ -165,3 +169,42 @@ class ShippedCatalogue(unittest.TestCase):
         self.assertEqual(applied["H3_Motion_BoosterV2.safetensors"], 0.0, "strength 0 switches a shipped default off")
         self.assertEqual(applied["HMNSFW_AIO_V25.safetensors"], 0.4, "a strength set on the pod is kept")
         self.assertIn("minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", applied, "and the rest still arrive")
+
+class SaveDefaults(unittest.TestCase):
+    def setUp(self):
+        import shutil, tempfile
+        self.path = os.path.join(tempfile.mkdtemp(), "loras.json")
+        shutil.copyfile(loras.EXAMPLE_CONFIG, self.path)
+
+    def rows(self):
+        return [(s.name, s.strength) for s in loras.load_config(self.path).defaults]
+
+    def test_strength_zero_switches_one_off_and_it_stays_off(self):
+        loras.save_defaults(self.path, [{"name": n, "strength": 0.0 if "AIO" in n else v} for n, v in self.rows()])
+        off = dict(self.rows())
+        self.assertEqual(off["HMNSFW_AIO_V25.safetensors"], 0.0)
+        # deleting instead would let _with_new_defaults add it straight back on the next read
+        self.assertIn("HMNSFW_AIO_V25.safetensors", off, "kept in the file, at zero")
+
+    def test_presets_and_other_keys_survive(self):
+        before = json.load(open(self.path))
+        loras.save_defaults(self.path, [{"name": n, "strength": v} for n, v in self.rows()])
+        after = json.load(open(self.path))
+        self.assertEqual(after.get("presets"), before.get("presets"))
+        self.assertEqual(after.get("version"), before.get("version"))
+
+    def test_a_required_default_cannot_be_dropped(self):
+        with self.assertRaises(loras.LoraError) as caught:
+            loras.save_defaults(self.path, [{"name": "H3_Motion_BoosterV2.safetensors", "strength": 1.0}])
+        self.assertIn("required", str(caught.exception))
+
+    def test_duplicates_and_bad_strengths_are_refused(self):
+        with self.assertRaises(loras.LoraError):
+            loras.save_defaults(self.path, [{"name": "a.safetensors"}, {"name": "a.safetensors"}])
+        with self.assertRaises(loras.LoraError):
+            loras.save_defaults(self.path, [{"name": "a.safetensors", "strength": 5}])
+
+    def test_it_writes_atomically(self):
+        loras.save_defaults(self.path, [{"name": n, "strength": v} for n, v in self.rows()])
+        self.assertFalse(os.path.exists(self.path + ".tmp"))
+

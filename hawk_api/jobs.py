@@ -844,6 +844,13 @@ class HawkService:
                     references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
             return references
 
+        # One wait budget for the whole walk, as a deadline: three local rungs must not each wait the full
+        # time on the same busy ComfyUI. Nothing to wait for when no local engine is in the ladder.
+        wait_until = 0.0
+        if any(image_engines.get(e).local for e in ladder):
+            budget = self.image_engines.wait_seconds()
+            wait_until = time.monotonic() + budget if budget else 0.0
+
         last_error, said_loras = None, False
         for index, engine_id in enumerate(ladder):
             spec = image_engines.get(engine_id)
@@ -862,7 +869,8 @@ class HawkService:
                 try:
                     local, used = await self._local_image(
                         spec, action, prompt, sources, size=size, n=n, seed=seed, loras=loras, steps=steps,
-                        ref_boost=ref_boost, max_adult_loras=max_adult_loras)
+                        ref_boost=ref_boost, max_adult_loras=max_adult_loras,
+                        wait_seconds=max(0.0, wait_until - time.monotonic()) if wait_until else 0.0)
                 except LocalImageError as exc:
                     # A content refusal is final. Walking on would hand the same prompt to the next engine,
                     # and eventually to a paid one whose moderation is not ours -- so stop the whole ladder.
@@ -932,15 +940,18 @@ class HawkService:
             if spec.id == "klein":
                 local = await self.local_images.edit_klein(
                     prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
-                    steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
+                    steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"],
+                    wait_seconds=kwargs["wait_seconds"])
                 return local, "klein/9b-edit"
             local = await self.local_images.edit(
                 prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
-                steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"])
+                steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"],
+                wait_seconds=kwargs["wait_seconds"])
             return local, "krea2/identity-edit"
         local = await self.local_images.generate(
             prompt, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
-            steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"], engine=spec.id)
+            steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"], engine=spec.id,
+            wait_seconds=kwargs["wait_seconds"])
         return local, self.LOCAL_MODEL_NAMES[spec.id]
 
     def _ladder_view(self, action: str, settings: dict, local: dict) -> list[dict]:

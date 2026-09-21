@@ -989,7 +989,9 @@
             <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
             <div class="field"><label class="label">LoRAs each model attaches on its own</label>
               <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
-              <div id="engineDefaults" class="engine-list" style="margin-top:8px"></div></div>
+              <div id="engineDefaults" class="engine-list" style="margin-top:8px"></div>
+              <div style="font-size:12px;color:var(--ink-2);margin:10px 0 4px">MiniMax H3 (video renders)</div>
+              <div id="videoDefaults" class="engine-list"></div></div>
             <div id="engineWarnings"></div>
             <div class="row"><button class="btn btn-sm btn-primary" id="engineSave" type="button">Save</button><span class="hint" id="engineHint"></span></div>
           </div>
@@ -3068,7 +3070,7 @@
     $("playbackSource").value = playbackSource();
     if (PREFIX || token) { loadDriveExport(); loadImageEngines(); }
   }
-  const engineState = { generate: [], edit: [], engines: {}, defaults: {}, familyLoras: {},
+  const engineState = { generate: [], edit: [], engines: {}, defaults: {}, familyLoras: {}, video: [],
                         busy: { mode: "fall_through", max_wait_seconds: 120 } };
   const gb = (bytes) => (typeof bytes === "number" ? `${(bytes / 2 ** 30).toFixed(0)} GB` : "?");
 
@@ -3131,6 +3133,25 @@
       host.appendChild(block);
     });
   }
+  function paintVideoDefaults(rows) {
+    const host = $("videoDefaults");
+    host.innerHTML = "";
+    engineState.video = rows.map((r) => ({ name: r.name, strength: r.strength, required: r.required }));
+    rows.forEach((row, index) => {
+      const line = document.createElement("div");
+      line.className = `engine-row${row.strength ? "" : " off"}`;
+      line.innerHTML = `<span class="engine-name">${row.name}</span>
+        ${row.present ? "" : '<span class="chip warn">not on this pod</span>'}
+        ${row.required ? '<span class="chip">required</span>' : ""}
+        <input class="input" type="number" min="0" max="2" step="0.1" style="width:80px" value="${row.strength}">`;
+      line.querySelector("input").onchange = (e) => {
+        engineState.video[index].strength = Number(e.target.value) || 0;
+        line.className = `engine-row${engineState.video[index].strength ? "" : " off"}`;
+      };
+      host.appendChild(line);
+    });
+    if (!rows.length) host.innerHTML = '<span class="hint">No video LoRA defaults configured.</span>';
+  }
   function paintImageEngines(data) {
     engineState.engines = Object.fromEntries((data.engines || []).map((e) => [e.id, e]));
     engineState.generate = data.generate.map((row) => ({ ...row }));
@@ -3157,6 +3178,7 @@
         if (family) engineState.familyLoras[family] = (st.loras || []).filter((l) => l.installed).map((l) => l.file);
       });
       paintEngineDefaults({ families: (await api("/v1/images/engines")).families || {} });
+      paintVideoDefaults(((await api("/v1/loras/defaults").catch(() => ({}))).defaults) || []);
       const sys = options.system || {};
       const chip = $("engineHostChip");
       if (sys.ram_total) {
@@ -3173,6 +3195,11 @@
         body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
           busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
           confirm_paid: $("engineConfirmPaid").checked, defaults: engineState.defaults }) }));
+      if (engineState.video.length) {
+        // video defaults live in loras.json, with its own rules, so they save separately
+        paintVideoDefaults((await api("/v1/loras/defaults", { method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ defaults: engineState.video.map(({ name, strength }) => ({ name, strength })) }) })).defaults);
+      }
       toast("Engine order saved");
     } catch (error) { toast("Could not save", error.message, "bad"); loadImageEngines(); }
   };

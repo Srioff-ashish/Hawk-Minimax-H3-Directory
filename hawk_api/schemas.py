@@ -174,6 +174,15 @@ class ImageEngineSettings(BaseModel):
         None, description='LoRAs a family attaches on its own, keyed by family (krea2, klein, zit). An empty list switches them off.')
 
 
+class VideoLoraDefault(BaseModel):
+    name: str = Field(description="MiniMax H3 LoRA file from list_loras.")
+    strength: float = Field(1.0, ge=0.0, le=2.0, description="0 switches it off without removing it.")
+
+
+class VideoLoraDefaults(BaseModel):
+    defaults: list[VideoLoraDefault] = Field(description="The full list, in order. Required entries must stay.")
+
+
 class PromptIn(BaseModel):
     text: str = Field(description="The full prompt text. Saving the default text (or an empty text) resets to the built-in prompt.")
 

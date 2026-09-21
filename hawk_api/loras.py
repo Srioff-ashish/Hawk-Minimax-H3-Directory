@@ -85,6 +85,45 @@ def load_config(path: str) -> LoraConfig:
     return parse_config(_with_new_defaults(data, path), path)
 
 
+def save_defaults(path: str, entries: list[dict]) -> None:
+    """Rewrite only the ``defaults`` list in loras.json, leaving presets and everything else alone.
+
+    A default is switched off with ``strength: 0`` rather than by deleting it, because _with_new_defaults adds
+    back any shipped name the file doesn't list -- a deleted one would reappear on the next read. Entries marked
+    ``required`` in the shipped catalogue can't be dropped: the turbo LoRA decides the step count.
+    """
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    current = {_stem(str(item.get("name") or "")): item for item in data.get("defaults") or [] if isinstance(item, dict)}
+    required = {stem for stem, item in current.items() if item.get("required")}
+    rows, seen = [], set()
+    for entry in entries:
+        name = str((entry or {}).get("name") or "").strip()
+        if not name:
+            raise LoraError("Give a LoRA file name.")
+        stem = _stem(name)
+        if stem in seen:
+            raise LoraError(f"{name!r} is listed twice.")
+        seen.add(stem)
+        try:
+            strength = float((entry or {}).get("strength", 1.0))
+        except (TypeError, ValueError):
+            raise LoraError(f"{name!r} needs a number for strength.") from None
+        if not 0.0 <= strength <= 2.0:
+            raise LoraError(f"{name!r}: strength should be between 0 and 2.")
+        row = dict(current.get(stem) or {})
+        row.update(name=name, strength=strength)
+        rows.append(row)
+    missing = [current[stem].get("name") for stem in required - seen]
+    if missing:
+        raise LoraError(f"{', '.join(str(m) for m in missing)} is required for renders and can't be removed.")
+    data["defaults"] = rows
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2)
+    os.replace(tmp, path)
+
+
 def _with_new_defaults(data, path: str):
     """Defaults added to the shipped catalogue since this pod's copy was written still apply, the way the image
     catalogue picks up new LoRAs. Only names the copy doesn't list are added, so edits on the pod are kept; to
