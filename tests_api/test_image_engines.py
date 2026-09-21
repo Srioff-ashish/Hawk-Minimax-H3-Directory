@@ -266,6 +266,39 @@ class Store(unittest.TestCase):
             handle.write("{ not json")
         self.assertEqual(self.store.order("generate"), ["krea2", "turbo", "seedream"])
 
+    def test_a_family_with_no_stored_defaults_falls_back_to_the_shipped_pair(self):
+        self.assertIsNone(self.store.defaults("klein"), "never set is not the same as empty")
+        self.assertEqual([r["name"] for r in self.store.view()["defaults"]["klein"]],
+                         list(ie.DEFAULT_ADULT_LORAS["klein"]))
+
+    def test_stored_defaults_replace_the_shipped_ones(self):
+        view = self.store.save(defaults={"zit": [{"name": "zit_betternudes.safetensors", "strength": 0.6}]})
+        self.assertEqual(view["defaults"]["zit"], [{"name": "zit_betternudes.safetensors", "strength": 0.6}])
+        self.assertEqual(self.store.defaults("zit"), [{"name": "zit_betternudes.safetensors", "strength": 0.6}])
+
+    def test_an_empty_list_switches_a_family_off(self):
+        self.store.save(defaults={"krea2": []})
+        self.assertEqual(self.store.defaults("krea2"), [], "off, not 'use the shipped pair'")
+
+    def test_a_lora_from_another_family_is_refused(self):
+        with self.assertRaises(ie.SettingsError) as caught:
+            self.store.save(defaults={"klein": [{"name": "zit_mystic_xxx.safetensors"}]})
+        self.assertIn("FLUX.2 Klein", str(caught.exception))
+
+    def test_an_unknown_family_is_refused(self):
+        with self.assertRaises(ie.SettingsError):
+            self.store.save(defaults={"h3": [{"name": "H3_Motion_BoosterV2.safetensors"}]})
+
+    def test_strength_is_bounded(self):
+        with self.assertRaises(ie.SettingsError):
+            self.store.save(defaults={"zit": [{"name": "zit_mystic_xxx.safetensors", "strength": 9}]})
+
+    def test_saving_defaults_leaves_the_ladders_alone(self):
+        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
+        self.store.save(defaults={"klein": [{"name": "klein_snofs.safetensors"}]})
+        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+
+
     def test_the_file_is_written_atomically(self):
         self.store.save(busy_mode="wait")
         with open(os.path.join(self.dir, "image_engines.json")) as handle:

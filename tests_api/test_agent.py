@@ -1387,28 +1387,32 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
     async def test_local_generation_attaches_the_adult_pair_by_default(self):
         from hawk_api.local_images import DEFAULT_ADULT_LORAS, LocalImageEngine
 
+        PAIR = DEFAULT_ADULT_LORAS["krea2"]
+
         class Catalogue(LocalImageEngine):
-            def __init__(self, adult_default=True):
+            def __init__(self, adult_default=True, stored=None):
                 self.adult_default = adult_default
-                self.service = SimpleNamespace(available_models=self._files)
+                # stored=None means the user has never set defaults, so the shipped pair applies
+                self.service = SimpleNamespace(available_models=self._files,
+                                               image_engines=SimpleNamespace(defaults=lambda _f: stored))
 
             async def _files(self, _kind):
-                return list(DEFAULT_ADULT_LORAS) + ["krea2_realism_v2.safetensors"]
+                return list(PAIR) + ["krea2_realism_v2.safetensors"]
 
             async def catalogue(self, family=""):
                 from hawk_api.local_images import ImageLora
-                return [ImageLora(file=DEFAULT_ADULT_LORAS[0], label="SNOFS", kind="adult", strength=0.8, installed=True),
-                        ImageLora(file=DEFAULT_ADULT_LORAS[1], label="Mystic XXX v3", kind="adult", strength=0.5, installed=True),
+                return [ImageLora(file=PAIR[0], label="SNOFS", kind="adult", strength=0.8, installed=True),
+                        ImageLora(file=PAIR[1], label="Mystic XXX v3", kind="adult", strength=0.5, installed=True),
                         ImageLora(file="krea2_nsfw_v4.safetensors", label="NSFW v4", kind="adult", strength=0.8, installed=True),
                         ImageLora(file="krea2_realism_v2.safetensors", label="Realism v2", kind="realism", strength=0.7, installed=True)]
 
         engine = Catalogue()
         chosen, _, _ = await engine.resolve_loras(None, adult_default=True)
-        self.assertEqual([f for f, _ in chosen], list(DEFAULT_ADULT_LORAS), "nothing asked for: the go-to pair")
+        self.assertEqual([f for f, _ in chosen], list(PAIR), "nothing asked for: the go-to pair")
         self.assertEqual([s for _, s in chosen], [0.8, 0.5], "at their recommended strengths")
 
         chosen, _, _ = await engine.resolve_loras([{"name": "krea2_realism_v2.safetensors"}], adult_default=True)
-        self.assertEqual([f for f, _ in chosen], ["krea2_realism_v2.safetensors", *DEFAULT_ADULT_LORAS],
+        self.assertEqual([f for f, _ in chosen], ["krea2_realism_v2.safetensors", *PAIR],
                          "a realism pick keeps the pair too")
 
         chosen, _, _ = await engine.resolve_loras([{"name": "krea2_nsfw_v4.safetensors"}], adult_default=True)
@@ -1422,6 +1426,14 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([i.automatic for i in used], [False, True, True])
         _, used, _ = await engine.resolve_loras([{"name": "snofs_krea2.safetensors"}], adult_default=True)
         self.assertEqual([i.automatic for i in used], [False], "asking for it yourself keeps its sampler hints")
+
+        # Studio's panel replaces the shipped pair for that family, and an empty list switches it off
+        picked = Catalogue(stored=[{"name": "krea2_nsfw_v4.safetensors", "strength": 0.6}])
+        chosen, _, _ = await picked.resolve_loras(None, adult_default=True)
+        self.assertEqual(chosen, [("krea2_nsfw_v4.safetensors", 0.6)], "the stored default wins over the shipped one")
+        off = Catalogue(stored=[])
+        self.assertEqual(await off.resolve_loras(None, adult_default=True), ([], [], []),
+                         "switched off is not the same as never set")
 
     def test_a_third_character_is_not_talked_over(self):
         """Two characters naming each other every line used to lock the third out of the conversation."""

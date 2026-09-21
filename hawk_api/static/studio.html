@@ -986,6 +986,9 @@
               <span class="hint">Waiting keeps images on your own GPU instead of billing Atlas for them.</span></div>
             <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
               <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
+            <div class="field"><label class="label">LoRAs each model attaches on its own</label>
+              <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
+              <div id="engineDefaults" class="engine-list" style="margin-top:8px"></div></div>
             <div id="engineWarnings"></div>
             <div class="row"><button class="btn btn-sm btn-primary" id="engineSave" type="button">Save</button><span class="hint" id="engineHint"></span></div>
           </div>
@@ -3064,7 +3067,8 @@
     $("playbackSource").value = playbackSource();
     if (PREFIX || token) { loadDriveExport(); loadImageEngines(); }
   }
-  const engineState = { generate: [], edit: [], engines: {}, busy: { mode: "fall_through", max_wait_seconds: 120 } };
+  const engineState = { generate: [], edit: [], engines: {}, defaults: {}, familyLoras: {},
+                        busy: { mode: "fall_through", max_wait_seconds: 120 } };
   const gb = (bytes) => (typeof bytes === "number" ? `${(bytes / 2 ** 30).toFixed(0)} GB` : "?");
 
   function engineCost(id) {
@@ -3093,11 +3097,46 @@
       host.appendChild(line);
     });
   }
+  function paintEngineDefaults(data) {
+    const host = $("engineDefaults");
+    host.innerHTML = "";
+    Object.entries(data.families || {}).forEach(([family, label]) => {
+      const rows = (engineState.defaults[family] || []);
+      const block = document.createElement("div");
+      block.innerHTML = `<div style="font-size:12px;color:var(--ink-2);margin:6px 0 4px">${label}</div>`;
+      const installed = (engineState.familyLoras[family] || []);
+      rows.forEach((row, index) => {
+        const line = document.createElement("div");
+        line.className = "engine-row";
+        line.innerHTML = `<span class="engine-name">${row.name}</span>
+          <input class="input" type="number" min="0" max="2" step="0.1" style="width:80px" value="${row.strength}">
+          <button class="btn btn-sm" type="button">Remove</button>`;
+        line.querySelector("input").onchange = (e) => { row.strength = Number(e.target.value) || 0; };
+        line.querySelector("button").onclick = () => { rows.splice(index, 1); paintEngineDefaults(data); };
+        block.appendChild(line);
+      });
+      const spare = installed.filter((f) => !rows.some((r) => r.name === f));
+      if (spare.length) {
+        const add = document.createElement("select");
+        add.className = "select";
+        add.innerHTML = `<option value="">Add a ${label} LoRA…</option>` + spare.map((f) => `<option>${f}</option>`).join("");
+        add.onchange = () => { if (add.value) { rows.push({ name: add.value, strength: 0.8 });
+          engineState.defaults[family] = rows; paintEngineDefaults(data); } };
+        block.appendChild(add);
+      } else if (!rows.length) {
+        block.innerHTML += `<span class="hint">No ${label} LoRAs installed on this pod.</span>`;
+      }
+      engineState.defaults[family] = rows;
+      host.appendChild(block);
+    });
+  }
   function paintImageEngines(data) {
     engineState.engines = Object.fromEntries((data.engines || []).map((e) => [e.id, e]));
     engineState.generate = data.generate.map((row) => ({ ...row }));
     engineState.edit = data.edit.map((row) => ({ ...row }));
     engineState.busy = data.busy;
+    engineState.defaults = JSON.parse(JSON.stringify(data.defaults || {}));
+    paintEngineDefaults(data);
     paintEngineList("generate");
     paintEngineList("edit");
     $("engineBusyMode").value = data.busy.mode;
@@ -3109,6 +3148,13 @@
     try {
       paintImageEngines(await api("/v1/images/engines"));
       const options = await api("/v1/images/options").catch(() => ({}));
+      const local = options.local || {};
+      engineState.familyLoras = { krea2: (local.loras || []).filter((l) => l.installed).map((l) => l.file) };
+      Object.entries(local.engines || {}).forEach(([id, st]) => {
+        const family = (engineState.engines[id] || {}).lora_family;
+        if (family) engineState.familyLoras[family] = (st.loras || []).filter((l) => l.installed).map((l) => l.file);
+      });
+      paintEngineDefaults({ families: (await api("/v1/images/engines")).families || {} });
       const sys = options.system || {};
       const chip = $("engineHostChip");
       if (sys.ram_total) {
@@ -3123,7 +3169,8 @@
     try {
       paintImageEngines(await api("/v1/images/engines", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
-          busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0 }) }));
+          busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
+          defaults: engineState.defaults }) }));
       toast("Engine order saved");
     } catch (error) { toast("Could not save", error.message, "bad"); loadImageEngines(); }
   };

@@ -101,7 +101,13 @@ MAX_ADULT_LORAS = 3  # adult LoRAs one image may stack (SNOFS + Mystic XXX is th
 ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to over-cook Turbo
 # Local Krea 2 text-to-image attaches the go-to adult pair by default: base Krea 2 is coy without them. A request
 # that names its own adult LoRAs keeps those instead, and edits never get them (check_edit refuses them on uploads).
-DEFAULT_ADULT_LORAS = ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors")
+#: Per family, attached to local generation unless the request names its own adult LoRA. These are the
+#: fallback: Studio's defaults panel overrides them per family, and an empty list there switches them off.
+DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
+    "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
+    "klein": ("klein_snofs.safetensors", "klein_nsfw_no_face_change.safetensors"),
+    "zit": ("zit_mystic_xxx.safetensors",),
+}
 
 # Local generation has no provider-side moderation, so refuse prompts that point at minors.
 _MINOR = re.compile(
@@ -534,10 +540,13 @@ class LocalImageEngine:
         items = [item for item in await self.catalogue(family) if item.installed]
         automatic = set()
         if adult_default and not _names_adult(requested, items):
-            # only what is actually installed, so a pod without the pair still generates
-            automatic = {name for name in DEFAULT_ADULT_LORAS
-                         if any(i.file == name or i.file.endswith("/" + name) for i in items)}
-            requested += [{"name": name} for name in DEFAULT_ADULT_LORAS if name in automatic]
+            stored = self.service.image_engines.defaults(family)
+            wanted = stored if stored is not None else [{"name": n} for n in DEFAULT_ADULT_LORAS.get(family, ())]
+            # only what is actually installed, so a pod missing one of them still generates
+            automatic = {str(entry.get("name") or "") for entry in wanted
+                         if any(i.file == entry.get("name") or i.file.endswith("/" + str(entry.get("name")))
+                                for i in items)}
+            requested += [dict(entry) for entry in wanted if entry.get("name") in automatic]
         if not requested:
             return [], [], []
         files = await self.service.available_models("loras")

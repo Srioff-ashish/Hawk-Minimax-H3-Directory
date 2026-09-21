@@ -121,6 +121,14 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "zit": ("Z-Image Turbo", ("zit_",)),
 }
 
+#: Mirrors local_images.DEFAULT_ADULT_LORAS so view() can show what a family falls back to. Kept here as
+#: plain names to avoid importing local_images, which imports this module.
+DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
+    "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
+    "klein": ("klein_snofs.safetensors", "klein_nsfw_no_face_change.safetensors"),
+    "zit": ("zit_mystic_xxx.safetensors",),
+}
+
 #: The families that belong to images; everything else is a video LoRA.
 IMAGE_FAMILIES = frozenset({"krea2", "klein", "zit"})
 
@@ -278,6 +286,18 @@ class ImageEngineStore:
             "busy": busy,
         }
 
+    def defaults(self, family: str) -> list[dict] | None:
+        """LoRAs this family attaches on its own, or None when the user has never set them.
+
+        None means "use the shipped fallback"; an empty list means the user switched them off, which is a
+        different thing and must not be confused with it.
+        """
+        stored = (self._load().get("defaults") or {}).get(family)
+        if not isinstance(stored, list):
+            return None
+        return [{"name": str(e.get("name") or ""), "strength": float(e.get("strength", 0.8))}
+                for e in stored if isinstance(e, dict) and e.get("name")]
+
     def order(self, action: str = "generate") -> list[str]:
         """The enabled engine ids for this action, best first."""
         return order(self.settings().get(action), action)
@@ -301,7 +321,11 @@ class ImageEngineStore:
 
     def view(self) -> dict:
         data = self.settings()
-        return {**data, "warnings": self.warnings(data), "engines": [
+        shown = {family: (self.defaults(family) if self.defaults(family) is not None
+                          else [{"name": n, "strength": 0.8} for n in DEFAULT_ADULT_LORAS.get(family, ())])
+                 for family in sorted(IMAGE_FAMILIES)}
+        return {**data, "warnings": self.warnings(data), "defaults": shown,
+                "families": {f: family_label(f) for f in sorted(IMAGE_FAMILIES)}, "engines": [
             {"id": e.id, "label": e.label, "where": e.where, "generate": e.generate, "edit": e.edit,
              "max_refs": e.max_refs, "lora_family": e.lora_family, "price_key": e.price_key}
             for e in ENGINES.values()]}
@@ -325,7 +349,26 @@ class ImageEngineStore:
             raise SettingsError(f"Leave at least one engine on for {action}, or no image can be made.")
         return cleaned
 
-    def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None) -> dict:
+    def _clean_defaults(self, family: str, entries) -> list[dict]:
+        if family not in IMAGE_FAMILIES:
+            raise SettingsError(f"No image model family {family!r}; use one of: {', '.join(sorted(IMAGE_FAMILIES))}.")
+        cleaned = []
+        for entry in entries:
+            name = str((entry or {}).get("name") or "").strip()
+            if not name:
+                raise SettingsError(f"Give a LoRA file name for {family_label(family)}.")
+            if family_of(name) != family:
+                raise SettingsError(f"{name!r} is not a {family_label(family)} LoRA, so it can't be one of its defaults.")
+            try:
+                strength = float((entry or {}).get("strength", 0.8))
+            except (TypeError, ValueError):
+                raise SettingsError(f"{name!r} needs a number for strength.") from None
+            if not 0.0 <= strength <= 2.0:
+                raise SettingsError(f"{name!r}: strength should be between 0 and 2.")
+            cleaned.append({"name": name, "strength": strength})
+        return cleaned
+
+    def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None) -> dict:
         """Update the parts that were given. Anything left as None keeps its current value."""
         with self._lock:
             current = self.settings()
@@ -341,5 +384,8 @@ class ImageEngineStore:
                 current["busy"]["max_wait_seconds"] = max(0, min(MAX_WAIT_SECONDS, int(busy_max_wait_seconds)))
             if current["busy"]["mode"] == "wait" and not current["busy"]["max_wait_seconds"]:
                 current["busy"]["mode"] = "fall_through"  # waiting zero seconds is falling through
-            self._write({**current, "updated_at": time.time()})
+            stored_defaults = dict(self._load().get("defaults") or {})
+            for family, entries in (defaults or {}).items():
+                stored_defaults[family] = self._clean_defaults(family, entries or [])
+            self._write({**current, "defaults": stored_defaults, "updated_at": time.time()})
         return self.view()
