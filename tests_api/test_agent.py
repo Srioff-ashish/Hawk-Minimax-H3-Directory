@@ -889,9 +889,16 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(three.status_code, 201, three.text)
         self.assertIn("combined strength of 2.30", three.json()["note"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "x", "max_adult_loras": 4})).status_code, 422)
+        spent = len(self.atlas.image_requests)
         refused = await self.http.post("/v1/images", json={"prompt": "a 16 year old girl on a beach"})
         self.assertEqual(refused.status_code, 422, "refused outright, not passed to another engine")
         self.assertIn("under 18", refused.json()["error"])
+        # two rungs were still below it; a refusal must not walk down to one of them, least of all a paid one
+        self.assertEqual(len(self.atlas.image_requests), spent, "a refused prompt never reaches a paid engine")
+
+        moved = await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "z-image"})
+        self.assertEqual(moved.status_code, 422, "engine z-image now means the local engine, which isn't wired up")
+        self.assertIn("local", moved.json()["error"].lower())
 
         self.fake.running["render"] = asyncio.get_event_loop().create_future()  # a video render holds ComfyUI
         busy = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()

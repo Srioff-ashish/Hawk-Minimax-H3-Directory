@@ -52,9 +52,8 @@ VISION_FALLBACK_MODELS = ("xai/grok-4.6", "xai/grok-4.3")
 # Reasoning models (DeepSeek V4.x) think before the verdict; too small a budget ends the reply empty (finish_reason=length).
 INSPECT_MAX_TOKENS = 8000
 PASS_SCORE = 6  # an inspected batch whose best image scores below this counts as a failed take
-# After a failed take, engine "auto" moves one step up this ladder for the rest of the run (until the user writes again).
-# Engine ids come from image_engines; the order itself becomes a Studio setting in a later commit.
-ENGINE_LADDER = ("krea2", "turbo", "seedream")
+# After a failed take, engine "auto" moves one rung up for the rest of the run (until the user writes again).
+# The rungs come from HawkService.image_ladder, so the agent and the gateway can never disagree about the order.
 INSPECT_PROMPT = (
     "You are a demanding photo editor. Check each image (in the order given) against the brief. Look for: match with the "
     "brief (subject, age, look, outfit, setting, mood); natural face and eyes; correct hands and fingers; body proportions and "
@@ -1140,16 +1139,19 @@ class AgentService:
 
     def _step_up_engine(self, session_id: str, args: dict) -> str | None:
         """The engine for a generate_image call with engine "auto" once a take failed inspection this run: the next
-        rung of ENGINE_LADDER above the highest one that failed (turbo can't edit, so edits go straight to Seedream)."""
+        rung above the highest one that failed, on the ladder for what this call is doing."""
         failed = self._failed_engines.get(session_id)
         if not failed or str(args.get("engine") or args.get("model") or "auto").strip().lower() != "auto":
             return None
-        if args.get("loras"):  # LoRAs (adult ones included) only run on local Krea 2
+        ladder = self.service.image_ladder("edit" if args.get("reference_asset_ids") else "generate")
+        if args.get("loras"):  # LoRAs (adult ones included) only run on the local engines, so stay among those
+            ladder = [engine for engine in ladder if image_engines.get(engine).lora_family]
+        if not ladder:
             return None
-        ladder = ENGINE_LADDER if not args.get("reference_asset_ids") else ("krea2", "seedream")
-        # an id this ladder doesn't hold (an older chat, or an engine since disabled) is ignored, not a crash
-        top = max((ENGINE_LADDER.index(engine) for engine in failed if engine in ENGINE_LADDER), default=-1)
-        return next((engine for engine in ladder if ENGINE_LADDER.index(engine) > top), ladder[-1])
+        # an id this ladder doesn't hold (an older chat, or an engine since switched off) is ignored, not a crash
+        top = max((ladder.index(engine) for engine in failed if engine in ladder), default=-1)
+        stepped = ladder[min(top + 1, len(ladder) - 1)]
+        return stepped if stepped != ladder[0] else None  # no step up means nothing to say
 
     def _record_takes(self, session_id: str, verdict: dict) -> None:
         """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed."""

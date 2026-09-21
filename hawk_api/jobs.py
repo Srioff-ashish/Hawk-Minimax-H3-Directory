@@ -77,6 +77,8 @@ SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 
 # Estimated USD per image on Atlas (discounted list prices, Sept 2026); reported as cost_usd so the agent can budget.
 IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032}
 SEEDREAM_EXTRA_REFERENCE = 0.003  # each reference image after the first
+#: Order engine "auto" tries. Studio takes this over in a later commit; until then it is what it always was.
+DEFAULT_LADDER = ("krea2", "turbo", "seedream")
 
 
 def _text_only_image_model(model: str) -> bool:
@@ -779,10 +781,10 @@ class HawkService:
     ) -> dict:
         """Make images and store them as assets, ready to use as picture references.
 
-        engine "auto" (text only): local Krea 2 on this GPU when it is installed and idle, else
-        Atlas z-image/turbo, else Seedream. "local" / "turbo" / "seedream" pick one. With reference
-        images, "auto" / "local" edit with Krea 2 Identity Edit when it is installed and idle (1 image,
-        or 2: scene then person), else Seedream edit; z-image can't edit."""
+        engine "auto" walks the ladder for this request -- generate or edit -- trying each engine until one
+        answers, and naming the ones it skipped in "tried". Any engine id from image_engines pins a single
+        engine instead, in which case a failure is reported rather than worked around. A refusal from a local
+        engine's content check stops the walk outright: it is never retried somewhere else."""
         if not (prompt or "").strip():
             raise RequestError("Describe the image to generate.")
         sources = []
@@ -795,78 +797,119 @@ class HawkService:
             sources.append(asset)
 
         model = (model or "").strip()
-        engine = (engine or "").strip().lower()
-        if model.lower() in ("krea", "krea2", "krea-2", "local"):
-            engine, model = "local", ""
-        elif model.lower() in IMAGE_ALIASES or model:
-            engine = engine or "atlas"
-        engine = {"krea": "local", "krea2": "local", "z-image": "turbo", "fast": "turbo", "quality": "seedream"}.get(engine, engine)
-        if engine in ("seedream-lite", "lite"):
-            engine, model = "atlas", IMAGE_LITE_MODEL
-        engine = engine or self.settings.image_engine
-        if engine not in ("auto", "local", "turbo", "seedream", "atlas"):
-            raise RequestError(f"engine {engine!r} should be auto, local, turbo, seedream or seedream-lite.")
+        raw = (engine or "").strip().lower()
+        action = "edit" if sources else "generate"
         notes, tried = [], []
-        if sources and engine == "turbo":
-            notes.append("z-image/turbo can't use reference images, so Seedream edit made this one.")
-            engine, model = "atlas", IMAGE_EDIT_MODEL
 
-        if sources and engine in ("auto", "local"):
-            try:
-                if len(sources) > 2:
-                    raise LocalImageError(f"Krea 2 edit takes at most 2 images; {len(sources)} were given.")
-                local = await self.local_images.edit(prompt, sources, size=size, n=n, seed=seed, loras=loras, steps=steps,
-                                                     ref_boost=ref_boost, max_adult_loras=max_adult_loras)
-            except LocalImageError as exc:
-                if engine == "local" or exc.fatal:
-                    raise RequestError(str(exc)) from None
-                tried.append({"engine": "krea2-edit", "skipped": str(exc)})
-            else:
-                notes.extend(local.warnings)
-                return await self._image_result(prompt, local.images, "krea2/identity-edit", "krea2-edit", notes, tried,
-                                                reference_asset_ids, extra={"loras": local.loras, "seconds": local.seconds})
+        # "model" names an Atlas model (or an alias for one); naming a local one there means the engine.
+        if model.lower() in ("krea", "krea2", "krea-2", "local"):
+            raw, model = "krea2", ""
+        elif model:
+            raw = raw or "atlas"
+        raw = raw or self.settings.image_engine
 
-        if not sources and engine in ("auto", "local"):
-            try:
-                local = await self.local_images.generate(prompt, size=size, n=n, seed=seed, loras=loras, steps=steps,
-                                                         max_adult_loras=max_adult_loras)
-            except LocalImageError as exc:
-                if engine == "local" or exc.fatal:
-                    raise RequestError(str(exc)) from None
-                tried.append({"engine": "krea2", "skipped": str(exc)})
-            else:
-                notes.extend(local.warnings)
-                return await self._image_result(prompt, local.images, "krea2/turbo", "krea2", notes, tried, reference_asset_ids,
-                                          extra={"loras": local.loras, "seconds": local.seconds})
-        if loras:
-            notes.append("Image LoRAs only apply to local Krea 2; ignored here.")
-        references = []
-        for asset in sources:
-            mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
-            references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
-
-        if engine == "auto" and not references:
-            chain = [self.settings.image_model, IMAGE_MODEL] if self.settings.image_model != IMAGE_MODEL else [IMAGE_MODEL]
-        elif engine == "turbo":
-            chain = [IMAGE_FAST_MODEL]
-        elif engine == "seedream":
-            chain = [IMAGE_EDIT_MODEL if references else IMAGE_MODEL]
+        atlas_override = ""
+        if raw == "auto":
+            ladder = self.image_ladder(action)
+        elif raw == "atlas":  # a model id was given: use exactly that, on the Atlas path
+            ladder = ["seedream"]
+            atlas_override = IMAGE_ALIASES.get(model.lower(), model) or (
+                IMAGE_EDIT_MODEL if sources else self.settings.image_model)
         else:
-            chain = [IMAGE_ALIASES.get(model.lower(), model) or (IMAGE_EDIT_MODEL if references else self.settings.image_model)]
-        last_error = None
-        for index, name in enumerate(chain):
+            pinned = image_engines.resolve(raw)
+            if not pinned:
+                raise RequestError(f"engine {raw!r} should be auto or one of: {', '.join(image_engines.ENGINES)}.")
+            if raw in image_engines.MOVED:
+                notes.append(image_engines.MOVED[raw])
+            ladder = [pinned]
+
+        # An Atlas engine that only makes images from text still has somewhere to go when given references.
+        if sources and len(ladder) == 1:
+            only = image_engines.get(ladder[0])
+            if only and not only.edit and not only.local:
+                notes.append(f"{only.label} can't use reference images, so Seedream edit made this one.")
+                ladder, atlas_override = ["seedream"], IMAGE_EDIT_MODEL
+
+        references: list[str] = []
+
+        async def atlas_references() -> list[str]:
+            """The sources as data URIs, built once and only if an Atlas engine actually runs."""
+            if sources and not references:
+                for asset in sources:
+                    mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
+                    references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
+            return references
+
+        last_error, said_loras = None, False
+        for index, engine_id in enumerate(ladder):
+            spec = image_engines.get(engine_id)
+            more = index + 1 < len(ladder)
+            if not spec.supports(action):
+                tried.append({"engine": engine_id, "skipped": f"{spec.label} can't {action} images."})
+                continue
+            if sources and len(sources) > spec.max_refs:
+                why = f"{spec.label} takes at most {spec.max_refs} reference image(s); {len(sources)} were given."
+                if not more:
+                    raise RequestError(why)
+                tried.append({"engine": engine_id, "skipped": why})
+                continue
+
+            if spec.local:
+                try:
+                    local, used = await self._local_image(
+                        spec, action, prompt, sources, size=size, n=n, seed=seed, loras=loras, steps=steps,
+                        ref_boost=ref_boost, max_adult_loras=max_adult_loras)
+                except LocalImageError as exc:
+                    # A content refusal is final. Walking on would hand the same prompt to the next engine,
+                    # and eventually to a paid one whose moderation is not ours -- so stop the whole ladder.
+                    if exc.fatal or not more:
+                        # carry any note with it: an engine name that changed meaning explains itself here
+                        raise RequestError(" ".join([str(exc), *notes]).strip()) from None
+                    tried.append({"engine": spec.tag_for(action), "skipped": str(exc)})
+                    continue
+                notes.extend(local.warnings)
+                return await self._image_result(prompt, local.images, used, spec.tag_for(action), notes, tried,
+                                                reference_asset_ids, engine_id=engine_id,
+                                                extra={"loras": local.loras, "seconds": local.seconds})
+
+            if loras and not said_loras:
+                notes.append("Image LoRAs only apply to the local engines; ignored here.")
+                said_loras = True
+            name = atlas_override or (spec.atlas_edit_model if sources else spec.atlas_model)
+            if engine_id == "turbo" and not atlas_override:
+                name = self.settings.image_model or spec.atlas_model  # HAWK_IMAGE_MODEL replaces this rung's model
             try:
-                used, images, cost = await self._atlas_images(prompt, name, references, size, n, seed, notes)
+                used, images, cost = await self._atlas_images(prompt, name, await atlas_references(), size, n, seed, notes)
             except RequestError as exc:
                 last_error = exc
-                if index + 1 < len(chain):
-                    tried.append({"engine": name, "skipped": str(exc)[:300]})
-                    continue
-                raise
+                if not more:
+                    raise
+                tried.append({"engine": engine_id, "skipped": str(exc)[:300]})
+                continue
             tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
             return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids,
-                                            extra={"cost_usd": round(cost, 4)})
+                                            engine_id=image_engines.id_for_tag(tag), extra={"cost_usd": round(cost, 4)})
         raise last_error or RequestError("No image engine could make this image.")
+
+    def image_ladder(self, action: str = "generate") -> list[str]:
+        """Engine ids to try for this action, best first. Becomes a Studio setting in a later commit."""
+        return [e for e in DEFAULT_LADDER if image_engines.get(e).supports(action)]
+
+    async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
+        """Run one local engine. Returns its result and the model name to report."""
+        if spec.id != "krea2":
+            # Klein and Z-Image get their graphs in a later commit; until then they are never in the ladder,
+            # and naming one explicitly says so instead of pretending.
+            raise LocalImageError(f"{spec.label} is not wired up on this pod yet; use engine auto.")
+        if action == "edit":
+            local = await self.local_images.edit(
+                prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
+                steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"])
+            return local, "krea2/identity-edit"
+        local = await self.local_images.generate(
+            prompt, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
+            steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
+        return local, "krea2/turbo"
 
     async def image_options(self) -> dict:
         local = await self.local_images.status()
@@ -918,11 +961,11 @@ class HawkService:
         return model, images, each * len(images)
 
     async def _image_result(self, prompt: str, images: list[bytes], model: str, engine_tag: str, notes: list, tried: list,
-                            reference_asset_ids, extra: dict | None = None) -> dict:
+                            reference_asset_ids, extra: dict | None = None, engine_id: str = "") -> dict:
         stem = re.sub(r"[^a-z0-9]+", "_", prompt.lower()).strip("_")[:40] or "image"
         # "engine" is the registry id; the agent reads it to know which rung made an image, instead of
         # guessing from the model name. Assets written before this field fall back to image_engines.id_for_tag.
-        source = {"type": "generated", "engine": image_engines.id_for_tag(engine_tag), "generator": model,
+        source = {"type": "generated", "engine": engine_id or image_engines.id_for_tag(engine_tag), "generator": model,
                   "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
         if extra and extra.get("loras"):
             source["loras"] = extra["loras"]
