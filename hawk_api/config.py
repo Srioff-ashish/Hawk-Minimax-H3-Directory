@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import os
+import threading
 from dataclasses import dataclass, field
 
 
@@ -23,6 +26,56 @@ class ModelSettings:
     attention: str = "sol scheduled + sage"
     weight_dtype: str = "default"
     clip_device: str = "default"
+
+
+class ModelStore:
+    """``DATA_DIR/render_models.json``: which H3 files every render loads.
+
+    The environment sets what a pod starts with; this lets Studio change it afterwards without editing the
+    notebook or restarting. Read on every render, and an empty value means "use the one from the environment".
+    """
+
+    FIELDS = ("unet_name", "clip_name", "video_vae", "audio_vae")
+
+    def __init__(self, data_dir: str):
+        self.path = os.path.join(data_dir, "render_models.json")
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def stored(self) -> dict:
+        data = self._load()
+        return {key: str(data[key]) for key in self.FIELDS if isinstance(data.get(key), str) and data[key].strip()}
+
+    def resolve(self, defaults: "ModelSettings") -> "ModelSettings":
+        stored = self.stored()
+        return dataclasses.replace(defaults, **stored) if stored else defaults
+
+    def save(self, values: dict) -> dict:
+        """Store the names given. "" clears one back to the environment's choice."""
+        with self._lock:
+            data = self._load()
+            for key, value in values.items():
+                if key not in self.FIELDS:
+                    raise ValueError(f"No render model setting {key!r}; use one of: {', '.join(self.FIELDS)}.")
+                if value is None:
+                    continue
+                if str(value).strip():
+                    data[key] = str(value).strip()
+                else:
+                    data.pop(key, None)
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+            os.replace(tmp, self.path)
+        return self.stored()
 
 
 @dataclass(frozen=True)

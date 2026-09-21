@@ -174,6 +174,13 @@ class ImageEngineSettings(BaseModel):
         None, description='LoRAs a family attaches on its own, keyed by family (krea2, klein, zit). An empty list switches them off.')
 
 
+class RenderModelSettings(BaseModel):
+    unet_name: str | None = Field(None, description="ref2va base model from ComfyUI's diffusion_models. \"\" restores the pod's own.")
+    clip_name: str | None = Field(None, description="Qwen3-VL text encoder from text_encoders. It also encodes the reference images.")
+    video_vae: str | None = Field(None, description="Video VAE from the vae folder.")
+    audio_vae: str | None = Field(None, description="Audio VAE from the vae folder.")
+
+
 class VideoLoraDefault(BaseModel):
     name: str = Field(description="MiniMax H3 LoRA file from list_loras.")
     strength: float = Field(1.0, ge=0.0, le=2.0, description="0 switches it off without removing it.")

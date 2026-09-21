@@ -31,7 +31,7 @@ from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
-from .config import ModelSettings, Settings
+from .config import ModelSettings, ModelStore, Settings
 from . import local_images
 from .local_images import LocalImageEngine, LocalImageError
 from .loras import (
@@ -355,6 +355,7 @@ class HawkService:
         self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
         self.prompts = PromptStore(settings.data_dir)
         self.image_engines = image_engines.ImageEngineStore(settings.data_dir)
+        self.render_models = ModelStore(settings.data_dir)
         #: Called with the job id when a render finishes (e.g. the Google Drive exporter).
         self.render_done_hooks: list = []
         self.local_images = LocalImageEngine(self)
@@ -471,7 +472,28 @@ class HawkService:
                     result["missing_required_loras"] = missing
             except Exception as exc:
                 result["loras"] = f"error: {exc}"
+            try:
+                gone = await self.missing_render_models()
+                result["models"] = "degraded" if gone else "ok"
+                if gone:
+                    result["ok"] = False
+                    result["missing_models"] = gone
+            except Exception as exc:
+                result["models"] = f"error: {exc}"
         return result
+
+    async def missing_render_models(self) -> list[str]:
+        """Configured H3 files that are not in ComfyUI's folders. A render would fail at the loader."""
+        models = self.render_models.resolve(self.settings.models)
+        gone = []
+        for folder, name in (("diffusion_models", models.unet_name), ("text_encoders", models.clip_name),
+                             ("vae", models.video_vae), ("vae", models.audio_vae)):
+            if not name:
+                continue
+            files = await self.available_models(folder, refresh=True)
+            if not any(f == name or f.rsplit("/", 1)[-1] == name for f in files):
+                gone.append(f"{folder}/{name}")
+        return gone
 
     async def options(self) -> dict:
         available = await self.available_loras(refresh=True)
@@ -488,8 +510,8 @@ class HawkService:
             "default_agent_model": self.settings.agent_model,
             "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
             "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
-            "default_unet": self.settings.models.unet_name,
-            "default_clip": self.settings.models.clip_name,
+            "default_unet": self.render_models.resolve(self.settings.models).unet_name,
+            "default_clip": self.render_models.resolve(self.settings.models).clip_name,
             "available_loras": available,
             "default_loras": default_status(config, available),
             "lora_presets": {name: [dataclasses.asdict(spec) for spec in specs] for name, specs in config.presets.items()},
@@ -498,7 +520,8 @@ class HawkService:
             "aspect_ratios": _combo_options(director, "aspect_ratio"),
             "continuity_modes": _combo_options(director, "continuity"),
             "reference_roles": list(graphs.ROLES),
-            "defaults": {"models": dataclasses.asdict(self.settings.models), "planner_model": self.settings.planner_model},
+            "defaults": {"models": dataclasses.asdict(self.render_models.resolve(self.settings.models)),
+                         "planner_model": self.settings.planner_model},
         }
 
     # ---------------------------------------------------------- assets
@@ -1199,7 +1222,7 @@ class HawkService:
             music_fade_seconds=settings.music_fade_seconds,
             mute_generated_music=settings.mute_generated_music,
         )
-        defaults = self.settings.models
+        defaults = self.render_models.resolve(self.settings.models)
         models = dataclasses.replace(
             defaults,
             attention=settings.attention or defaults.attention,

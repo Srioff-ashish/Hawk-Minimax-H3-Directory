@@ -29,7 +29,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, PlanRequest, PromptIn, VideoLoraDefaults,
+    ImageRequest, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest,
 )
 
@@ -295,6 +295,32 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                 defaults=None if body.defaults is None else {f: [r.model_dump() for r in rows] for f, rows in body.defaults.items()})
         except SettingsError as exc:
             raise RequestError(str(exc)) from None
+
+    @app.get("/v1/models/defaults", tags=["renders"])
+    async def render_model_defaults():
+        """The H3 files every render loads, what else is on the pod, and anything configured but missing."""
+        options = await service.options()
+        return {"models": options["defaults"]["models"],
+                "chosen": service.render_models.stored(),
+                "available": {"diffusion_models": options["diffusion_models"], "text_encoders": options["text_encoders"],
+                              "vae": await service.available_models("vae", refresh=True)},
+                "missing": await service.missing_render_models()}
+
+    @app.put("/v1/models/defaults", tags=["renders"])
+    async def render_model_defaults_update(body: RenderModelSettings):
+        values = {k: v for k, v in body.model_dump().items() if v is not None}
+        folders = {"unet_name": "diffusion_models", "clip_name": "text_encoders", "video_vae": "vae", "audio_vae": "vae"}
+        for key, name in values.items():
+            if not name.strip():
+                continue  # "" clears it back to the environment's choice
+            files = await service.available_models(folders[key], refresh=True)
+            if not any(f == name or f.rsplit("/", 1)[-1] == name for f in files):
+                raise RequestError(f"{name!r} is not in ComfyUI's {folders[key]} folder on this pod.")
+        try:
+            service.render_models.save(values)
+        except ValueError as exc:
+            raise RequestError(str(exc)) from None
+        return await render_model_defaults()
 
     @app.get("/v1/loras/defaults", tags=["renders"])
     async def video_lora_defaults():

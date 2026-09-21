@@ -973,6 +973,17 @@
           </div>
         </section>
         <section class="card">
+          <div class="card-head"><h2>Render models</h2><span class="chip" id="renderModelChip">Checking…</span></div>
+          <div class="card-body" style="display:grid;gap:14px">
+            <span class="hint">The MiniMax H3 files every video render loads, from ComfyUI's model folders. The text encoder also encodes your reference images, so its precision decides how well a face carries across shots.</span>
+            <div class="field"><label class="label" for="renderUnet">Base model (ref2va)</label><select class="select" id="renderUnet"></select></div>
+            <div class="field"><label class="label" for="renderClip">Text encoder</label><select class="select" id="renderClip"></select></div>
+            <div class="field"><label class="label" for="renderVideoVae">Video VAE</label><select class="select" id="renderVideoVae"></select></div>
+            <div class="field"><label class="label" for="renderAudioVae">Audio VAE</label><select class="select" id="renderAudioVae"></select></div>
+            <div class="row"><button class="btn btn-sm btn-primary" id="renderModelSave" type="button">Save</button><span class="hint" id="renderModelHint"></span></div>
+          </div>
+        </section>
+        <section class="card">
           <div class="card-head"><h2>Image engines</h2><span class="chip" id="engineHostChip">Checking…</span></div>
           <div class="card-body" style="display:grid;gap:14px">
             <span class="hint">Engines are tried top to bottom, and the first one that answers makes the image. Switch one off to skip it without losing its place. The agent and your chat connectors follow this order too.</span>
@@ -3068,7 +3079,7 @@
     $("notifyBtn").disabled = permission !== "default";
     $("notifyBtn").textContent = { granted: "Enabled", denied: "Blocked", unsupported: "Unsupported", default: "Enable" }[permission];
     $("playbackSource").value = playbackSource();
-    if (PREFIX || token) { loadDriveExport(); loadImageEngines(); }
+    if (PREFIX || token) { loadDriveExport(); loadImageEngines(); loadRenderModels(); }
   }
   const engineState = { generate: [], edit: [], engines: {}, defaults: {}, familyLoras: {}, video: [],
                         busy: { mode: "fall_through", max_wait_seconds: 120 } };
@@ -3133,6 +3144,37 @@
       host.appendChild(block);
     });
   }
+  const RENDER_MODEL_FIELDS = { unet_name: ["renderUnet", "diffusion_models"], clip_name: ["renderClip", "text_encoders"],
+                                video_vae: ["renderVideoVae", "vae"], audio_vae: ["renderAudioVae", "vae"] };
+  function paintRenderModels(data) {
+    Object.entries(RENDER_MODEL_FIELDS).forEach(([key, [id, folder]]) => {
+      const current = data.models[key] || "";
+      const files = data.available[folder] || [];
+      const known = files.some((f) => f === current || f.split("/").pop() === current);
+      // a configured file that is no longer on the pod still shows, so it is obvious why renders fail
+      const options = known ? files : [current, ...files].filter(Boolean);
+      $(id).innerHTML = options.map((f) => `<option${f === current ? " selected" : ""}${
+        known || f !== current ? "" : ' data-missing="1"'}>${f}${known || f !== current ? "" : " — missing"}</option>`).join("");
+    });
+    const chip = $("renderModelChip");
+    chip.className = `chip ${data.missing.length ? "bad" : "ok"}`;
+    chip.textContent = data.missing.length ? `${data.missing.length} file(s) missing` : "all present";
+    $("renderModelHint").textContent = data.missing.length ? data.missing.join(", ") + " — renders will fail" : "";
+  }
+  async function loadRenderModels() {
+    try { paintRenderModels(await api("/v1/models/defaults")); }
+    catch (error) { $("renderModelChip").className = "chip warn"; $("renderModelChip").textContent = "Unavailable";
+                    $("renderModelHint").textContent = error.message; }
+  }
+  $("renderModelSave").onclick = async () => {
+    const body = {};
+    Object.entries(RENDER_MODEL_FIELDS).forEach(([key, [id]]) => { body[key] = $(id).value; });
+    try {
+      paintRenderModels(await api("/v1/models/defaults", { method: "PUT",
+        headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+      toast("Render models saved", "Takes effect on the next render");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  };
   function paintVideoDefaults(rows) {
     const host = $("videoDefaults");
     host.innerHTML = "";

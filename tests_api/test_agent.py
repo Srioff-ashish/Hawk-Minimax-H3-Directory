@@ -800,6 +800,41 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         last = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
         self.assertEqual(last["result"]["engine"], "seedream", "an engine the user named is never blocked")
 
+    async def test_render_models_are_a_setting_and_a_missing_one_is_flagged(self):
+        files = self.fake.model_files
+        files["diffusion_models"] = ["minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                                     "minimax_h3_ref2va_pruned_bf16.safetensors"]
+        files["text_encoders"] = ["qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                                  "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"]
+        files["vae"] = ["minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"]
+
+        view = (await self.http.get("/v1/models/defaults")).json()
+        self.assertIn("minimax_h3_ref2va_pruned_int8_convrot.safetensors", view["available"]["diffusion_models"])
+        self.assertEqual(view["chosen"], {}, "nothing overridden yet, so the pod's own settings apply")
+
+        saved = (await self.http.put("/v1/models/defaults", json={
+            "unet_name": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            "clip_name": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"})).json()
+        self.assertEqual(saved["models"]["clip_name"], "qwen3vl_32b_minimax_h3_int8_convrot.safetensors")
+        self.assertEqual(saved["missing"], [])
+        options = (await self.http.get("/v1/options")).json()
+        self.assertEqual(options["default_unet"], "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                         "the setting wins over the environment, with no restart")
+
+        bad = await self.http.put("/v1/models/defaults", json={"unet_name": "not_on_this_pod.safetensors"})
+        self.assertEqual(bad.status_code, 422)
+        self.assertIn("diffusion_models", bad.json()["error"], "it says which folder it looked in")
+
+        # a file that disappears after being chosen is what silently broke renders before
+        files["text_encoders"] = ["qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"]
+        health = (await self.http.get("/healthz")).json()
+        self.assertFalse(health["ok"])
+        self.assertEqual(health["models"], "degraded")
+        self.assertIn("text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", health["missing_models"])
+
+        cleared = (await self.http.put("/v1/models/defaults", json={"clip_name": ""})).json()
+        self.assertEqual(cleared["chosen"].get("clip_name"), None, '"" restores the pod\'s own choice')
+
     async def test_characters_own_what_they_make(self):
         cast = [{"name": "Nisha", "persona": "stylist"}, {"name": "Sonia Mausi", "persona": "aunt"},
                 {"name": "Ananya", "persona": "photographer"}]
