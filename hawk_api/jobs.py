@@ -26,6 +26,7 @@ import httpx
 from hawk_h3.script import ScriptError, build_jobs, parse_script
 
 from . import graph as graphs
+from . import image_engines
 from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
@@ -53,11 +54,14 @@ FINISHED = ("done", "failed", "cancelled")
 #: A job whose prompt ComfyUI no longer knows is only declared lost after this grace period.
 LOST_AFTER_SECONDS = 20.0
 DEFAULT_COLLECTION = "Uploads"
-IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
-IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
-IMAGE_LITE_MODEL = "bytedance/seedream-v5.0-lite"  # 2K-4K only, a little cheaper than Pro 2K, a little below Pro in quality
-IMAGE_LITE_EDIT_MODEL = "bytedance/seedream-v5.0-lite/edit"
-IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
+# The Atlas model ids live in image_engines, where the engine descriptors name them.
+IMAGE_MODEL = image_engines.IMAGE_MODEL
+IMAGE_EDIT_MODEL = image_engines.IMAGE_EDIT_MODEL
+IMAGE_LITE_MODEL = image_engines.IMAGE_LITE_MODEL
+IMAGE_LITE_EDIT_MODEL = image_engines.IMAGE_LITE_EDIT_MODEL
+IMAGE_FAST_MODEL = image_engines.IMAGE_FAST_MODEL
+#: Aliases for the ``model`` field (an Atlas model id), which is not the same vocabulary as ``engine``:
+#: model "z-image" still means the Atlas one, while engine "z-image" now means the local engine.
 IMAGE_ALIASES = {
     "turbo": IMAGE_FAST_MODEL, "z-image": IMAGE_FAST_MODEL, "zimage": IMAGE_FAST_MODEL, "z-image-turbo": IMAGE_FAST_MODEL,
     "fast": IMAGE_FAST_MODEL, "cheap": IMAGE_FAST_MODEL,
@@ -916,7 +920,10 @@ class HawkService:
     async def _image_result(self, prompt: str, images: list[bytes], model: str, engine_tag: str, notes: list, tried: list,
                             reference_asset_ids, extra: dict | None = None) -> dict:
         stem = re.sub(r"[^a-z0-9]+", "_", prompt.lower()).strip("_")[:40] or "image"
-        source = {"type": "generated", "generator": model, "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
+        # "engine" is the registry id; the agent reads it to know which rung made an image, instead of
+        # guessing from the model name. Assets written before this field fall back to image_engines.id_for_tag.
+        source = {"type": "generated", "engine": image_engines.id_for_tag(engine_tag), "generator": model,
+                  "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
         if extra and extra.get("loras"):
             source["loras"] = extra["loras"]
         assets = []
