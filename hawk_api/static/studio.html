@@ -159,6 +159,16 @@
   .chip.bad { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
   .chip.ok { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 
+  .engine-list { display: grid; gap: 6px; }
+  .engine-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line);
+                border-radius: 10px; background: var(--surface-2); }
+  .engine-row.off { opacity: .55; }
+  .engine-row .engine-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .engine-row .engine-move { display: flex; gap: 4px; }
+  .engine-row .engine-move button { width: 26px; height: 26px; padding: 0; line-height: 1; }
+  .engine-row .engine-move button[disabled] { opacity: .3; cursor: default; }
+  .engine-note { font-size: 12px; color: var(--warn); margin-top: 4px; }
+
   .progress { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
   .progress > i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--brand), #9333ea); transition: width .5s ease; }
   .progress.thin { height: 4px; }
@@ -960,6 +970,24 @@
               <div class="row"><button class="btn btn-sm" id="tokenChange" type="button">Change token</button><span class="hint">Stored in this browser only.</span></div></div>
             <div class="field"><span class="label">Keyboard</span>
               <span class="hint"><span class="kbd">⌘/Ctrl ↵</span> generate · <span class="kbd">Esc</span> close panels · <span class="kbd">/</span> search library</span></div>
+          </div>
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Image engines</h2><span class="chip" id="engineHostChip">Checking…</span></div>
+          <div class="card-body" style="display:grid;gap:14px">
+            <span class="hint">Engines are tried top to bottom, and the first one that answers makes the image. Switch one off to skip it without losing its place. The agent and your chat connectors follow this order too.</span>
+            <div class="field"><label class="label">Making an image from text</label><div id="engineListGenerate" class="engine-list"></div></div>
+            <div class="field"><label class="label">Editing an image (with reference images)</label><div id="engineListEdit" class="engine-list"></div></div>
+            <div class="field"><label class="label" for="engineBusyMode">While a video render is using the GPU</label>
+              <select class="select" id="engineBusyMode">
+                <option value="wait">Wait for it, then make the image here (free)</option>
+                <option value="fall_through">Don't wait — move down to a paid engine</option>
+              </select>
+              <span class="hint">Waiting keeps images on your own GPU instead of billing Atlas for them.</span></div>
+            <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
+              <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
+            <div id="engineWarnings"></div>
+            <div class="row"><button class="btn btn-sm btn-primary" id="engineSave" type="button">Save</button><span class="hint" id="engineHint"></span></div>
           </div>
         </section>
         <section class="card">
@@ -3015,8 +3043,71 @@
     $("notifyBtn").disabled = permission !== "default";
     $("notifyBtn").textContent = { granted: "Enabled", denied: "Blocked", unsupported: "Unsupported", default: "Enable" }[permission];
     $("playbackSource").value = playbackSource();
-    if (PREFIX || token) loadDriveExport();
+    if (PREFIX || token) { loadDriveExport(); loadImageEngines(); }
   }
+  const engineState = { generate: [], edit: [], engines: {}, busy: { mode: "fall_through", max_wait_seconds: 120 } };
+  const gb = (bytes) => (typeof bytes === "number" ? `${(bytes / 2 ** 30).toFixed(0)} GB` : "?");
+
+  function engineCost(id) {
+    const spec = engineState.engines[id] || {};
+    if (spec.where === "local") return "free, on this GPU";
+    return { "z-image": "~$0.01", "pro-1.5k": "~$0.036", lite: "~$0.032" }[spec.price_key] || "paid";
+  }
+  function paintEngineList(action) {
+    const host = $(action === "edit" ? "engineListEdit" : "engineListGenerate");
+    host.innerHTML = "";
+    engineState[action].forEach((row, index) => {
+      const spec = engineState.engines[row.engine] || { label: row.engine };
+      const line = document.createElement("div");
+      line.className = `engine-row${row.enabled ? "" : " off"}`;
+      line.innerHTML = `<label class="check" style="margin:0"><input type="checkbox" ${row.enabled ? "checked" : ""}></label>
+        <span class="engine-name">${spec.label || row.engine}</span>
+        <span class="chip">${engineCost(row.engine)}</span>
+        <span class="engine-move"><button class="btn btn-sm" type="button" ${index === 0 ? "disabled" : ""}>↑</button>
+        <button class="btn btn-sm" type="button" ${index === engineState[action].length - 1 ? "disabled" : ""}>↓</button></span>`;
+      const [up, down] = line.querySelectorAll(".engine-move button");
+      line.querySelector("input").onchange = (event) => { row.enabled = event.target.checked; paintEngineList(action); };
+      const swap = (to) => { const list = engineState[action];
+        [list[index], list[to]] = [list[to], list[index]]; paintEngineList(action); };
+      up.onclick = () => swap(index - 1);
+      down.onclick = () => swap(index + 1);
+      host.appendChild(line);
+    });
+  }
+  function paintImageEngines(data) {
+    engineState.engines = Object.fromEntries((data.engines || []).map((e) => [e.id, e]));
+    engineState.generate = data.generate.map((row) => ({ ...row }));
+    engineState.edit = data.edit.map((row) => ({ ...row }));
+    engineState.busy = data.busy;
+    paintEngineList("generate");
+    paintEngineList("edit");
+    $("engineBusyMode").value = data.busy.mode;
+    $("engineMaxWait").value = data.busy.max_wait_seconds;
+    $("engineWaitRow").hidden = data.busy.mode !== "wait";
+    $("engineWarnings").innerHTML = (data.warnings || []).map((w) => `<div class="engine-note">${w}</div>`).join("");
+  }
+  async function loadImageEngines() {
+    try {
+      paintImageEngines(await api("/v1/images/engines"));
+      const options = await api("/v1/images/options").catch(() => ({}));
+      const sys = options.system || {};
+      const chip = $("engineHostChip");
+      if (sys.ram_total) {
+        // ComfyUI parks a model's weights in system RAM between jobs, so RAM is what makes switching cheap
+        chip.className = "chip";
+        chip.textContent = `VRAM ${gb(sys.vram_free)} free of ${gb(sys.vram_total)} · RAM ${gb(sys.ram_free)} free of ${gb(sys.ram_total)}`;
+      } else { chip.className = "chip warn"; chip.textContent = "ComfyUI not reachable"; }
+    } catch (error) { $("engineHostChip").className = "chip warn"; $("engineHostChip").textContent = "Unavailable"; $("engineHint").textContent = error.message; }
+  }
+  $("engineBusyMode").onchange = () => { $("engineWaitRow").hidden = $("engineBusyMode").value !== "wait"; };
+  $("engineSave").onclick = async () => {
+    try {
+      paintImageEngines(await api("/v1/images/engines", { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
+          busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0 }) }));
+      toast("Engine order saved");
+    } catch (error) { toast("Could not save", error.message, "bad"); loadImageEngines(); }
+  };
   function paintDriveExport(settings) {
     $("driveMountChip").className = `chip ${settings.mounted ? "ok" : "warn"}`;
     $("driveMountChip").textContent = settings.mounted ? "Drive mounted" : "Drive not mounted";

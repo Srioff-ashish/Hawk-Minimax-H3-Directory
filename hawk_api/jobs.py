@@ -929,6 +929,7 @@ class HawkService:
             "would_use": {action: (self.image_ladder(action) or [None])[0] for action in ("generate", "edit")},
             "busy": engines["busy"],
             "engine_warnings": engines["warnings"],
+            "system": await self.comfy.system_stats(),
             "local": local,
             "atlas": {"configured": self.atlas.configured, "text_to_image": self.settings.image_model,
                       "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,

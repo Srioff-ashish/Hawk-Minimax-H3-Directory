@@ -484,7 +484,9 @@ def _start_comfyui(session: Session) -> None:
             "they were installed). Stop it -- interrupt your ComfyUI cell, or run `!pkill -f 'ComfyUI/main.py'` -- "
             "then run this cell again so ComfyUI restarts with the nodes and your Atlas key."
         )
-    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048"]
+    # --reserve-vram: the VAE decode at the very end of an otherwise finished render is what usually OOMs.
+    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048",
+           "--reserve-vram", "2"]
     session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
     print("Starting ComfyUI (first start loads nodes; a few minutes)...", flush=True)
     _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
@@ -726,7 +728,8 @@ def restart_comfyui(session: Session, extra_args: list[str] | None = None, force
         time.sleep(1)
     if not port_free(COMFY_PORT):
         raise RuntimeError(f"Port {COMFY_PORT} is still in use. Stop ComfyUI yourself (`!fuser -k {COMFY_PORT}/tcp`) and retry.")
-    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048", *(extra_args or [])]
+    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048",
+           "--reserve-vram", "2", *(extra_args or [])]
     session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
     print("Restarting ComfyUI...", flush=True)
     _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")

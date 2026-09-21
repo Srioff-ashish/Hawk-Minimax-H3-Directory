@@ -136,6 +136,31 @@ class ComfyClient:
         response = await self._request("GET", f"/object_info/{node_class}")
         return response.json().get(node_class, {}) if response.status_code == 200 else {}
 
+    async def system_stats(self) -> dict:
+        """VRAM and system RAM, as ComfyUI reports them.
+
+        ComfyUI unloads a model's weights to system RAM after use rather than keeping them on the GPU, so
+        RAM is what decides whether switching engines is a fast transfer or a re-read from disk. Returns {}
+        when ComfyUI is unreachable: this is for display, never for a decision.
+        """
+        try:
+            response = await self._request("GET", "/system_stats")
+        except Exception:
+            return {}
+        if response.status_code != 200:
+            return {}
+        data = response.json()
+        devices = data.get("devices") or [{}]
+        gpu = next((d for d in devices if str(d.get("type", "")).lower() == "cuda"), devices[0])
+        system = data.get("system") or {}
+        return {
+            "device": gpu.get("name", ""),
+            "vram_total": gpu.get("vram_total"),
+            "vram_free": gpu.get("vram_free"),
+            "ram_total": system.get("ram_total"),
+            "ram_free": system.get("ram_free"),
+        }
+
     async def view(self, filename: str, subfolder: str, type_: str = "output") -> tuple[str, str | None, AsyncIterator[bytes]]:
         request = self.http.build_request(
             "GET", "/view", params={"filename": filename, "subfolder": subfolder, "type": type_}
