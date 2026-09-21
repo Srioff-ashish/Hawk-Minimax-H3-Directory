@@ -159,6 +159,21 @@ def id_for_tag(tag: str) -> str:
     return _TAG_IDS.get((tag or "").strip().lower(), "")
 
 
+def id_for_generator(generator: str) -> str:
+    """The engine id behind an asset's model name, for assets made before ``source["engine"]`` existed.
+
+    Only three engines could have written one, so the old guess still holds for them.
+    """
+    name = (generator or "").strip().lower()
+    if not name:
+        return ""
+    if name.startswith("krea2"):
+        return "krea2"
+    if name.startswith("z-image"):  # at the time, z-image only ever meant the Atlas engine
+        return "turbo"
+    return "seedream"
+
+
 def order(stored: list[dict] | None, action: str = "generate") -> list[str]:
     """Enabled engine ids for this action, best first.
 

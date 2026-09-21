@@ -170,5 +170,17 @@ class LegacyTags(unittest.TestCase):
         self.assertEqual(ie.id_for_tag("dalle"), "")
 
 
+    def test_a_model_name_maps_back_when_an_asset_predates_engine_ids(self):
+        self.assertEqual(ie.id_for_generator("krea2/turbo"), "krea2")
+        self.assertEqual(ie.id_for_generator("krea2_edit"), "krea2")
+        # z-image meant the Atlas engine when these assets were written
+        self.assertEqual(ie.id_for_generator("z-image/turbo"), "turbo")
+        self.assertEqual(ie.id_for_generator("bytedance/seedream-v5.0-pro/edit"), "seedream")
+
+    def test_no_generator_means_no_engine(self):
+        self.assertEqual(ie.id_for_generator(""), "")
+        self.assertEqual(ie.id_for_generator("   "), "")
+
+
 if __name__ == "__main__":
     unittest.main()

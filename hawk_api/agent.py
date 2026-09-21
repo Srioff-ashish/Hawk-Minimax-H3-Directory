@@ -25,6 +25,7 @@ import time
 import uuid
 
 from . import cast_talk
+from . import image_engines
 from .atlas import AtlasClient, AtlasError
 from .cast_talk import USER_KEY, clean_feelings, visible_to
 from .jobs import ACTIVE, Conflict, HawkService, NotFound, RequestError
@@ -52,7 +53,8 @@ VISION_FALLBACK_MODELS = ("xai/grok-4.6", "xai/grok-4.3")
 INSPECT_MAX_TOKENS = 8000
 PASS_SCORE = 6  # an inspected batch whose best image scores below this counts as a failed take
 # After a failed take, engine "auto" moves one step up this ladder for the rest of the run (until the user writes again).
-ENGINE_LADDER = ("local", "turbo", "seedream")
+# Engine ids come from image_engines; the order itself becomes a Studio setting in a later commit.
+ENGINE_LADDER = ("krea2", "turbo", "seedream")
 INSPECT_PROMPT = (
     "You are a demanding photo editor. Check each image (in the order given) against the brief. Look for: match with the "
     "brief (subject, age, look, outfit, setting, mood); natural face and eyes; correct hands and fingers; body proportions and "
@@ -1144,8 +1146,9 @@ class AgentService:
             return None
         if args.get("loras"):  # LoRAs (adult ones included) only run on local Krea 2
             return None
-        ladder = ENGINE_LADDER if not args.get("reference_asset_ids") else ("local", "seedream")
-        top = max((ENGINE_LADDER.index(engine) for engine in failed), default=-1)
+        ladder = ENGINE_LADDER if not args.get("reference_asset_ids") else ("krea2", "seedream")
+        # an id this ladder doesn't hold (an older chat, or an engine since disabled) is ignored, not a crash
+        top = max((ENGINE_LADDER.index(engine) for engine in failed if engine in ENGINE_LADDER), default=-1)
         return next((engine for engine in ladder if ENGINE_LADDER.index(engine) > top), ladder[-1])
 
     def _record_takes(self, session_id: str, verdict: dict) -> None:
@@ -1159,9 +1162,10 @@ class AgentService:
             return
         for item in images:
             asset = self.service.store.get_asset(str(item.get("asset_id") or ""))
-            generator = str(((asset or {}).get("source") or {}).get("generator") or "")
-            if generator:
-                engine = "local" if generator.startswith("krea2") else "turbo" if generator.startswith("z-image") else "seedream"
+            source = (asset or {}).get("source") or {}
+            # Images made from now on say which engine made them; older ones are traced from the model name.
+            engine = source.get("engine") or image_engines.id_for_generator(str(source.get("generator") or ""))
+            if engine:
                 self._failed_engines.setdefault(session_id, set()).add(engine)
 
     async def _execute(self, session_id: str, action: dict, asked_by: str = "") -> None:
