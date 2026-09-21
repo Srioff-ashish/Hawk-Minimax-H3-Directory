@@ -290,6 +290,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                 generate=None if body.generate is None else [r.model_dump() for r in body.generate],
                 edit=None if body.edit is None else [r.model_dump() for r in body.edit],
                 busy_mode=body.busy_mode, busy_max_wait_seconds=body.busy_max_wait_seconds,
+                confirm_paid=body.confirm_paid,
                 defaults=None if body.defaults is None else {f: [r.model_dump() for r in rows] for f, rows in body.defaults.items()})
         except SettingsError as exc:
             raise RequestError(str(exc)) from None

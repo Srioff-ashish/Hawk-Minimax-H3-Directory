@@ -895,6 +895,29 @@ class HawkService:
                                             engine_id=image_engines.id_for_tag(tag), extra={"cost_usd": round(cost, 4)})
         raise last_error or RequestError("No image engine could make this image.")
 
+    async def ready_image_engines(self, action: str = "generate") -> list[str]:
+        """Enabled engines for this action that could actually run right now, best first.
+
+        Naming an engine pins it, so a caller that steps up onto one whose weights are missing gets an error
+        rather than a fallback. The agent asks this first so a failed take never steps onto a dead rung.
+        """
+        ready = []
+        for engine_id in self.image_ladder(action):
+            spec = image_engines.get(engine_id)
+            if not spec.local:
+                if self.atlas.configured:
+                    ready.append(engine_id)
+                continue
+            if spec.id not in local_images.WIRED_ENGINES:
+                continue
+            try:
+                status = await self.local_images.status(spec.id)
+            except Exception:  # ComfyUI down: not a rung the agent can use
+                continue
+            if status.get("installed") and (action != "edit" or (status.get("edit") or {}).get("installed")):
+                ready.append(engine_id)
+        return ready
+
     def image_ladder(self, action: str = "generate") -> list[str]:
         """Engine ids to try for this action, best first, as Studio has them ordered."""
         return self.image_engines.order(action)

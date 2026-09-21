@@ -178,8 +178,8 @@ def check_prompt(prompt: str) -> None:
     match = _MINOR.search(prompt or "")
     if match:
         raise LocalImageError(
-            f"Refused: the prompt mentions {match.group(0)!r}. Local Krea 2 doesn't make images of anyone under 18 "
-            "(a fixed rule).",
+            f"Refused: the prompt mentions {match.group(0)!r}. The image engines on this GPU don't make images of "
+            "anyone under 18 (a fixed rule).",
             fatal=True,
         )
 

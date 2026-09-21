@@ -168,6 +168,8 @@ class ImageEngineSettings(BaseModel):
     edit: list[ImageEngineRung] | None = Field(None, description="Order tried when reference_asset_ids are given, best first.")
     busy_mode: str | None = Field(None, description='What an image does while ComfyUI renders a video: "wait" or "fall_through" to a paid engine.')
     busy_max_wait_seconds: int | None = Field(None, ge=0, le=300, description="How long to wait before falling through.")
+    confirm_paid: bool | None = Field(
+        None, description="Ask before a failed take retries on a paid engine, instead of spending automatically.")
     defaults: dict[str, list[ImageLoraDefault]] | None = Field(
         None, description='LoRAs a family attaches on its own, keyed by family (krea2, klein, zit). An empty list switches them off.')
 

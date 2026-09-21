@@ -28,7 +28,7 @@ from . import cast_talk
 from . import image_engines
 from .atlas import AtlasClient, AtlasError
 from .cast_talk import USER_KEY, clean_feelings, visible_to
-from .jobs import ACTIVE, Conflict, HawkService, NotFound, RequestError
+from .jobs import ACTIVE, IMAGE_PRICES, Conflict, HawkService, NotFound, RequestError
 from .mcp_server import INSTRUCTIONS
 from .prompts import PLATFORM_RULES, render_agent_prompt
 
@@ -1137,13 +1137,13 @@ class AgentService:
             lines.append(f"- {tool['name']}: {tool['description']}\n  args: {json.dumps(tool['args'])}")
         return "\n".join(lines)
 
-    def _step_up_engine(self, session_id: str, args: dict) -> str | None:
+    async def _step_up_engine(self, session_id: str, args: dict) -> str | None:
         """The engine for a generate_image call with engine "auto" once a take failed inspection this run: the next
         rung above the highest one that failed, on the ladder for what this call is doing."""
         failed = self._failed_engines.get(session_id)
         if not failed or str(args.get("engine") or args.get("model") or "auto").strip().lower() != "auto":
             return None
-        ladder = self.service.image_ladder("edit" if args.get("reference_asset_ids") else "generate")
+        ladder = await self.service.ready_image_engines("edit" if args.get("reference_asset_ids") else "generate")
         if args.get("loras"):  # LoRAs (adult ones included) only run on the local engines, so stay among those
             ladder = [engine for engine in ladder if image_engines.get(engine).lora_family]
         if not ladder:
@@ -1151,7 +1151,25 @@ class AgentService:
         # an id this ladder doesn't hold (an older chat, or an engine since switched off) is ignored, not a crash
         top = max((ladder.index(engine) for engine in failed if engine in ladder), default=-1)
         stepped = ladder[min(top + 1, len(ladder) - 1)]
-        return stepped if stepped != ladder[0] else None  # no step up means nothing to say
+        if stepped == ladder[0]:
+            return None  # no step up means nothing to say
+        if not image_engines.get(stepped).local and self.service.image_engines.confirm_paid():
+            # Retrying on a paid engine spends the user's money on a judgement call the model made by
+            # itself. It has to show what it already has and be told to go ahead.
+            return None
+        return stepped
+
+    async def _paid_rung(self, session_id: str, args: dict) -> str | None:
+        """The paid engine a failed take would have escalated to, when confirmation is holding it back."""
+        failed = self._failed_engines.get(session_id)
+        if not failed or not self.service.image_engines.confirm_paid():
+            return None
+        ladder = await self.service.ready_image_engines("edit" if args.get("reference_asset_ids") else "generate")
+        top = max((ladder.index(engine) for engine in failed if engine in ladder), default=-1)
+        if top < 0 or top + 1 >= len(ladder):
+            return None
+        nxt = ladder[top + 1]
+        return nxt if not image_engines.get(nxt).local else None
 
     def _record_takes(self, session_id: str, verdict: dict) -> None:
         """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed."""
@@ -1172,7 +1190,7 @@ class AgentService:
 
     async def _execute(self, session_id: str, action: dict, asked_by: str = "") -> None:
         name, args = action["tool"], action["args"]
-        stepped = self._step_up_engine(session_id, args) if name == "generate_image" else None
+        stepped = await self._step_up_engine(session_id, args) if name == "generate_image" else None
         if stepped:
             args = {**args, "engine": stepped}
         try:
@@ -1343,9 +1361,19 @@ class AgentService:
             result = {"model": model, **verdict}
             if failures:
                 result["skipped_models"] = failures
-            nxt = self._step_up_engine(session_id, {"engine": "auto"})
+            nxt = await self._step_up_engine(session_id, {"engine": "auto"})
             if nxt:
                 result["next_engine"] = f"The next generate_image with engine auto will use {nxt}."
+            else:
+                paid = await self._paid_rung(session_id, {"engine": "auto"})
+                if paid:
+                    spec = image_engines.get(paid)
+                    price = IMAGE_PRICES.get(spec.price_key, 0.0)
+                    result["needs_approval"] = (
+                        f"The free engines on this GPU have been tried. The next one is {spec.label}, which costs "
+                        f"about ${price:g} an image. Show the user the best take you already have, say what is wrong "
+                        f"with it, and ask whether to spend that or try locally again. Only call generate_image with "
+                        f'engine "{paid}" once they have said yes; otherwise retry with engine "auto".')
             return result
         log.warning("inspect_image failed on every model: %s", failures)
         raise RequestError("No vision model could inspect these images (" + "; ".join(f[:300] for f in failures) + "). "

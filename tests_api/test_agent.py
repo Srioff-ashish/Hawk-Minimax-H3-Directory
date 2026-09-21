@@ -611,14 +611,15 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_engine_order_is_a_setting(self):
         view = (await self.http.get("/v1/images/engines")).json()
-        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["krea2", "turbo", "seedream"])
-        self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["krea2", "seedream"])
+        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["klein", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["klein", "krea2", "seedream"])
         self.assertEqual(view["busy"]["mode"], "fall_through", "unchanged until the user says otherwise")
 
         # the agent reads the live order from image_options, so an edited prompt can't leave it stale
         options = (await self.http.get("/v1/images/options")).json()
-        self.assertEqual(options["would_use"]["generate"], "krea2")
-        self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]], ["krea2", "turbo", "seedream"])
+        self.assertEqual(options["would_use"]["generate"], "klein")
+        self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]],
+                         ["klein", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
 
         # put Seedream first and the next image goes straight there, with no local attempt to skip past
@@ -641,7 +642,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad.status_code, 422)
         self.assertIn("Z-Image Turbo", bad.json()["error"])
         self.assertEqual([r["engine"] for r in (await self.http.get("/v1/images/engines")).json()["edit"] if r["enabled"]],
-                         ["krea2", "seedream"], "a refused save changes nothing")
+                         ["klein", "krea2", "seedream"], "a refused save changes nothing")
 
     async def test_inspect_image_then_upgrade_to_seedream(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
@@ -707,6 +708,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
         self.atlas.reply = reply
+        # this test is about the ladder mechanics, so let it spend without asking; the gate has its own test
+        await self.http.put("/v1/images/engines", json={"confirm_paid": False})
         chat = await self.new_chat(model="deepseek-ai/deepseek-v4.1-flash")
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo banao"})
         view = await self.settle(chat)
@@ -746,6 +749,55 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         failed = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
         self.assertFalse(failed["ok"])
         self.assertIn("seedream", failed["error"])
+
+    async def test_a_failed_take_asks_before_it_spends(self):
+        files = self.fake.model_files
+        files["diffusion_models"].append("krea2_turbo_fp8_scaled.safetensors")
+        files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
+        files["vae"] = ["qwen_image_vae.safetensors"]
+
+        def reply(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list):  # the inspection call
+                return json.dumps({"images": [{"asset_id": "media-attachment-0-0", "score": 3,
+                                               "issues": ["bad hands"], "verdict": "retry"}],
+                                   "best": "media-attachment-0-0", "advice": "Retry."})
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "", "actions": [{"tool": "generate_image",
+                                                           "args": {"prompt": "Portrait", "engine": "auto"}}]})
+            if turn == 1:
+                ids = [a["id"] for a in tool_result(body, "generate_image")["assets"]]
+                return json.dumps({"say": "", "actions": [{"tool": "inspect_image",
+                                                           "args": {"asset_ids": ids, "brief": "Portrait"}}]})
+            return json.dumps({"say": "That take has bad hands. Shall I spend on Seedream?", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        spent = len(self.atlas.image_requests)
+        chat = await self.new_chat(model="deepseek-ai/deepseek-v4.1-flash")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Ek portrait banao"})
+        view = await self.settle(chat)
+        tools = [m["content"] for m in view["messages"] if m["role"] == "tool"]
+        inspected = next(c["result"] for c in tools if c["tool"] == "inspect_image")
+        self.assertNotIn("next_engine", inspected, "the free engines are used up, so there is nothing to step to")
+        self.assertIn("needs_approval", inspected)
+        self.assertIn("ask", inspected["needs_approval"].lower())
+        self.assertIn("$0.01", inspected["needs_approval"], "it says what the user would be spending")
+        self.assertEqual(len(self.atlas.image_requests), spent + 0, "nothing was bought without being asked")
+        self.assertEqual([c["result"]["engine"] for c in tools if c["tool"] == "generate_image"], ["krea2"])
+
+        # the user says go ahead, so the agent names the engine and that is allowed
+        pending = [{"tool": "generate_image", "args": {"prompt": "Portrait", "engine": "seedream"}}]
+
+        def approved(_body):
+            actions = [pending.pop()] if pending else []
+            return json.dumps({"say": "ok", "actions": actions, "done": not actions})
+
+        self.atlas.reply = approved
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "haan, seedream use karo"})
+        view = await self.settle(chat)
+        last = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
+        self.assertEqual(last["result"]["engine"], "seedream", "an engine the user named is never blocked")
 
     async def test_characters_own_what_they_make(self):
         cast = [{"name": "Nisha", "persona": "stylist"}, {"name": "Sonia Mausi", "persona": "aunt"},
@@ -963,7 +1015,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.fake.running["render"] = asyncio.get_event_loop().create_future()  # a video render holds ComfyUI
         busy = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
         self.assertEqual(busy["engine"], "z-image")
-        self.assertIn("busy", busy["tried"][0]["skipped"])
+        # klein and zimage are not installed in this fixture, so the busy Krea 2 is further down "tried"
+        self.assertTrue(any("busy" in t["skipped"] for t in busy["tried"]), busy["tried"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})).status_code, 422)
         self.fake.running.pop("render")
 
@@ -971,7 +1024,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         character = made["assets"][0]["id"]
         edit = (await self.http.post("/v1/images", json={"prompt": "Same, red dress", "reference_asset_ids": [character]})).json()
         self.assertEqual(edit["model"], "bytedance/seedream-v5.0-pro/edit")
-        self.assertIn("krea2_identity_edit", edit["tried"][0]["skipped"])
+        self.assertTrue(any("krea2_identity_edit" in t["skipped"] for t in edit["tried"]), edit["tried"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "x", "engine": "local", "reference_asset_ids": [character]})).status_code, 422)
         files["loras"] += ["Krea2/krea2_identity_edit_v1_2_r128.safetensors", "Krea2/krea2_identity_edit_v1_2.safetensors"]
         self.fake.missing_nodes = {"Krea2EditGroundedEncode"}

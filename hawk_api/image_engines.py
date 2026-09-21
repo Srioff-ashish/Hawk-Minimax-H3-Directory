@@ -217,24 +217,29 @@ def full_order(stored: list[dict] | None, action: str = "generate") -> list[dict
     return rows
 
 
-#: How the ladders start out on a pod that has never been configured: what the gateway did before it was
-#: a setting. Studio switches the new local engines on once they are installed.
+#: How the ladders start out on a pod that has never been configured. Local engines first, cheapest of the
+#: paid ones last. An engine that is enabled but not installed reports ready: false in image_options and is
+#: skipped by the walk, so listing all three local engines here costs a pod that lacks one nothing.
 DEFAULTS = {
     "generate": [
+        {"engine": "klein", "enabled": True},
         {"engine": "krea2", "enabled": True},
+        {"engine": "zimage", "enabled": True},
+        # below all three local engines, so it only ever fires when none of them can run -- and then it is
+        # a third of Seedream's price for the same job
         {"engine": "turbo", "enabled": True},
         {"engine": "seedream", "enabled": True},
-        {"engine": "klein", "enabled": False},
-        {"engine": "zimage", "enabled": False},
         {"engine": "seedream-lite", "enabled": False},
     ],
     "edit": [
+        {"engine": "klein", "enabled": True},  # the only local engine that takes more than two references
         {"engine": "krea2", "enabled": True},
         {"engine": "seedream", "enabled": True},
-        {"engine": "klein", "enabled": False},
         {"engine": "seedream-lite", "enabled": False},
     ],
     "busy": {"mode": "fall_through", "max_wait_seconds": 120},
+    #: A retake that has exhausted the free engines asks before spending on a paid one.
+    "confirm_paid": True,
 }
 BUSY_MODES = ("wait", "fall_through")
 MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
@@ -284,7 +289,13 @@ class ImageEngineStore:
             "generate": full_order(stored.get("generate") or DEFAULTS["generate"], "generate"),
             "edit": full_order(stored.get("edit") or DEFAULTS["edit"], "edit"),
             "busy": busy,
+            "confirm_paid": self.confirm_paid(),
         }
+
+    def confirm_paid(self) -> bool:
+        """Whether a failed take must be approved before it retries on a paid engine."""
+        stored = self._load().get("confirm_paid")
+        return DEFAULTS["confirm_paid"] if not isinstance(stored, bool) else stored
 
     def defaults(self, family: str) -> list[dict] | None:
         """LoRAs this family attaches on its own, or None when the user has never set them.
@@ -368,7 +379,8 @@ class ImageEngineStore:
             cleaned.append({"name": name, "strength": strength})
         return cleaned
 
-    def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None) -> dict:
+    def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None,
+             confirm_paid=None) -> dict:
         """Update the parts that were given. Anything left as None keeps its current value."""
         with self._lock:
             current = self.settings()
@@ -384,6 +396,8 @@ class ImageEngineStore:
                 current["busy"]["max_wait_seconds"] = max(0, min(MAX_WAIT_SECONDS, int(busy_max_wait_seconds)))
             if current["busy"]["mode"] == "wait" and not current["busy"]["max_wait_seconds"]:
                 current["busy"]["mode"] = "fall_through"  # waiting zero seconds is falling through
+            if confirm_paid is not None:
+                current["confirm_paid"] = bool(confirm_paid)
             stored_defaults = dict(self._load().get("defaults") or {})
             for family, entries in (defaults or {}).items():
                 stored_defaults[family] = self._clean_defaults(family, entries or [])

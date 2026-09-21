@@ -986,6 +986,7 @@
               <span class="hint">Waiting keeps images on your own GPU instead of billing Atlas for them.</span></div>
             <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
               <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
+            <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
             <div class="field"><label class="label">LoRAs each model attaches on its own</label>
               <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
               <div id="engineDefaults" class="engine-list" style="margin-top:8px"></div></div>
@@ -3142,6 +3143,7 @@
     $("engineBusyMode").value = data.busy.mode;
     $("engineMaxWait").value = data.busy.max_wait_seconds;
     $("engineWaitRow").hidden = data.busy.mode !== "wait";
+    $("engineConfirmPaid").checked = data.confirm_paid !== false;
     $("engineWarnings").innerHTML = (data.warnings || []).map((w) => `<div class="engine-note">${w}</div>`).join("");
   }
   async function loadImageEngines() {
@@ -3170,7 +3172,7 @@
       paintImageEngines(await api("/v1/images/engines", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
           busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
-          defaults: engineState.defaults }) }));
+          confirm_paid: $("engineConfirmPaid").checked, defaults: engineState.defaults }) }));
       toast("Engine order saved");
     } catch (error) { toast("Could not save", error.message, "bad"); loadImageEngines(); }
   };

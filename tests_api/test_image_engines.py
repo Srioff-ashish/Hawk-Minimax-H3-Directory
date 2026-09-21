@@ -191,9 +191,11 @@ class Store(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         self.store = ie.ImageEngineStore(self.dir)
 
-    def test_an_unconfigured_pod_behaves_as_it_always_did(self):
-        self.assertEqual(self.store.order("generate"), ["krea2", "turbo", "seedream"])
-        self.assertEqual(self.store.order("edit"), ["krea2", "seedream"])
+    def test_an_unconfigured_pod_puts_the_local_engines_first(self):
+        self.assertEqual(self.store.order("generate"), ["klein", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("edit"), ["klein", "krea2", "seedream"], "zimage and turbo cannot edit")
+        order = self.store.order("generate")
+        self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
     def test_saving_an_order_survives_a_reload(self):
@@ -264,7 +266,7 @@ class Store(unittest.TestCase):
     def test_a_corrupt_file_falls_back_to_the_defaults(self):
         with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
             handle.write("{ not json")
-        self.assertEqual(self.store.order("generate"), ["krea2", "turbo", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["klein", "krea2", "zimage", "turbo", "seedream"])
 
     def test_a_family_with_no_stored_defaults_falls_back_to_the_shipped_pair(self):
         self.assertIsNone(self.store.defaults("klein"), "never set is not the same as empty")
