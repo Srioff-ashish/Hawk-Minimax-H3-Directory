@@ -630,8 +630,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         # every engine is listed with whether it can actually run, so the UI can show them all honestly
         ladder = {r["engine"]: r for r in (await self.http.get("/v1/images/options")).json()["generate_ladder"]}
-        self.assertEqual(ladder["klein"]["ready"], False, "no graph on this build yet")
-        self.assertIn("graph", ladder["klein"]["why_not"])
+        self.assertEqual(ladder["klein"]["ready"], False, "its weights are not on this pod")
+        self.assertIn("flux-2-klein", ladder["klein"]["why_not"], "say which file is missing")
         self.assertEqual(ladder["seedream"]["ready"], True)
         self.assertEqual(ladder["krea2"]["ready"], False, "Krea 2 is not installed in this fixture")
         self.assertIn("not on this pod", ladder["krea2"]["why_not"])
@@ -938,6 +938,24 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         images = (await self.http.get("/v1/images/options")).json()["local"]["loras"]
         self.assertNotIn("klein_snofs.safetensors", [l["file"] for l in images], "another engine's LoRA isn't offered")
 
+        # with its weights present, the local Z-Image builds its own graph rather than Krea 2's
+        files = self.fake.model_files
+        files["diffusion_models"].append("z_image_turbo_nvfp4.safetensors")
+        files["text_encoders"].append("qwen_3_4b_fp4_mixed.safetensors")
+        files["vae"].append("z_image_ae.safetensors")
+        zimage = await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "z-image"})
+        self.assertEqual(zimage.status_code, 201, zimage.text)
+        self.assertEqual(zimage.json()["model"], "zimage/turbo", "never 'z-image/...', which means the Atlas engine")
+        graph = list(self.fake.prompts.values())[-1]
+        kinds = {node["class_type"] for node in graph.values()}
+        self.assertIn("ModelSamplingAuraFlow", kinds, "Z-Image samples through AuraFlow")
+        clip = next(n for n in graph.values() if n["class_type"] == "CLIPLoader")
+        self.assertEqual(clip["inputs"]["type"], "lumina2", "not a Qwen type, whatever the file name suggests")
+        sampler = next(n for n in graph.values() if n["class_type"] == "KSampler")
+        self.assertEqual(sampler["inputs"]["sampler_name"], "res_multistep")
+
+        for name in ("diffusion_models", "text_encoders", "vae"):
+            files[name].pop()
         moved = await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "z-image"})
         self.assertEqual(moved.status_code, 422, "engine z-image now means the local engine, which isn't wired up")
         self.assertIn("local", moved.json()["error"].lower())

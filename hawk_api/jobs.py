@@ -899,21 +899,26 @@ class HawkService:
         """Engine ids to try for this action, best first, as Studio has them ordered."""
         return self.image_engines.order(action)
 
+    #: Reported as the result's "model". Deliberately not "z-image/..." -- that prefix means the Atlas engine
+    #: to _text_only_image_model, and a local id must never be mistaken for it.
+    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "klein": "klein/9b", "zimage": "zimage/turbo"}
+
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""
-        if spec.id != "krea2":
-            # Klein and Z-Image get their graphs in a later commit; until then they are never in the ladder,
-            # and naming one explicitly says so instead of pretending.
-            raise LocalImageError(f"{spec.label} is not wired up on this pod yet; use engine auto.")
         if action == "edit":
+            if spec.id == "klein":
+                local = await self.local_images.edit_klein(
+                    prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
+                    steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
+                return local, "klein/9b-edit"
             local = await self.local_images.edit(
                 prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
                 steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"])
             return local, "krea2/identity-edit"
         local = await self.local_images.generate(
             prompt, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
-            steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
-        return local, "krea2/turbo"
+            steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"], engine=spec.id)
+        return local, self.LOCAL_MODEL_NAMES[spec.id]
 
     def _ladder_view(self, action: str, settings: dict, local: dict) -> list[dict]:
         rows = []
@@ -923,12 +928,15 @@ class HawkService:
                 ready, why = self.atlas.configured, "" if self.atlas.configured else "No Atlas API key on this pod."
             elif spec.id not in local_images.WIRED_ENGINES:
                 ready, why = False, f"{spec.label} has no graph on this build yet."
-            elif not local.get("installed"):
-                ready, why = False, "Its model files are not on this pod: " + ", ".join(local.get("missing") or [])
-            elif action == "edit" and not (local.get("edit") or {}).get("installed"):
-                ready, why = False, "Its edit nodes or LoRA are missing: " + ", ".join((local.get("edit") or {}).get("missing") or [])
             else:
-                ready, why = True, ""
+                status = local if spec.id == "krea2" else (local.get("engines") or {}).get(spec.id) or {}
+                edit = status.get("edit") or {}
+                if not status.get("installed"):
+                    ready, why = False, "Its model files are not on this pod: " + ", ".join(status.get("missing") or [])
+                elif action == "edit" and not edit.get("installed"):
+                    ready, why = False, "Its edit nodes or LoRA are missing: " + ", ".join(edit.get("missing") or [])
+                else:
+                    ready, why = True, ""
             rows.append({"engine": spec.id, "label": spec.label, "where": spec.where, "enabled": row["enabled"],
                          "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs,
                          "ready": ready, "why_not": why})
@@ -936,6 +944,7 @@ class HawkService:
 
     async def image_options(self) -> dict:
         local = await self.local_images.status()
+        local["engines"] = {name: await self.local_images.status(name) for name in ("klein", "zimage")}
         engines = self.image_engines.view()
         ladders = {action: self._ladder_view(action, engines, local) for action in ("generate", "edit")}
         return {

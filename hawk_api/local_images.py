@@ -29,7 +29,7 @@ WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
 #: Local engines whose ComfyUI graphs exist. Klein and Z-Image join this as their graphs land.
-WIRED_ENGINES = ("krea2",)
+WIRED_ENGINES = ("krea2", "klein", "zimage")
 # Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
 # else the first match, higher precision first.
 MODEL_FAMILIES = {
@@ -37,6 +37,38 @@ MODEL_FAMILIES = {
     "text_encoders": re.compile(r"qwen[-_ ]?3[-_ ]?vl[-_ ]?4b", re.IGNORECASE),
     "vae": re.compile(r"qwen[-_ ]?image[-_ ]?vae", re.IGNORECASE),
 }
+#: Per local engine: which file to look for in each ComfyUI folder, and which setting names it.
+#: The Qwen text encoders are deliberately distinct -- Krea 2 wants qwen3vl_4b, Z-Image qwen_3_4b and Klein
+#: qwen_3_8b -- so the patterns must not match each other.
+LOCAL_MODELS: dict[str, dict] = {
+    "krea2": {
+        "files": {"unet": ("diffusion_models", MODEL_FAMILIES["diffusion_models"]),
+                  "clip": ("text_encoders", MODEL_FAMILIES["text_encoders"]),
+                  "vae": ("vae", MODEL_FAMILIES["vae"])},
+        "configured": {"unet": "krea_unet", "clip": "krea_clip", "vae": "krea_vae"},
+    },
+    "klein": {
+        "files": {"unet": ("diffusion_models", re.compile(r"flux.?2.?klein", re.IGNORECASE)),
+                  "clip": ("text_encoders", re.compile(r"qwen[-_ ]?3[-_ ]?8b", re.IGNORECASE)),
+                  "vae": ("vae", re.compile(r"flux2[-_ ]?vae|full_encoder_small_decoder", re.IGNORECASE))},
+        "configured": {"unet": "klein_unet", "clip": "klein_clip", "vae": "klein_vae"},
+    },
+    "zimage": {
+        "files": {"unet": ("diffusion_models", re.compile(r"z[-_ ]?image(?!.*ae\.safetensors$)", re.IGNORECASE)),
+                  "clip": ("text_encoders", re.compile(r"qwen[-_ ]?3[-_ ]?4b", re.IGNORECASE)),
+                  "vae": ("vae", re.compile(r"z[-_ ]?image.*ae|^ae\.safetensors$", re.IGNORECASE))},
+        "configured": {"unet": "zimage_unet", "clip": "zimage_clip", "vae": "zimage_vae"},
+    },
+}
+#: FLUX.2 Klein ships distilled and "base" builds that want very different settings. Guessing wrong does not
+#: fail, it just makes slow over-cooked images, so read it off the file name.
+KLEIN_BASE_STEPS, KLEIN_BASE_CFG = 20, 5.0
+KLEIN_TURBO_STEPS, KLEIN_TURBO_CFG = 4, 1.0
+ZIMAGE_STEPS = 8
+
+
+def klein_settings(unet: str) -> tuple[int, float]:
+    return (KLEIN_BASE_STEPS, KLEIN_BASE_CFG) if "base" in unet.lower() else (KLEIN_TURBO_STEPS, KLEIN_TURBO_CFG)
 _PRECISION = ("bf16", "fp16", "fp8", "")
 
 # Krea 2 Identity Edit (conradlocke/krea2-identity-edit): a LoRA plus the comfyui-krea2edit node pack,
@@ -288,6 +320,112 @@ def krea_edit_graph(prompt: str, *, images: list[str], width: int, height: int, 
     return graph
 
 
+def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
+                 unet: str, clip: str, vae: str, steps: int, sampler: str, scheduler: str, prefix: str) -> dict:
+    """Z-Image Turbo text to image, from the ComfyUI template.
+
+    Its text encoder loads as "lumina2", not as a Qwen type, and the model goes through ModelSamplingAuraFlow
+    before sampling. Both are easy to get wrong and neither fails loudly.
+    """
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "lumina2", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+    }
+    model = ["1", 0]
+    for index, (name, strength) in enumerate(loras):
+        node = f"l{index}"
+        graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
+        model = [node, 0]
+    graph.update({
+        "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": model, "shift": 3.0}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
+        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+        "8": {"class_type": "KSampler", "inputs": {
+            "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0], "seed": seed,
+            "steps": steps, "cfg": 1.0, "sampler_name": sampler, "scheduler": scheduler, "denoise": 1.0}},
+        "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
+        "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": prefix}},
+    })
+    return graph
+
+
+def _klein_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]]) -> tuple[dict, list]:
+    """Loaders and the LoRA chain shared by both FLUX.2 Klein graphs."""
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "flux2", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+    }
+    model = ["1", 0]
+    for index, (name, strength) in enumerate(loras):
+        node = f"l{index}"
+        graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
+        model = [node, 0]
+    return graph, model
+
+
+def klein_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
+                unet: str, clip: str, vae: str, steps: int, cfg: float, prefix: str) -> dict:
+    """FLUX.2 Klein text to image. Uses the advanced sampler path, not KSampler."""
+    graph, model = _klein_base(unet, clip, vae, loras)
+    graph.update({
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
+        "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+        "7": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": ["4", 0], "negative": ["5", 0], "cfg": cfg}},
+        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "9": {"class_type": "Flux2Scheduler", "inputs": {"steps": steps, "width": width, "height": height}},
+        "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "11": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["10", 0], "guider": ["7", 0], "sampler": ["8", 0], "sigmas": ["9", 0], "latent_image": ["6", 0]}},
+        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
+        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": prefix}},
+    })
+    return graph
+
+
+def klein_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
+                     loras: list[tuple[str, float]], unet: str, clip: str, vae: str, steps: int, cfg: float,
+                     megapixels: float, prefix: str) -> dict:
+    """FLUX.2 Klein edit, with any number of reference images.
+
+    Each reference is scaled to about one megapixel, encoded, and folded into both the positive and the negative
+    conditioning by its own ReferenceLatent. They chain, which is why Klein takes more than two references where
+    Krea 2 Identity Edit takes two. Output size follows the first reference unless one was asked for.
+    """
+    graph, model = _klein_base(unet, clip, vae, loras)
+    graph["4"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}}
+    graph["5"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}}
+    positive, negative = ["4", 0], ["5", 0]
+    for index, path in enumerate(images):
+        graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
+        graph[f"s{index}"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": [f"i{index}", 0], "upscale_method": "lanczos", "megapixels": megapixels, "resolution_steps": 1}}
+        graph[f"e{index}"] = {"class_type": "VAEEncode", "inputs": {"pixels": [f"s{index}", 0], "vae": ["3", 0]}}
+        graph[f"rp{index}"] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": positive, "latent": [f"e{index}", 0]}}
+        graph[f"rn{index}"] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": negative, "latent": [f"e{index}", 0]}}
+        positive, negative = [f"rp{index}", 0], [f"rn{index}", 0]
+    if width and height:
+        size_w, size_h = width, height
+    else:  # follow the first reference, which is already at a size the model likes
+        graph["gs"] = {"class_type": "GetImageSize", "inputs": {"image": ["s0", 0]}}
+        size_w, size_h = ["gs", 0], ["gs", 1]
+    graph.update({
+        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": size_w, "height": size_h, "batch_size": 1}},
+        "7": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": positive, "negative": negative, "cfg": cfg}},
+        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "9": {"class_type": "Flux2Scheduler", "inputs": {"steps": steps, "width": size_w, "height": size_h}},
+        "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "11": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["10", 0], "guider": ["7", 0], "sampler": ["8", 0], "sigmas": ["9", 0], "latent_image": ["6", 0]}},
+        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
+        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": prefix}},
+    })
+    return graph
+
+
 class LocalImageEngine:
     def __init__(self, service):
         self.service = service
@@ -298,13 +436,16 @@ class LocalImageEngine:
 
     # ------------------------------------------------------------ status
 
-    async def status(self) -> dict:
-        """Installed model files, whether ComfyUI is busy, and the LoRA catalogue."""
-        s = self.settings
+    async def status(self, engine: str = "krea2") -> dict:
+        """Installed model files for one local engine, whether ComfyUI is busy, and its LoRA catalogue."""
+        spec = LOCAL_MODELS[engine]
         missing, files = [], {}
         try:
-            for key, folder, name in (("unet", "diffusion_models", s.krea_unet), ("clip", "text_encoders", s.krea_clip), ("vae", "vae", s.krea_vae)):
-                found = pick_model(name, await self.service.available_models(folder, refresh=True), MODEL_FAMILIES[folder])
+            folders = {folder for folder, _ in spec["files"].values()}
+            listing = {folder: await self.service.available_models(folder, refresh=True) for folder in folders}
+            for key, (folder, pattern) in spec["files"].items():
+                name = getattr(self.settings, spec["configured"][key], "")
+                found = pick_model(name, listing[folder], pattern)
                 if found:
                     files[key] = found
                 else:
@@ -313,13 +454,28 @@ class LocalImageEngine:
             reachable = True
         except Exception as exc:  # ComfyUI down
             return {"installed": False, "busy": False, "reachable": False, "missing": [], "error": str(exc), "loras": []}
-        return {"installed": not missing, "busy": busy, "queue": queue, "reachable": reachable, "missing": missing,
-                "model": files.get("unet", s.krea_unet), "files": files, "edit": await self.edit_status(),
-                # this status block is Krea 2's, so it lists Krea 2's LoRAs; other families have their own engines
-                "loras": [lora.view() for lora in await self.catalogue("krea2")]}
+        family = image_engines.get(engine).lora_family
+        return {"engine": engine, "installed": not missing, "busy": busy, "queue": queue, "reachable": reachable,
+                "missing": missing, "model": files.get("unet", ""), "files": files,
+                "edit": await self.edit_status(engine),
+                # each engine lists its own family's LoRAs; loading another family's makes a worse image, not an error
+                "loras": [lora.view() for lora in await self.catalogue(family)]}
 
-    async def edit_status(self) -> dict:
-        """Krea 2 Identity Edit: the comfyui-krea2edit nodes and the identity-edit LoRA."""
+    async def statuses(self) -> dict:
+        """Every local engine's status, keyed by engine id."""
+        return {engine: await self.status(engine) for engine in LOCAL_MODELS}
+
+    async def edit_status(self, engine: str = "krea2") -> dict:
+        """What an engine needs to edit, beyond its base files.
+
+        Krea 2 needs the comfyui-krea2edit nodes and the identity-edit LoRA. Klein edits with core nodes and
+        its own weights, so it is ready as soon as those are.
+        """
+        if engine != "krea2":
+            spec = image_engines.get(engine)
+            if not spec or not spec.edit:
+                return {"installed": False, "missing": [f"{spec.label if spec else engine} does not edit images."], "lora": None}
+            return {"installed": True, "missing": [], "lora": None}
         missing = [f"custom node {node} (comfyui-krea2edit)" for node in EDIT_NODES if not await self.service.comfy.object_info(node)]
         lora = self._edit_lora(await self.service.available_models("loras"))
         if not lora:
@@ -416,41 +572,95 @@ class LocalImageEngine:
 
     # ------------------------------------------------------------ generate
 
-    async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
-                       loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False,
-                       max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
-        check_prompt(prompt)
-        status = await self.status()
+    def _ready(self, status: dict, engine: str, action: str = "generate") -> None:
+        """Raise unless this engine can run right now. Never fatal: the ladder may have somewhere else to go."""
+        label = image_engines.get(engine).label
         if not status.get("reachable"):
             raise LocalImageError(f"ComfyUI is not reachable: {status.get('error')}")
         if not status["installed"]:
-            raise LocalImageError("Krea 2 is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
-        if status["busy"] and not wait_if_busy:
+            raise LocalImageError(f"{label} is not installed on the pod (missing " + ", ".join(status["missing"]) + ").")
+        if action == "edit" and not status["edit"]["installed"]:
+            raise LocalImageError(f"{label} can't edit here (missing " + ", ".join(status["edit"]["missing"]) + ").")
+        if status["busy"]:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
-        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
-                                                          adult_default=self.adult_default, family="krea2")
-        width, height = parse_size(size)
+
+    def _with_triggers(self, prompt: str, used: list) -> str:
         text = prompt.strip()
         for item in used:  # trigger words go in automatically
             if item.trigger and item.trigger.lower() not in text.lower():
                 text = f"{text}, {item.trigger}"
-        asked = [item for item in used if not item.automatic]
-        hint = next((item for item in (asked or used) if item.steps or item.scheduler or item.sampler), None)
-        files = status["files"]
-        graph = krea_graph(
-            text, width=width, height=height, n=max(1, min(4, n)), seed=seed if seed is not None else int.from_bytes(os.urandom(6), "big"),
-            loras=chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
-            steps=steps or (hint.steps if hint and hint.steps else DEFAULT_STEPS),
-            sampler=(hint.sampler if hint and hint.sampler else "euler"), scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
-            prefix="hawk_images/krea2",
-        )
+        return text
+
+    async def _submit(self, graph: dict, label: str) -> list[bytes]:
         prompt_id = str(uuid.uuid4())
-        started = time.monotonic()
         try:
             await self.service.comfy.submit(graph, prompt_id)
         except ComfyError as exc:
-            raise LocalImageError(f"ComfyUI rejected the Krea 2 graph: {exc}") from exc
-        images = await self._collect(prompt_id)
+            raise LocalImageError(f"ComfyUI rejected the {label} graph: {exc}") from exc
+        return await self._collect(prompt_id)
+
+    async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
+                       loras: list[dict] | None = None, steps: int | None = None, wait_if_busy: bool = False,
+                       max_adult_loras: int = MAX_ADULT_LORAS, engine: str = "krea2") -> LocalResult:
+        check_prompt(prompt)
+        status = await self.status(engine)
+        self._ready(status, engine)
+        spec = image_engines.get(engine)
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
+                                                          adult_default=self.adult_default, family=spec.lora_family)
+        width, height = parse_size(size)
+        text = self._with_triggers(prompt, used)
+        asked = [item for item in used if not item.automatic]
+        hint = next((item for item in (asked or used) if item.steps or item.scheduler or item.sampler), None)
+        files = status["files"]
+        seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
+        batch = max(1, min(4, n))
+        started = time.monotonic()
+        if engine == "klein":
+            klein_steps, cfg = klein_settings(files["unet"])
+            graph = klein_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+                                unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                                steps=steps or klein_steps, cfg=cfg, prefix="hawk_images/klein")
+        elif engine == "zimage":
+            graph = zimage_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+                                 unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                                 steps=steps or (hint.steps if hint and hint.steps else ZIMAGE_STEPS),
+                                 sampler=(hint.sampler if hint and hint.sampler else "res_multistep"),
+                                 scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
+                                 prefix="hawk_images/zimage")
+        else:
+            graph = krea_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+                               unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                               steps=steps or (hint.steps if hint and hint.steps else DEFAULT_STEPS),
+                               sampler=(hint.sampler if hint and hint.sampler else "euler"),
+                               scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
+                               prefix="hawk_images/krea2")
+        images = await self._submit(graph, spec.label)
+        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
+
+    async def edit_klein(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
+                         seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
+                         max_adult_loras: int = MAX_ADULT_LORAS) -> LocalResult:
+        """FLUX.2 Klein edit: every reference folded in through its own ReferenceLatent."""
+        check_prompt(prompt)
+        status = await self.status("klein")
+        self._ready(status, "klein", "edit")
+        photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
+                                                          adult_default=self.adult_default and not photo, family="klein")
+        check_edit(prompt, sources, used, self.service.store.get_asset)
+        text = self._with_triggers(prompt, used)
+        width, height = parse_size(size) if size else (None, None)
+        files = status["files"]
+        klein_steps, cfg = klein_settings(files["unet"])
+        seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
+        started, images = time.monotonic(), []
+        for index in range(max(1, min(4, n))):
+            graph = klein_edit_graph(text, images=[a["path"] for a in sources], width=width, height=height,
+                                     seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
+                                     vae=files["vae"], steps=steps or klein_steps, cfg=cfg,
+                                     megapixels=EDIT_MEGAPIXELS, prefix="hawk_images/klein_edit")
+            images += await self._submit(graph, "FLUX.2 Klein edit")
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 
     async def edit(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1, seed: int | None = None,
