@@ -20,6 +20,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from . import image_engines
 from .comfy_client import ComfyError
 
 EXAMPLE_LORAS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "image_loras.example.json")
@@ -27,6 +28,8 @@ DEFAULT_STEPS = 8
 WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
+#: Local engines whose ComfyUI graphs exist. Klein and Z-Image join this as their graphs land.
+WIRED_ENGINES = ("krea2",)
 # Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
 # else the first match, higher precision first.
 MODEL_FAMILIES = {
@@ -101,6 +104,7 @@ class ImageLora:
     scheduler: str | None = None
     sampler: str | None = None
     installed: bool = False
+    family: str = "krea2"  # which model this LoRA is for; a file from another family produces garbage, not an error
     automatic: bool = False  # attached by default (the adult pair), not asked for: its sampler hints don't take over
 
     def view(self) -> dict:
@@ -331,24 +335,33 @@ class LocalImageEngine:
         running, pending = await self.service.comfy.queue_state()
         return bool(running or pending), len(running) + len(pending)
 
-    async def catalogue(self) -> list[ImageLora]:
-        """The curated LoRAs plus any other Krea LoRA file on the pod, marked installed or not."""
+    async def catalogue(self, family: str = "") -> list[ImageLora]:
+        """The curated LoRAs plus any other image LoRA on the pod, marked installed or not.
+
+        One models/loras folder holds every family, so each file is classified by name (or by the catalogue's
+        own ``family`` key). ``family=""`` returns every image family; pass one to get just that engine's.
+        """
         items = load_catalogue(self.path)
         files = await self.service.available_models("loras")
         known = {item.file for item in items}
         for item in items:
             item.installed = item.file in files or any(f.endswith("/" + item.file) for f in files)
+            item.family = image_engines.family_of(item.file, item.family)
         for name in files:
             base = name.rsplit("/", 1)[-1]
-            if base not in known and "krea" in base.lower() and not EDIT_LORA.search(base):  # the edit LoRA is used by edit()
-                items.append(ImageLora(file=name, kind="other", label=base, installed=True))
-        return items
+            found = image_engines.family_of(base)
+            if base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base):
+                items.append(ImageLora(file=name, kind="other", label=base, installed=True, family=found))
+        return [item for item in items if not family or item.family == family]
 
-    async def lora_basenames(self) -> set[str]:
-        """File names in models/loras that belong to image generation: the curated catalogue, any other Krea 2 file
-        on the pod, and the Krea 2 Identity Edit LoRA (which the catalogue leaves out because edit() applies it
-        itself). Video renders exclude these, so the two model families never borrow each other's LoRAs."""
-        names = {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue() if item.installed}
+    async def lora_basenames(self, family: str = "") -> set[str]:
+        """File names in models/loras that belong to images rather than to video renders.
+
+        Includes the Krea 2 Identity Edit LoRA, which the catalogue leaves out because edit() applies it itself.
+        """
+        names = {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue(family) if item.installed}
+        if family and family != "krea2":
+            return names
         files = await self.service.available_models("loras")
         return names | {f.rsplit("/", 1)[-1].lower() for f in files if EDIT_LORA.search(f.rsplit("/", 1)[-1])}
 

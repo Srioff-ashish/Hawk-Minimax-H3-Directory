@@ -628,6 +628,14 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tried", made, "it was first, so nothing was skipped to reach it")
         self.assertEqual((await self.http.get("/v1/images/options")).json()["would_use"]["generate"], "seedream")
 
+        # every engine is listed with whether it can actually run, so the UI can show them all honestly
+        ladder = {r["engine"]: r for r in (await self.http.get("/v1/images/options")).json()["generate_ladder"]}
+        self.assertEqual(ladder["klein"]["ready"], False, "no graph on this build yet")
+        self.assertIn("graph", ladder["klein"]["why_not"])
+        self.assertEqual(ladder["seedream"]["ready"], True)
+        self.assertEqual(ladder["krea2"]["ready"], False, "Krea 2 is not installed in this fixture")
+        self.assertIn("not on this pod", ladder["krea2"]["why_not"])
+
         # an engine that cannot do the job is named rather than quietly dropped
         bad = await self.http.put("/v1/images/engines", json={"edit": [{"engine": "zimage"}]})
         self.assertEqual(bad.status_code, 422)

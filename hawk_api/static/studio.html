@@ -1074,11 +1074,7 @@
         <span class="hint" id="genTip" aria-live="polite"></span></div>
       <div class="field"><span class="label" id="genEngineLabel">Engine</span>
         <div class="segmented gen-engine" role="radiogroup" aria-labelledby="genEngineLabel">
-          <label title="Krea 2 on this GPU when idle, else Z-Image Turbo, else Seedream"><input type="radio" name="genEngine" value="auto" checked>Auto</label>
-          <label title="Krea 2 Turbo on this GPU, with LoRAs; free, no moderation"><input type="radio" name="genEngine" value="local">Krea 2 (local)</label>
-          <label title="Atlas z-image/turbo: fast, about $0.01 an image, no edits"><input type="radio" name="genEngine" value="turbo">Z-Image Turbo</label>
-          <label title="Atlas Seedream v5.0 Pro: best quality; edits reference images. About $0.036 an image up to 2.36 MP, $0.072 above"><input type="radio" name="genEngine" value="seedream">Seedream</label>
-          <label title="Atlas Seedream v5.0 Lite: 2K+ output for about $0.032 an image, a little below Pro in quality"><input type="radio" name="genEngine" value="seedream-lite">Seedream Lite</label>
+          <label title="Follow the order set in Connect &amp; settings"><input type="radio" name="genEngine" value="auto" checked>Auto</label>
         </div></div>
       <div class="gen-status" id="genStatus">Checking local Krea 2…</div>
       <div class="gen-grid">
@@ -2541,6 +2537,27 @@
   // ---------------------------------------------------------------- generate images
   const gen = { options: null, refs: [], loras: {}, busy: false };
   const genEngine = () => document.querySelector('input[name="genEngine"]:checked')?.value || "auto";
+  function paintGenEngines() {
+    // The engines a pod has are whatever is installed on it, so the list comes from the server rather than
+    // being written out here. One that cannot run is shown disabled with the reason, not hidden.
+    const host = document.querySelector(".gen-engine");
+    if (!host || !gen.options?.generate_ladder) return;
+    const edit = gen.refs.length > 0;
+    const rows = gen.options[edit ? "edit_ladder" : "generate_ladder"] || [];
+    const chosen = genEngine();
+    host.querySelectorAll("label:not(:first-child)").forEach((el) => el.remove());
+    rows.forEach((row) => {
+      const cost = row.where === "local" ? "free, on this GPU" : `about $${row.cost_usd}`;
+      const label = document.createElement("label");
+      label.title = row.ready ? `${cost}${row.enabled ? "" : " — switched off in settings"}` : row.why_not;
+      label.innerHTML = `<input type="radio" name="genEngine" value="${row.engine}"${row.ready ? "" : " disabled"}${
+        row.engine === chosen ? " checked" : ""}>${row.label}`;
+      if (!row.ready) label.style.opacity = ".5";
+      label.querySelector("input").addEventListener("change", renderGenOptions);
+      host.appendChild(label);
+    });
+    if (!host.querySelector("input:checked")) host.querySelector("input").checked = true;
+  }
   async function openGenerate(refs = []) {
     gen.refs = refs.slice(0, 10);
     $("genResult").hidden = true;
@@ -2549,6 +2566,7 @@
     $("genPrompt").focus();
     try {
       gen.options = await api("/v1/images/options");
+      paintGenEngines();
       const sizes = gen.options.sizes || [];
       const keep = $("genSize").value;
       $("genSize").innerHTML = `<option value="">Default (1024x1536)</option>` + sizes.map((size) => `<option>${esc(size)}</option>`).join("");
@@ -2593,6 +2611,7 @@
   }
   $("genPrompt").addEventListener("input", paintPromptTip);
   function renderGenOptions() {
+    paintGenEngines();
     const local = gen.options?.local || {};
     const engine = genEngine();
     const refs = gen.refs.length > 0;

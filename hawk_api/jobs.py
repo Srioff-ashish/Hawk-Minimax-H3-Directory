@@ -32,6 +32,7 @@ from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
 from .config import ModelSettings, Settings
+from . import local_images
 from .local_images import LocalImageEngine, LocalImageError
 from .loras import (
     LoraError,
@@ -390,13 +391,15 @@ class HawkService:
             self._model_cache[folder] = (time.monotonic(), files)
         return files
 
-    async def available_loras(self, refresh: bool = False, images: bool = False) -> list[str]:
-        """LoRA files for video renders. ComfyUI keeps one models/loras folder, so the Krea 2 image LoRAs sit next to
-        the MiniMax H3 ones; they are left out here (and video LoRAs never reach image generation, which matches
-        against its own catalogue). images=True returns the folder as it is."""
+    async def available_loras(self, refresh: bool = False, family: str = "h3") -> list[str]:
+        """LoRA files of one family. ComfyUI keeps a single models/loras folder, so MiniMax H3, Krea 2, Klein and
+        Z-Image files all sit in it together and a file from the wrong family produces garbage rather than an
+        error. family="" returns the folder as it is."""
         files = await self.available_models("loras", refresh)
-        if images:
+        if not family:
             return files
+        if family != "h3":
+            return [f for f in files if image_engines.family_of(f) == family]
         image_files = await self.local_images.lora_basenames()
         return [f for f in files if os.path.basename(f).lower() not in image_files]
 
@@ -440,16 +443,18 @@ class HawkService:
                 raise RequestError(str(exc), exc.details) from None
 
     async def _reject_image_lora(self, specs, error) -> None:
-        """Say so plainly when a render asks for one of the Krea 2 image LoRAs instead of just "not found"."""
+        """Say which model a LoRA belongs to when a render asks for an image one, instead of just "not found"."""
         wanted = str(error.details.get("requested") or "").strip().lower()
         if not wanted:
             return
         for name in await self.local_images.lora_basenames():
             if wanted in (name, name.rsplit(".", 1)[0]) or (len(wanted) > 3 and wanted in name):
+                family = image_engines.family_of(name)
                 raise RequestError(
-                    f"{error.details['requested']!r} is a Krea 2 image LoRA; video renders use the MiniMax H3 LoRAs "
-                    "in models/loras. Use list_loras to see them, or generate_image for a picture.",
-                    {**error.details, "image_lora": name},
+                    f"{error.details['requested']!r} is a {image_engines.family_label(family)} image LoRA; video "
+                    "renders use the MiniMax H3 LoRAs in models/loras. Use list_loras to see them, or "
+                    "generate_image for a picture.",
+                    {**error.details, "image_lora": name, "family": family},
                 ) from None
 
     # ---------------------------------------------------------- info
@@ -910,18 +915,29 @@ class HawkService:
             steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"])
         return local, "krea2/turbo"
 
-    def _ladder_view(self, action: str, settings: dict) -> list[dict]:
+    def _ladder_view(self, action: str, settings: dict, local: dict) -> list[dict]:
         rows = []
         for row in settings[action]:
             spec = image_engines.get(row["engine"])
+            if not spec.local:
+                ready, why = self.atlas.configured, "" if self.atlas.configured else "No Atlas API key on this pod."
+            elif spec.id not in local_images.WIRED_ENGINES:
+                ready, why = False, f"{spec.label} has no graph on this build yet."
+            elif not local.get("installed"):
+                ready, why = False, "Its model files are not on this pod: " + ", ".join(local.get("missing") or [])
+            elif action == "edit" and not (local.get("edit") or {}).get("installed"):
+                ready, why = False, "Its edit nodes or LoRA are missing: " + ", ".join((local.get("edit") or {}).get("missing") or [])
+            else:
+                ready, why = True, ""
             rows.append({"engine": spec.id, "label": spec.label, "where": spec.where, "enabled": row["enabled"],
-                         "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs})
+                         "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs,
+                         "ready": ready, "why_not": why})
         return rows
 
     async def image_options(self) -> dict:
         local = await self.local_images.status()
         engines = self.image_engines.view()
-        ladders = {action: self._ladder_view(action, engines) for action in ("generate", "edit")}
+        ladders = {action: self._ladder_view(action, engines, local) for action in ("generate", "edit")}
         return {
             "default_engine": self.settings.image_engine,
             "generate_ladder": ladders["generate"],
