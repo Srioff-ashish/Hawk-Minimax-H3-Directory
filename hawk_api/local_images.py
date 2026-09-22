@@ -89,6 +89,17 @@ _SEXUAL = re.compile(
 )
 
 
+def _same_lora(file: str, name: str) -> bool:
+    """Whether a stored or requested name points at this file.
+
+    Compared on the bare stem, because a default may be written with or without the ``.safetensors``
+    suffix and with or without its folder. An exact compare here fails silently -- the default saves,
+    then simply never attaches -- so it has to be the forgiving kind.
+    """
+    stem = lambda value: str(value or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+    return bool(stem(name)) and stem(file) == stem(name)
+
+
 def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:
     """The configured file if present, else the best file of the same model family."""
     for name in files:
@@ -578,11 +589,14 @@ class LocalImageEngine:
             wanted = stored if stored is not None else [{"name": n} for n in DEFAULT_ADULT_LORAS.get(family, ())]
             # never add one the request already names, or it is applied twice at double strength
             asked = {str(spec.get("name") or "").strip().lower().removesuffix(".safetensors") for spec in requested}
-            automatic = {str(entry.get("name") or "") for entry in wanted
-                         if any(i.file == entry.get("name") or i.file.endswith("/" + str(entry.get("name")))
+            automatic = {str(entry.get("name") or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+                         for entry in wanted
+                         if any(_same_lora(i.file, entry.get("name"))
                                 for i in items)  # only what is installed, so a pod missing one still generates
                          and str(entry.get("name") or "").lower().removesuffix(".safetensors") not in asked}
-            requested += [dict(entry) for entry in wanted if entry.get("name") in automatic]
+            requested += [dict(entry) for entry in wanted
+                          if str(entry.get("name") or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+                          in automatic]
         if not requested:
             return [], [], []
         files = await self.service.available_models("loras")
@@ -601,7 +615,7 @@ class LocalImageEngine:
             strength = float(spec["strength"]) if spec.get("strength") is not None else item.strength
             if strength == 0:
                 continue
-            item.automatic = item.file.rsplit("/", 1)[-1] in automatic
+            item.automatic = item.file.rsplit("/", 1)[-1].lower().removesuffix(".safetensors") in automatic
             chosen.append((path, strength))
             used.append(item)
         adult = [(item, strength) for item, (_, strength) in zip(used, chosen) if item.kind == "adult"]

@@ -343,3 +343,18 @@ class FolderDiscovery(unittest.TestCase):
 
     def test_the_same_file_loose_is_still_video(self):
         self.assertEqual(ie.family_of("UltraReal_KL9B_V4.safetensors"), "h3")
+
+
+class DefaultNameForms(unittest.TestCase):
+    """A stored default may be written with or without .safetensors, or with its folder."""
+
+    def test_the_stem_is_what_matches(self):
+        from hawk_api.local_images import _same_lora
+        for stored in ("klein_eros_v9", "klein_eros_v9.safetensors", "klein/klein_eros_v9.safetensors"):
+            self.assertTrue(_same_lora("klein/klein_eros_v9.safetensors", stored), stored)
+            self.assertTrue(_same_lora("klein_eros_v9.safetensors", stored), stored)
+
+    def test_a_different_lora_still_does_not_match(self):
+        from hawk_api.local_images import _same_lora
+        self.assertFalse(_same_lora("klein_eros_v9.safetensors", "klein_snofs"))
+        self.assertFalse(_same_lora("klein_eros_v9.safetensors", ""))
