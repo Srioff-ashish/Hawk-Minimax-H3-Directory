@@ -539,11 +539,14 @@ class LocalImageEngine:
         files = await self.service.available_models("loras")
         known = {item.file for item in items}
         for item in items:
-            item.installed = item.file in files or any(f.endswith("/" + item.file) for f in files)
-            item.family = image_engines.family_of(item.file, item.family)
+            at = next((f for f in files if f == item.file or f.endswith("/" + item.file)), item.file)
+            item.installed = at != item.file or item.file in files
+            item.family = image_engines.family_of(at, item.family)
         for name in files:
             base = name.rsplit("/", 1)[-1]
-            found = image_engines.family_of(base)
+            # The whole path, not the base: a file in models/loras/klein is a Klein LoRA even when its own
+            # name says nothing, which is the point of downloading into a folder named after the family.
+            found = image_engines.family_of(name)
             if base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base):
                 items.append(ImageLora(file=name, kind="other", label=base, installed=True, family=found))
         return [item for item in items if not family or item.family == family]

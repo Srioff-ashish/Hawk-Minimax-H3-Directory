@@ -331,3 +331,15 @@ class FamilyFolders(unittest.TestCase):
 
     def test_an_unknown_folder_and_name_is_still_video(self):
         self.assertEqual(ie.family_of("misc/Unknown_Thing.safetensors"), "h3")
+
+
+class FolderDiscovery(unittest.TestCase):
+    """The catalogue must classify a discovered file by where it sits, not only by its name."""
+
+    def test_a_file_in_a_family_folder_is_that_family(self):
+        # the case folders exist for: a Civitai download that kept its published name
+        self.assertEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "klein")
+        self.assertNotEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "h3")
+
+    def test_the_same_file_loose_is_still_video(self):
+        self.assertEqual(ie.family_of("UltraReal_KL9B_V4.safetensors"), "h3")
