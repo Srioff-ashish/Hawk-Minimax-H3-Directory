@@ -259,7 +259,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def generate_images(body: ImageRequest):
         return await service.generate_images(body.prompt, model=body.model, reference_asset_ids=body.reference_asset_ids,
                                              size=body.size, n=body.n, seed=body.seed, engine=body.engine,
-                                             negative=body.negative,
+                                             negative=body.negative, cfg=body.cfg,
                                              loras=[l.model_dump() for l in body.loras], steps=body.steps,
                                              max_adult_loras=body.max_adult_loras, ref_boost=body.ref_boost)
 

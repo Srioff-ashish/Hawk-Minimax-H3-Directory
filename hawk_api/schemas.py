@@ -124,6 +124,10 @@ class ImageRequest(BaseModel):
         "What to keep out, for the local engines only (Atlas ignores it). It has no effect while the engine samples "
         "at cfg 1.0 -- that is every local build except FLUX.2 Klein \"base\" -- because guidance at cfg 1 collapses "
         "to the positive prompt. On builds above cfg 1 it is the place for \"fused bodies, missing limbs, extra arms\".")
+    cfg: float | None = Field(None, ge=0.0, le=15.0, description=
+        "Guidance for the local engines. Omit for the engine's own default. Above 1.0 the negative prompt starts "
+        "working; too high posterises (blown greens and blues, banded surfaces). FLUX.2 Klein \"base\" defaults "
+        "to 3.0 and burns at 5.0; the distilled builds are trained for 1.0 and should be left there.")
     max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult Krea 2 LoRAs one image may stack (up to 3; a note warns above a combined strength of 2.0). Lower it to be stricter.")
 
 
