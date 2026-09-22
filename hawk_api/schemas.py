@@ -120,6 +120,10 @@ class ImageRequest(BaseModel):
     loras: list[ImageLoraIn] = Field(default_factory=list, description="Krea 2 LoRAs for local generation (file name or a unique part, optional strength).")
     steps: int | None = Field(None, ge=1, le=50, description="Local Krea 2 steps; default 8 (or the LoRA's recommendation).")
     ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit likeness dial: 4 (default) strong likeness, 1 looser and more creative, above 10 breaks removals.")
+    negative: str = Field("", max_length=2000, description=
+        "What to keep out, for the local engines only (Atlas ignores it). It has no effect while the engine samples "
+        "at cfg 1.0 -- that is every local build except FLUX.2 Klein \"base\" -- because guidance at cfg 1 collapses "
+        "to the positive prompt. On builds above cfg 1 it is the place for \"fused bodies, missing limbs, extra arms\".")
     max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult Krea 2 LoRAs one image may stack (up to 3; a note warns above a combined strength of 2.0). Lower it to be stricter.")
 
 

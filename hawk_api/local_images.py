@@ -263,8 +263,21 @@ def parse_size(size: str | None, default: str = "1024x1536") -> tuple[int, int]:
     return width, height
 
 
+def _negative_node(text: str, positive: list, clip_node: str = "2") -> dict:
+    """The negative conditioning slot.
+
+    Empty means ConditioningZeroOut, which is what every graph did before there was a field for this. Note that
+    at cfg 1.0 the guider collapses to the positive term, so a negative prompt is inert on the distilled builds
+    and only starts doing anything on a build that samples above cfg 1 (FLUX.2 Klein "base").
+    """
+    if not text.strip():
+        return {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": positive}}
+    return {"class_type": "CLIPTextEncode", "inputs": {"clip": [clip_node, 0], "text": text}}
+
+
 def krea_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
-               unet: str, clip: str, vae: str, steps: int, sampler: str, scheduler: str, prefix: str) -> dict:
+               unet: str, clip: str, vae: str, steps: int, sampler: str, scheduler: str, prefix: str,
+               negative: str = "") -> dict:
     """ComfyUI API-format graph for Krea 2 Turbo text to image."""
     graph: dict = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
@@ -278,7 +291,7 @@ def krea_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras
         model = [node, 0]
     graph.update({
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
-        "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+        "5": _negative_node(negative, ["4", 0]),
         "6": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
         "7": {"class_type": "KSampler", "inputs": {
             "model": model, "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["6", 0], "seed": seed,
@@ -328,7 +341,8 @@ def krea_edit_graph(prompt: str, *, images: list[str], width: int, height: int, 
 
 
 def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
-                 unet: str, clip: str, vae: str, steps: int, sampler: str, scheduler: str, prefix: str) -> dict:
+                 unet: str, clip: str, vae: str, steps: int, sampler: str, scheduler: str, prefix: str,
+                 negative: str = "") -> dict:
     """Z-Image Turbo text to image, from the ComfyUI template.
 
     Its text encoder loads as "lumina2", not as a Qwen type, and the model goes through ModelSamplingAuraFlow
@@ -347,7 +361,7 @@ def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lor
     graph.update({
         "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": model, "shift": 3.0}},
         "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
-        "6": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["5", 0]}},
+        "6": _negative_node(negative, ["5", 0]),
         "7": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
         "8": {"class_type": "KSampler", "inputs": {
             "model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "latent_image": ["7", 0], "seed": seed,
@@ -374,12 +388,12 @@ def _klein_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]]) 
 
 
 def klein_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
-                unet: str, clip: str, vae: str, steps: int, cfg: float, prefix: str) -> dict:
+                unet: str, clip: str, vae: str, steps: int, cfg: float, prefix: str, negative: str = "") -> dict:
     """FLUX.2 Klein text to image. Uses the advanced sampler path, not KSampler."""
     graph, model = _klein_base(unet, clip, vae, loras)
     graph.update({
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
-        "5": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}},
+        "5": _negative_node(negative, ["4", 0]),
         "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
         "7": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": ["4", 0], "negative": ["5", 0], "cfg": cfg}},
         "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
@@ -395,7 +409,7 @@ def klein_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lora
 
 def klein_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
                      loras: list[tuple[str, float]], unet: str, clip: str, vae: str, steps: int, cfg: float,
-                     megapixels: float, prefix: str) -> dict:
+                     megapixels: float, prefix: str, negative: str = "") -> dict:
     """FLUX.2 Klein edit, with any number of reference images.
 
     Each reference is scaled to about one megapixel, encoded, and folded into both the positive and the negative
@@ -404,7 +418,7 @@ def klein_edit_graph(prompt: str, *, images: list[str], width: int | None, heigh
     """
     graph, model = _klein_base(unet, clip, vae, loras)
     graph["4"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}}
-    graph["5"] = {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}}
+    graph["5"] = _negative_node(negative, ["4", 0])
     positive, negative = ["4", 0], ["5", 0]
     for index, path in enumerate(images):
         graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
@@ -632,7 +646,7 @@ class LocalImageEngine:
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
                        loras: list[dict] | None = None, steps: int | None = None,
                        max_adult_loras: int = MAX_ADULT_LORAS, engine: str = "krea2",
-                       wait_seconds: float = 0.0) -> LocalResult:
+                       wait_seconds: float = 0.0, negative: str = "") -> LocalResult:
         check_prompt(prompt)
         status = await self.status(engine)
         await self._ready(status, engine, wait_seconds=wait_seconds)
@@ -651,27 +665,29 @@ class LocalImageEngine:
             klein_steps, cfg = klein_settings(files["unet"])
             graph = klein_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                 unet=files["unet"], clip=files["clip"], vae=files["vae"],
-                                steps=steps or klein_steps, cfg=cfg, prefix="hawk_images/klein")
+                                steps=steps or klein_steps, cfg=cfg, prefix="hawk_images/klein",
+                                negative=negative)
         elif engine == "zimage":
             graph = zimage_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                  unet=files["unet"], clip=files["clip"], vae=files["vae"],
                                  steps=steps or (hint.steps if hint and hint.steps else ZIMAGE_STEPS),
                                  sampler=(hint.sampler if hint and hint.sampler else "res_multistep"),
                                  scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
-                                 prefix="hawk_images/zimage")
+                                 prefix="hawk_images/zimage", negative=negative)
         else:
             graph = krea_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                unet=files["unet"], clip=files["clip"], vae=files["vae"],
                                steps=steps or (hint.steps if hint and hint.steps else DEFAULT_STEPS),
                                sampler=(hint.sampler if hint and hint.sampler else "euler"),
                                scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
-                               prefix="hawk_images/krea2")
+                               prefix="hawk_images/krea2", negative=negative)
         images = await self._submit(graph, spec.label)
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 
     async def edit_klein(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
                          seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
-                         max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0) -> LocalResult:
+                         max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0,
+                         negative: str = "") -> LocalResult:
         """FLUX.2 Klein edit: every reference folded in through its own ReferenceLatent."""
         check_prompt(prompt)
         status = await self.status("klein")
@@ -690,7 +706,8 @@ class LocalImageEngine:
             graph = klein_edit_graph(text, images=[a["path"] for a in sources], width=width, height=height,
                                      seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
                                      vae=files["vae"], steps=steps or klein_steps, cfg=cfg,
-                                     megapixels=EDIT_MEGAPIXELS, prefix="hawk_images/klein_edit")
+                                     megapixels=EDIT_MEGAPIXELS, prefix="hawk_images/klein_edit",
+                                     negative=negative)
             images += await self._submit(graph, "FLUX.2 Klein edit")
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 

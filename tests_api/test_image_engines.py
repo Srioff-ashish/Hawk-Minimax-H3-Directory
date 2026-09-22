@@ -310,3 +310,24 @@ class Store(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FamilyFolders(unittest.TestCase):
+    """A folder named after a family classifies the files in it, so downloads keep their published names."""
+
+    def test_a_named_folder_classifies_an_unprefixed_file(self):
+        self.assertEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "klein")
+        self.assertEqual(ie.family_of("zit/Hands_v2.1.safetensors"), "zit")
+        self.assertEqual(ie.family_of("Krea2/Identity_Edit.safetensors"), "krea2")
+        self.assertEqual(ie.family_of("h3/Bouncing_REF2VA.safetensors"), "h3")
+
+    def test_an_alias_folder_counts_too(self):
+        self.assertEqual(ie.family_of("z-image/whatever.safetensors"), "zit")
+        self.assertEqual(ie.family_of("flux-2/whatever.safetensors"), "klein")
+
+    def test_the_file_name_still_beats_the_folder(self):
+        # a misfiled Klein LoRA is still a Klein LoRA; loading it into Krea 2 would just make a worse image
+        self.assertEqual(ie.family_of("Krea2/klein_snofs.safetensors"), "klein")
+
+    def test_an_unknown_folder_and_name_is_still_video(self):
+        self.assertEqual(ie.family_of("misc/Unknown_Thing.safetensors"), "h3")

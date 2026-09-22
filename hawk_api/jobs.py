@@ -805,6 +805,7 @@ class HawkService:
         steps: int | None = None,
         max_adult_loras: int = 3,
         ref_boost: float | None = None,
+        negative: str = "",
     ) -> dict:
         """Make images and store them as assets, ready to use as picture references.
 
@@ -892,7 +893,7 @@ class HawkService:
                 try:
                     local, used = await self._local_image(
                         spec, action, prompt, sources, size=size, n=n, seed=seed, loras=loras, steps=steps,
-                        ref_boost=ref_boost, max_adult_loras=max_adult_loras,
+                        ref_boost=ref_boost, max_adult_loras=max_adult_loras, negative=negative,
                         wait_seconds=max(0.0, wait_until - time.monotonic()) if wait_until else 0.0)
                 except LocalImageError as exc:
                     # A content refusal is final. Walking on would hand the same prompt to the next engine,
@@ -964,7 +965,7 @@ class HawkService:
                 local = await self.local_images.edit_klein(
                     prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
                     steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"],
-                    wait_seconds=kwargs["wait_seconds"])
+                    wait_seconds=kwargs["wait_seconds"], negative=kwargs["negative"])
                 return local, "klein/9b-edit"
             local = await self.local_images.edit(
                 prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
@@ -974,7 +975,7 @@ class HawkService:
         local = await self.local_images.generate(
             prompt, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
             steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"], engine=spec.id,
-            wait_seconds=kwargs["wait_seconds"])
+            wait_seconds=kwargs["wait_seconds"], negative=kwargs["negative"])
         return local, self.LOCAL_MODEL_NAMES[spec.id]
 
     def _ladder_view(self, action: str, settings: dict, local: dict) -> list[dict]:

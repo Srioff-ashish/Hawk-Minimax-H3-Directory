@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. When this example's version goes up, the copy is replaced (the old one is kept as image_loras.json.bak). kind: realism, detail, style, adult. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
     {
@@ -222,6 +222,66 @@
         0.9
       ],
       "notes": "Alternative to Mystic XXX for Z-Image; use one or the other."
+    },
+    {
+      "file": "Krea2_HMNSFW_AIO.safetensors",
+      "kind": "adult",
+      "label": "HMNSFW AIO (Krea 2)",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "notes": "All-in-one adult LoRA. Counts as adult, so naming it replaces the automatic pair instead of stacking on top of it. Fictional adults only.",
+      "family": "krea2"
+    },
+    {
+      "file": "klein_eros_v9.safetensors",
+      "kind": "adult",
+      "label": "Eros v9 (Klein)",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "notes": "Teaches acts and positions the base model was never trained on. Needs cfg above 1, so it only bites on the Klein base build, not the distilled one. Fictional adults only.",
+      "family": "klein"
+    },
+    {
+      "file": "klein_anatomy_quality_fixer.safetensors",
+      "kind": "detail",
+      "label": "Anatomy Quality Fixer (Klein)",
+      "strength": 0.6,
+      "range": [
+        0.4,
+        0.8
+      ],
+      "notes": "Targets fused bodies, missing limbs and bad joins in multi-figure scenes. Like every Klein LoRA it needs cfg above 1 to do much.",
+      "family": "klein"
+    },
+    {
+      "file": "klein_copy_pose.safetensors",
+      "kind": "other",
+      "label": "Copy Pose (Klein)",
+      "strength": 0.8,
+      "range": [
+        0.6,
+        1.0
+      ],
+      "notes": "Takes the pose from a reference image instead of inventing one. Use it on the edit path with a reference: text alone cannot place two interlocking bodies.",
+      "family": "klein"
+    },
+    {
+      "file": "klein_ultrareal_v3.safetensors",
+      "kind": "realism",
+      "label": "UltraReal v3 (Klein)",
+      "strength": 0.7,
+      "range": [
+        0.5,
+        0.9
+      ],
+      "notes": "Photographic skin and lighting.",
+      "family": "klein"
     }
   ]
 }

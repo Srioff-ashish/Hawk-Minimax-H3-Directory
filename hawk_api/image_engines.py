@@ -146,6 +146,15 @@ def resolve(name: str) -> str:
     return ALIASES.get(key, key if key in ENGINES else "")
 
 
+#: Folder names under ComfyUI's ``models/loras`` that mean a family, besides the family id itself.
+FAMILY_FOLDERS: dict[str, tuple[str, ...]] = {
+    "h3": ("minimax_h3", "minimax-h3", "video"),
+    "krea2": ("krea-2", "krea"),
+    "klein": ("flux2", "flux-2", "flux2_klein"),
+    "zit": ("zimage", "z_image", "z-image"),
+}
+
+
 def family_of(filename: str, declared: str = "") -> str:
     """Which model family a LoRA file belongs to.
 
@@ -154,9 +163,18 @@ def family_of(filename: str, declared: str = "") -> str:
     """
     if declared and declared in LORA_FAMILIES:
         return declared
-    base = filename.rsplit("/", 1)[-1].lower()
+    head, _, base = filename.replace("\\", "/").rpartition("/")
+    base = base.lower()
+    # The file name wins: it is the publisher's own label, so "klein_snofs" in a Krea 2 folder is a misfiled
+    # Klein LoRA, not a Krea 2 one. Only a name that says nothing falls through to the folder.
     for family in IMAGE_FAMILIES:
         if any(base.startswith(prefix) for prefix in LORA_FAMILIES[family][1]):
+            return family
+    # A folder named after a family classifies what it holds, so downloads keep the names they were published
+    # under instead of having to be renamed to carry a prefix.
+    folder = head.rsplit("/", 1)[-1].lower()
+    for family in LORA_FAMILIES:
+        if folder == family or folder in FAMILY_FOLDERS.get(family, ()):
             return family
     return "h3"
 
