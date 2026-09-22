@@ -676,6 +676,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
         self.atlas.reply = reply
+        # this test is about stepping up an engine, not about being asked first; the gate has its own test
+        await self.http.put("/v1/images/engines", json={"pick_takes": False})
         chat = await self.new_chat(persona="You are Maya.", model="xai/grok-4.6")
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo banao"})
         view = await self.settle(chat)
@@ -689,6 +691,50 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(parts[2]["image_url"]["url"].startswith("data:image/"))
         self.assertEqual(reviews[0]["model"], "xai/grok-4.6", "the chat's model can see images")
         self.assertIn("inspect_image", self.atlas.requests[0]["messages"][0]["content"])
+
+    async def test_rejected_take_waits_for_the_user_to_choose(self):
+        """A take inspection rejects is handed back with its thumbnails; nothing is generated until the user answers."""
+        def reply(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list):  # the inspect_image vision call
+                ids = [p["text"].split()[-1].rstrip(":") for p in first if p["type"] == "text" and p["text"].startswith("Image asset_id")]
+                return json.dumps({"images": [{"asset_id": i, "score": 3, "issues": ["six fingers"], "verdict": "retry"} for i in ids],
+                                   "best": ids[0], "advice": "Sharper prompt."})
+            turn = assistant_turns(body)
+            if turn == 0:
+                return json.dumps({"say": "Drafting.", "actions": [{"tool": "generate_image", "args": {"prompt": "Portrait"}}]})
+            if turn == 1:
+                ids = [a["id"] for a in tool_result(body, "generate_image")["assets"]]
+                return json.dumps({"say": "", "actions": [{"tool": "inspect_image", "args": {"asset_ids": ids, "brief": "Portrait"}}]})
+            # the model ignores the instruction and tries again anyway: the gate, not the prose, has to stop it
+            return json.dumps({"say": "Retaking.", "actions": [{"tool": "generate_image", "args": {"prompt": "Portrait again"}}]})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(model="xai/grok-4.6")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Make a portrait"})
+        view = await self.settle(chat)
+        tools = [m["content"] for m in view["messages"] if m["role"] == "tool"]
+        self.assertEqual([c["tool"] for c in tools], ["generate_image", "inspect_image", "generate_image"])
+        choose = tools[1]["result"]["choose"]
+        self.assertEqual([a["asset_id"] for a in choose["assets"]], [a["id"] for a in tools[0]["result"]["assets"]])
+        self.assertTrue(all(a["thumb_url"] for a in choose["assets"]), "the user picks by looking, so every take needs a thumbnail")
+        self.assertIn("keep", [o["id"] for o in choose["options"]])
+        self.assertFalse(tools[2]["ok"], "the retake is refused while the choice is open")
+        self.assertIn("has not chosen", tools[2]["error"])
+
+        # answering re-opens it
+        pending = [{"tool": "generate_image", "args": {"prompt": "Portrait, relaxed hands"}}]
+
+        def after(_body):
+            actions = [pending.pop()] if pending else []
+            return json.dumps({"say": "Here it is.", "actions": actions, "done": not actions})
+
+        self.atlas.reply = after
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Try again"})
+        view = await self.settle(chat)
+        last = [m["content"] for m in view["messages"] if m["role"] == "tool"][-1]
+        self.assertTrue(last["ok"], last)
+        self.assertEqual(last["tool"], "generate_image")
 
     async def test_inspect_falls_back_and_failed_takes_move_up_engines(self):
         files = self.fake.model_files
@@ -716,8 +762,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
         self.atlas.reply = reply
-        # this test is about the ladder mechanics, so let it spend without asking; the gate has its own test
-        await self.http.put("/v1/images/engines", json={"confirm_paid": False})
+        # this test is about the ladder mechanics, so let it spend and retake without asking; both gates have their own tests
+        await self.http.put("/v1/images/engines", json={"confirm_paid": False, "pick_takes": False})
         chat = await self.new_chat(model="deepseek-ai/deepseek-v4.1-flash")
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Apni photo banao"})
         view = await self.settle(chat)

@@ -170,6 +170,8 @@ class ImageEngineSettings(BaseModel):
     busy_max_wait_seconds: int | None = Field(None, ge=0, le=300, description="How long to wait before falling through.")
     confirm_paid: bool | None = Field(
         None, description="Ask before a failed take retries on a paid engine, instead of spending automatically.")
+    pick_takes: bool | None = Field(
+        None, description="Show a rejected take and wait for your choice, instead of letting the agent take it again.")
     defaults: dict[str, list[ImageLoraDefault]] | None = Field(
         None, description='LoRAs a family attaches on its own, keyed by family (krea2, klein, zit). An empty list switches them off.')
 

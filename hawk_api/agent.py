@@ -463,6 +463,7 @@ class AgentService:
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
+        self._awaiting_choice: dict[str, dict] = {}  # per chat: inspection wants a retake, the user has not picked yet
         self._final: dict[str, str] = {}  # per running chat: the status it ends with
         settings = service.settings
         self.summary_model = settings.agent_summary_model
@@ -724,6 +725,7 @@ class AgentService:
         self.store.save_session(session)
         self._stop.discard(session_id)
         self._failed_engines.pop(session_id, None)
+        self._awaiting_choice.pop(session_id, None)
         self._tasks[session_id] = asyncio.create_task(self._run(session_id))
         return {"session": session, "message": message}
 
@@ -740,6 +742,7 @@ class AgentService:
         self.store.save_session(session)
         self._stop.discard(session_id)
         self._failed_engines.pop(session_id, None)
+        self._awaiting_choice.pop(session_id, None)
         makes = max(0, min(MAX_TALK_MAKES, int(makes)))
         self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds, makes=makes))
         return session
@@ -862,6 +865,9 @@ class AgentService:
                 if session_id in self._stop:
                     break
                 await self._execute(session_id, action, asked_by)
+            if (self._awaiting_choice.get(session_id) or {}).pop("blocked", False):
+                self._note(session_id, "Waiting for you to pick a take before generating again.", "warn")
+                return reply
 
     # ------------------------------------------------------------ let them talk
 
@@ -1171,15 +1177,18 @@ class AgentService:
         nxt = ladder[top + 1]
         return nxt if not image_engines.get(nxt).local else None
 
-    def _record_takes(self, session_id: str, verdict: dict) -> None:
-        """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed."""
+    def _record_takes(self, session_id: str, verdict: dict) -> bool:
+        """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed.
+
+        Returns whether it was rejected, because that is also the moment the user gets to choose.
+        """
         images = [item for item in verdict.get("images") or [] if isinstance(item, dict)]
         if not images:
-            return
+            return False
         scores = [float(item["score"]) for item in images if isinstance(item.get("score"), (int, float))]
         rejected = all(str(item.get("verdict", "")).lower() == "retry" for item in images) or (scores and max(scores) < PASS_SCORE)
         if not rejected:
-            return
+            return False
         for item in images:
             asset = self.service.store.get_asset(str(item.get("asset_id") or ""))
             source = (asset or {}).get("source") or {}
@@ -1187,6 +1196,7 @@ class AgentService:
             engine = source.get("engine") or image_engines.id_for_generator(str(source.get("generator") or ""))
             if engine:
                 self._failed_engines.setdefault(session_id, set()).add(engine)
+        return True
 
     async def _execute(self, session_id: str, action: dict, asked_by: str = "") -> None:
         name, args = action["tool"], action["args"]
@@ -1194,6 +1204,13 @@ class AgentService:
         if stepped:
             args = {**args, "engine": stepped}
         try:
+            if name == "generate_image" and session_id in self._awaiting_choice:
+                # A model that argues with the gate would otherwise spend the whole step budget on refusals.
+                self._awaiting_choice[session_id]["blocked"] = True
+                raise RequestError(
+                    "Inspection rejected the last take and the user has not chosen yet. Show them the images from "
+                    "inspect_image, say what is wrong and what another take would cost, and end your turn with "
+                    '"done": true. This tool works again as soon as they reply.')
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
             elif name == "describe_tool":
@@ -1357,11 +1374,12 @@ class AgentService:
                 best = max(images, key=lambda item: item.get("score") if isinstance(item.get("score"), (int, float)) else 0)
                 verdict["best"] = best["asset_id"]
             verdict["images"] = images
-            self._record_takes(session_id, verdict)
+            rejected = self._record_takes(session_id, verdict)
             result = {"model": model, **verdict}
             if failures:
                 result["skipped_models"] = failures
             nxt = await self._step_up_engine(session_id, {"engine": "auto"})
+            paid = None
             if nxt:
                 result["next_engine"] = f"The next generate_image with engine auto will use {nxt}."
             else:
@@ -1374,11 +1392,47 @@ class AgentService:
                         f"about ${price:g} an image. Show the user the best take you already have, say what is wrong "
                         f"with it, and ask whether to spend that or try locally again. Only call generate_image with "
                         f'engine "{paid}" once they have said yes; otherwise retry with engine "auto".')
+            if rejected and self.service.image_engines.pick_takes():
+                result["choose"] = self._offer_choice(session_id, verdict, nxt, paid)
             return result
         log.warning("inspect_image failed on every model: %s", failures)
         raise RequestError("No vision model could inspect these images (" + "; ".join(f[:300] for f in failures) + "). "
                            "Don't regenerate only because inspection is unavailable: show the images and let the user judge. "
                            "For a retake without LoRAs use engine \"seedream\"; LoRA images (adult ones included) only come from local Krea 2.")
+
+    def _offer_choice(self, session_id: str, verdict: dict, stepped: str | None, paid: str | None) -> dict:
+        """What inspection rejected, handed back to the user to decide on.
+
+        Another take costs either time on this GPU or money at Atlas, and inspection is a model's opinion, not
+        the user's -- so a rejected batch stops here and they pick from what exists. Until they answer, the gate
+        in ``_execute`` refuses another generate_image, because a prose instruction alone is one the model can
+        talk itself out of.
+        """
+        assets = []
+        for item in verdict.get("images") or []:
+            asset = self.service.store.get_asset(str(item.get("asset_id") or ""))
+            if asset is None:
+                continue
+            shown = self.service.asset_view(asset)
+            assets.append({"asset_id": asset["id"], "score": item.get("score"),
+                           "verdict": item.get("verdict"), "issues": item.get("issues") or [],
+                           "thumb_url": shown.get("thumb_url"), "file_url": shown.get("file_url")})
+        options = [{"id": "keep", "label": "Use this one",
+                    "reply": "Keep image {asset_id} as it is. Don't take it again."}]
+        if stepped:
+            options.append({"id": "retry", "label": f"Try again on {image_engines.get(stepped).label}",
+                            "reply": 'Try again with engine "auto".'})
+        elif not paid:
+            options.append({"id": "retry", "label": "Try again", "reply": 'Try again with engine "auto".'})
+        if paid:
+            spec = image_engines.get(paid)
+            price = IMAGE_PRICES.get(spec.price_key, 0.0)
+            options.append({"id": paid, "label": f"Spend about ${price:g} on {spec.label}",
+                            "reply": f'Go ahead and use engine "{paid}" for the next take.'})
+        self._awaiting_choice[session_id] = {"best": str(verdict.get("best") or "")}
+        return {"assets": assets, "best": str(verdict.get("best") or ""), "options": options,
+                "note": "Stop here with \"done\": true. Show the user these images, say what is wrong with them and "
+                        "what each choice costs, and wait. Another generate_image will be refused until they answer."}
 
     def _edit_character(self, session_id: str, tool: str, args: dict) -> dict:
         session = self.get_session(session_id)

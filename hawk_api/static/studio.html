@@ -391,6 +391,16 @@
   .note-line { align-self: center; font-size: 12px; color: var(--muted); padding: 2px 10px; border-radius: 999px; background: var(--surface-2); }
   .note-line.error { color: var(--bad); background: var(--bad-soft); }
   .note-line.warn { color: var(--warn); background: var(--warn-soft); }
+  .choose { border: 1px solid var(--accent); border-radius: 12px; padding: 12px; margin: 6px 0 10px; background: var(--surface); }
+  .choose h4 { margin: 0 0 4px; font-size: 14px; }
+  .choose .picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .choose .pick { border: 2px solid transparent; border-radius: 10px; padding: 0; background: none; cursor: pointer; position: relative; }
+  .choose .pick img { display: block; width: 132px; height: 132px; object-fit: cover; border-radius: 8px; }
+  .choose .pick[aria-pressed="true"] { border-color: var(--accent); }
+  .choose .pick span { display: block; font-size: 11px; color: var(--muted); padding: 3px 2px 0; }
+  .choose .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .choose.done { opacity: .55; border-style: dashed; }
+  .say-img { display: block; max-width: min(360px, 100%); margin: 8px 0 2px; border-radius: 10px; }
   .typing { align-self: flex-start; display: inline-flex; gap: 4px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); }
   .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
   .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
@@ -1016,6 +1026,7 @@
             <div class="field" id="engineWaitRow"><label class="label" for="engineMaxWait">Wait at most (seconds)</label>
               <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
             <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
+            <label class="check"><input type="checkbox" id="enginePickTakes"> Show me a rejected take and let me choose before it is made again</label>
             <div class="field"><label class="label">LoRAs each model attaches on its own</label>
               <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
               <div class="grid grid-2" style="margin-top:8px;align-items:start">
@@ -3240,6 +3251,7 @@
     $("engineMaxWait").value = data.busy.max_wait_seconds;
     $("engineWaitRow").hidden = data.busy.mode !== "wait";
     $("engineConfirmPaid").checked = data.confirm_paid !== false;
+    $("enginePickTakes").checked = data.pick_takes !== false;
     $("engineWarnings").innerHTML = (data.warnings || []).map((w) => `<div class="engine-note">${w}</div>`).join("");
   }
   async function loadImageEngines() {
@@ -3269,7 +3281,8 @@
       paintImageEngines(await api("/v1/images/engines", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
           busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
-          confirm_paid: $("engineConfirmPaid").checked, defaults: engineState.defaults }) }));
+          confirm_paid: $("engineConfirmPaid").checked, pick_takes: $("enginePickTakes").checked,
+          defaults: engineState.defaults }) }));
       if (engineState.video.length) {
         // video defaults live in loras.json, with its own rules, so they save separately
         paintVideoDefaults((await api("/v1/loras/defaults", { method: "PUT", headers: { "content-type": "application/json" },
@@ -3335,6 +3348,17 @@
 
   function linkify(value) {
     return esc(value).replace(/https?:\/\/[^\s<>"']+/g, (url) => `<a href="${url}" target="_blank" rel="noopener">${url.length > 70 ? `${url.slice(0, 67)}…` : url}</a>`);
+  }
+
+  // Replies often point at a picture with markdown: ![alt](signed asset url). Left to linkify that reads as
+  // literal punctuation with a link in the middle, so pull the images out first and put them back afterwards.
+  function richText(value) {
+    const held = [];
+    const marked = String(value ?? "").replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)/g, (_all, alt, url) => {
+      held.push(`<a href="${esc(url)}" target="_blank" rel="noopener"><img class="say-img" src="${esc(url)}" alt="${esc(alt)}" loading="lazy"></a>`);
+      return `\u0000${held.length - 1}\u0000`;
+    });
+    return linkify(marked).replace(/\u0000(\d+)\u0000/g, (_all, i) => held[Number(i)]);
   }
 
   async function loadAgentModels() {
@@ -3414,7 +3438,7 @@
       if (next) { history.replaceState(null, "", `#agent/${next.id}`); await openAgentSession(next.id); }
       else {  // no chats left: the same empty state showAgentPage falls back to
         history.replaceState(null, "", "#agent");
-        agent.lastId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
         renderAgentEmpty();
         $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
         $("agentForgetLast").disabled = $("agentDelete").disabled = $("agentCompact").disabled = true;
@@ -3479,6 +3503,7 @@
     }
     agent.current = id;
     agent.lastId = 0;
+    agent.lastUserId = 0;
     agent.rendered.clear();
     agent.jobCards.clear();
     $("agentThread").innerHTML = "";
@@ -3553,6 +3578,7 @@
 
   async function reloadAgentThread() {  // the ?after= poll never revisits older messages, so redraw from the start
     agent.lastId = 0;
+    agent.lastUserId = 0;
     agent.rendered.clear();
     agent.jobCards.clear();
     $("agentThread").innerHTML = "";
@@ -3625,6 +3651,48 @@
       + `${(usage.out || 0).toLocaleString()} out, about $${(usage.cost_usd || 0).toFixed(4)} on ${usage.model || "the chat's model"}`;
     return ` · <span title="${esc(title)}">${kTokens(usage.in)} in · ${kTokens(usage.out || 0)} out</span>`;
   }
+  // A turn may be all tools and no words. Saying nothing at all would leave a hole in the thread while the
+  // tool cards below it kept arriving, so name what it did instead.
+  function quietTurn(content) {
+    const tools = (content.actions || []).map((a) => a.tool).filter(Boolean);
+    return `<span class="hint">${tools.length ? `no reply — calling ${esc([...new Set(tools)].join(", "))}` : "no reply"}</span>`;
+  }
+
+  // Inspection rejected a take. Rather than let the agent spend another minute of GPU -- or real money --
+  // on its own opinion, the takes are put up for the user to pick from. Each button just writes the reply they
+  // would have typed, so the answer travels the ordinary message path: it can be forgotten, compacted, re-read.
+  function chooseCard(messageId, choose) {
+    const best = choose.best || choose.assets?.[0]?.asset_id || "";
+    const picks = (choose.assets || []).filter((a) => a.thumb_url).map((a) => {
+      const issues = (a.issues || []).join("; ");
+      return `<button type="button" class="pick" data-pick="${esc(a.asset_id)}" aria-pressed="${a.asset_id === best}"
+        title="${esc(issues || "no issues listed")}"><img src="${esc(a.thumb_url)}" alt="${esc(a.asset_id)}" loading="lazy">
+        <span>${a.score != null ? `${esc(a.score)}/10 · ` : ""}${esc(a.asset_id.slice(0, 8))}</span></button>`;
+    }).join("");
+    const acts = (choose.options || []).map((o) =>
+      `<button type="button" class="btn ${o.id === "keep" ? "btn-primary" : ""}" data-choose="${esc(o.id)}"
+        data-reply="${esc(o.reply || "")}">${esc(o.label)}</button>`).join("");
+    return `<div class="choose" data-choice="${esc(String(messageId))}"><h4>Your call</h4>
+      <div class="hint">These didn't pass inspection. Pick one to keep, or say what to try next — nothing is generated until you do.</div>
+      ${picks ? `<div class="picks">${picks}</div>` : ""}<div class="acts">${acts}</div></div>`;
+  }
+  $("agentThread").addEventListener("click", async (event) => {
+    const pick = event.target.closest("[data-pick]");
+    const act = event.target.closest("[data-choose]");
+    const card = event.target.closest(".choose");
+    if (!card || card.classList.contains("done")) return;
+    if (pick) {
+      card.querySelectorAll("[data-pick]").forEach((b) => b.setAttribute("aria-pressed", String(b === pick)));
+      return;
+    }
+    if (!act) return;
+    const chosen = card.querySelector('[data-pick][aria-pressed="true"]')?.dataset.pick || "";
+    const text = (act.dataset.reply || "").replace("{asset_id}", chosen || "the one you showed");
+    card.classList.add("done");
+    $("agentInput").value = text;
+    await sendAgentMessage();
+  });
+
   function renderAgentMessage(message) {
     if (agent.rendered.has(message.id)) return;
     agent.rendered.add(message.id);
@@ -3633,7 +3701,7 @@
     const typing = thread.querySelector(".typing");
     const tag = ` data-message="${message.id}"`;  // so Forget, Restore and Delete can find every part of a message
     const add = (html) => {
-      const marked = html.replace(/<div class="(msg-meta|bubble|note-line)/g, `<div${tag} class="$1`)
+      const marked = html.replace(/<div class="(msg-meta|bubble|note-line|choose)/g, `<div${tag} class="$1`)
                          .replace(/<details class="tool-card"/g, `<details${tag} class="tool-card"`);
       if (typing) typing.insertAdjacentHTML("beforebegin", marked); else thread.insertAdjacentHTML("beforeend", marked);
     };
@@ -3657,8 +3725,8 @@
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
       const secret = c.private_to ? `<span class="whisper-tag"> · 🤫 private</span>` : "";
       const toWho = (to) => to && !/^(all|everyone)$/i.test(to) ? ` → ${esc(/^(user|you)$/i.test(to) ? "you" : to)}` : "";
-      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}${i ? "" : actions("assistant")}</div><div class="bubble agent${c.private_to ? " private" : ""}${forgotten}">${linkify(line.say)}</div>`));
-      else if (c.say) add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}${actions("assistant")}</div><div class="bubble agent narration${forgotten}">${linkify(c.say)}</div>`);
+      if (c.lines?.length) c.lines.forEach((line, i) => add(`<div class="msg-meta">${whoHtml(line.speaker)}${toWho(line.to)} · ${time}${i ? "" : callCost(c.usage)}${secret}${i ? "" : actions("assistant")}</div><div class="bubble agent${c.private_to ? " private" : ""}${forgotten}">${richText(line.say)}</div>`));
+      else add(`<div class="msg-meta">${whoHtml("")}· ${time}${callCost(c.usage)}${actions("assistant")}</div><div class="bubble agent narration${forgotten}">${c.say ? richText(c.say) : quietTurn(c)}</div>`);
     } else if (message.role === "tool") {
       const args = JSON.stringify(c.args || {}, null, 2);
       const result = c.ok ? JSON.stringify(c.result, null, 2) : c.error;
@@ -3667,6 +3735,7 @@
         <div class="code">args ${esc(args.length > 3000 ? `${args.slice(0, 3000)}…` : args)}</div><div class="code">${c.ok ? "result" : "error"} ${esc((result || "").length > 6000 ? `${result.slice(0, 6000)}…` : result || "")}</div></details>`);
       const shown = (c.ok && Array.isArray(c.result?.assets) ? c.result.assets : []).filter((a) => a.thumb_url && c.tool !== "list_references");
       if (shown.length) add(`<div class="thumb-grid">${shown.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}${a.by?.name ? ` · made by ${esc(a.by.name)}` : ""}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.by?.name || a.id || a.asset_id || "")}</span></a>`).join("")}</div>`);
+      if (c.ok && c.result?.choose?.options?.length) add(chooseCard(message.id, c.result.choose));
       const jobId = c.job_id || (c.tool === "wait_for_job" && c.result?.id);
       if (jobId && c.tool !== "wait_for_job") {
         const card = agentJobCard(jobId);
@@ -3696,7 +3765,14 @@
       const thread = $("agentThread");
       const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
       if (!agent.lastId && !view.messages.length) renderAgentEmpty();
-      for (const message of view.messages) { renderAgentMessage(message); agent.lastId = Math.max(agent.lastId, message.id); }
+      for (const message of view.messages) {
+        renderAgentMessage(message);
+        agent.lastId = Math.max(agent.lastId, message.id);
+        if (message.role === "user") agent.lastUserId = Math.max(agent.lastUserId || 0, message.id);
+      }
+      thread.querySelectorAll(".choose").forEach((card) => {  // answered, or superseded by a newer one
+        if (Number(card.dataset.choice) < (agent.lastUserId || 0)) card.classList.add("done");
+      });
       updateAgentHeader(view.session);
       if (view.messages.some((m) => m.role === "tool" && m.content?.job_id)) refreshJobs();
       if (scroll || (nearBottom && view.messages.length)) thread.scrollTop = thread.scrollHeight;
@@ -3916,7 +3992,7 @@
         agent.draftFor = session.id;
         clearAgentDraft(null);
         history.replaceState(null, "", `#agent/${session.id}`);
-        agent.lastId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
       } catch (error) { return toast("Could not start a chat", error.message, "bad"); }
     }
     $("agentSend").disabled = true;

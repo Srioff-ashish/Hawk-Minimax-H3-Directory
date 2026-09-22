@@ -240,6 +240,8 @@ DEFAULTS = {
     "busy": {"mode": "fall_through", "max_wait_seconds": 120},
     #: A retake that has exhausted the free engines asks before spending on a paid one.
     "confirm_paid": True,
+    #: Inspection rejecting a take stops and shows it, instead of the agent silently taking it again.
+    "pick_takes": True,
 }
 BUSY_MODES = ("wait", "fall_through")
 MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
@@ -290,12 +292,18 @@ class ImageEngineStore:
             "edit": full_order(stored.get("edit") or DEFAULTS["edit"], "edit"),
             "busy": busy,
             "confirm_paid": self.confirm_paid(),
+            "pick_takes": self.pick_takes(),
         }
 
     def confirm_paid(self) -> bool:
         """Whether a failed take must be approved before it retries on a paid engine."""
         stored = self._load().get("confirm_paid")
         return DEFAULTS["confirm_paid"] if not isinstance(stored, bool) else stored
+
+    def pick_takes(self) -> bool:
+        """Whether a rejected take is put to the user before anything is generated again."""
+        stored = self._load().get("pick_takes")
+        return DEFAULTS["pick_takes"] if not isinstance(stored, bool) else stored
 
     def defaults(self, family: str) -> list[dict] | None:
         """LoRAs this family attaches on its own, or None when the user has never set them.
@@ -380,7 +388,7 @@ class ImageEngineStore:
         return cleaned
 
     def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None,
-             confirm_paid=None) -> dict:
+             confirm_paid=None, pick_takes=None) -> dict:
         """Update the parts that were given. Anything left as None keeps its current value."""
         with self._lock:
             current = self.settings()
@@ -398,6 +406,8 @@ class ImageEngineStore:
                 current["busy"]["mode"] = "fall_through"  # waiting zero seconds is falling through
             if confirm_paid is not None:
                 current["confirm_paid"] = bool(confirm_paid)
+            if pick_takes is not None:
+                current["pick_takes"] = bool(pick_takes)
             stored_defaults = dict(self._load().get("defaults") or {})
             for family, entries in (defaults or {}).items():
                 stored_defaults[family] = self._clean_defaults(family, entries or [])
