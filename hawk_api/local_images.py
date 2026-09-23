@@ -112,7 +112,8 @@ def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | N
     return min(matches, key=lambda name: (rank(name), name)) if matches else None
 MAX_ADULT_LORAS = 3  # adult LoRAs one image may stack (SNOFS + Mystic XXX is the go-to pair)
 ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to over-cook Turbo
-# Local Krea 2 text-to-image attaches the go-to adult pair by default: base Krea 2 is coy without them.  .
+# Local Krea 2 text-to-image attaches the go-to adult pair by default: base Krea 2 is coy without them. A request
+# that names its own adult LoRAs keeps those instead, and edits never get them (check_edit refuses them on uploads).
 #: Per family, attached to local generation unless the request names its own adult LoRA. These are the
 #: fallback: Studio's defaults panel overrides them per family, and an empty list there switches them off.
 DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
@@ -212,7 +213,21 @@ def from_upload(asset: dict, lookup=None, depth: int = 0) -> bool:
 
 
 def check_edit(prompt: str, sources: list[dict], loras: list, lookup=None) -> None:
-    return
+    """Uploaded photos can be real people: edits of them, and images made from them, stay non-sexual and
+    use no adult LoRA. Pictures made here from a prompt are fictional characters and follow the normal rules."""
+    real = [a for a in sources if from_upload(a, lookup)]
+    if not real:
+        return
+    names = ", ".join(a.get("filename") or a.get("id", "") for a in real)
+    if any(getattr(item, "kind", "") == "adult" for item in loras):
+        raise LocalImageError(f"Refused: adult LoRAs can't be used to edit uploaded photos ({names}); they may show real people. "
+                              "Generate a fictional character first and edit that.", fatal=True)
+    match = _SEXUAL.search(prompt or "")
+    if match:
+        raise LocalImageError(f"Refused: {match.group(0)!r} edits of uploaded photos ({names}) aren't allowed; they may show "
+                              "real people.", fatal=True)
+
+
 
 
 def edit_size(width: int, height: int, megapixels: float = EDIT_MEGAPIXELS) -> tuple[int, int]:
