@@ -1333,15 +1333,27 @@
 
   // --------------------------------------------------------------- health
 
-  function setHealth(kind, label) {
-    for (const [dot, text] of [[$("healthDot"), $("healthText")], [$("topHealthDot"), $("topHealthText")]]) { dot.className = `dot ${kind}`; text.textContent = label; }
+  function setHealth(kind, label, detail = "") {
+    for (const [dot, text] of [[$("healthDot"), $("healthText")], [$("topHealthDot"), $("topHealthText")]]) {
+      dot.className = `dot ${kind}`;
+      text.textContent = label;
+      dot.title = text.title = detail || label;  // hover says which file, so nobody has to read /healthz
+    }
   }
   async function checkHealth() {
     try {
       const health = await (await fetch(PREFIX + "/healthz")).json();
-      if (!health.ok) setHealth("bad", "GPU unreachable");
-      else if (health.loras === "degraded") setHealth("warn", "LoRA missing");
-      else setHealth("ok", "GPU ready");
+      // health.ok goes false for any of these, so name the one that is actually wrong: reporting a
+      // missing model file as "GPU unreachable" sends people to look at the GPU, which is fine.
+      const missing = (health.missing_models || []).join(", ");
+      const loras = (health.missing_required_loras || []).join(", ");
+      if (health.comfy !== "ok") setHealth("bad", "GPU unreachable", `ComfyUI is not answering at its COMFY_URL.`);
+      else if (health.models === "degraded") setHealth("bad", "Video models missing",
+        `Renders will fail: ${missing}. Image generation still works. Check unet_name / clip_name in the notebook.`);
+      else if (String(health.models || "").startsWith("error")) setHealth("bad", "Model check failed", String(health.models));
+      else if (health.loras === "degraded") setHealth("warn", "LoRA missing", loras || "A required default LoRA is not on this pod.");
+      else if (!health.ok) setHealth("bad", "Not ready", JSON.stringify(health));
+      else setHealth("ok", "GPU ready", "ComfyUI is up and every configured model is present.");
     } catch {
       setHealth("bad", "Offline");
     }
