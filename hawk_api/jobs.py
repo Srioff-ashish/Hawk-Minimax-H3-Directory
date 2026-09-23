@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import dataclasses
+import glob
 import hashlib
 import io
 import json
@@ -282,9 +283,22 @@ class Store:
             row = self._db.execute("SELECT data FROM assets WHERE id = ?", (asset_id,)).fetchone()
         return json.loads(row[0]) if row else None
 
-    def list_assets(self, limit: int = 100) -> list[dict]:
+    def list_assets(self, limit: int = 100, by: str = "", session: str = "") -> list[dict]:
+        """Newest first. by matches a character's name or their member id, so a camera roll is a query.
+
+        Filtered in SQL rather than after the LIMIT, which would return a page of everything and then throw
+        most of it away.
+        """
+        where, args = [], []
+        if by:
+            where.append("(lower(json_extract(data, '$.by.name')) = ? OR json_extract(data, '$.by.member') = ?)")
+            args += [by.strip().lower(), by.strip()]
+        if session:
+            where.append("json_extract(data, '$.by.session') = ?")
+            args.append(session.strip())
+        sql = "SELECT data FROM assets" + (" WHERE " + " AND ".join(where) if where else "")
         with self._lock:
-            rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+            rows = self._db.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, limit)).fetchall()
         return [json.loads(row[0]) for row in rows]
 
     def all_assets(self) -> list[dict]:
@@ -613,13 +627,20 @@ class HawkService:
         return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
     def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None,
-                     owner=None) -> dict:
+                     owner=None, of=None) -> dict:
         asset = self.store.get_asset(asset_id)
         if asset is None:
             raise NotFound(f"No asset {asset_id!r}.")
         if owner:  # the character who made it, in a group chat: {"name", "member", "session"}
             asset["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
-            add_tags = list(add_tags or []) + [f"by {owner.get('name')}"] if owner.get("name") else add_tags
+            # A group shot's photographer is drawn at random from the people in it, so it is a real answer
+            # but not a fact to file under: no "by" tag, or a guess becomes a filter everyone trusts.
+            if owner.get("name") and owner.get("how") != "group":
+                add_tags = list(add_tags or []) + [f"by {owner['name']}"]
+        if of:  # who is in it, which for a candid is nobody who took it
+            asset["of"] = [{"name": str(p.get("name") or "")[:80], "member": str(p.get("member") or "")[:80]}
+                           for p in of][:8]
+            add_tags = list(add_tags or []) + [f"of {p['name']}" for p in asset["of"] if p["name"]]
         if collection is not None and collection.strip():
             asset["collection"] = collection.strip()
         if tags is not None:
@@ -681,8 +702,8 @@ class HawkService:
             buffer.seek(0)
             return await self.add_asset(name, buffer, content_type, size, collection="From URLs", source={"type": "url", "url": url})
 
-    def list_assets(self, limit: int = 100) -> list[dict]:
-        return self.store.list_assets(limit)
+    def list_assets(self, limit: int = 100, by: str = "", session: str = "") -> list[dict]:
+        return self.store.list_assets(limit, by=by, session=session)
 
     def asset_view(self, asset: dict) -> dict:
         """The stored asset plus signed links: the file, and a thumbnail for images."""
@@ -700,6 +721,35 @@ class HawkService:
         path = os.path.join(input_dir, asset["path"]) if input_dir else ""
         return path if path and os.path.isfile(path) else None
 
+    def drive_asset_path(self, asset: dict) -> str | None:
+        """A generated image's exported copy in the mounted Drive, when the original is gone.
+
+        After a Colab runtime is restored from a snapshot the database is back but ComfyUI's input folder
+        is empty, so the Drive export holds the only surviving pixels. export_assets names them
+        <slug>_<asset_id[:8]>.<ext> under a dated folder, so the id alone is enough to find one.
+
+        Deliberately not folded into local_asset_path: export_assets and delete_asset call that one, and
+        an export that found its own output would copy a file onto itself.
+        """
+        exporter = self.drive_exporter
+        if exporter is None or asset.get("kind") != "image" or not asset.get("id"):
+            return None
+        try:
+            if not exporter.browser.available:
+                return None
+            folder = exporter.settings()["image_folder"]
+        except Exception:
+            return None
+        stamp = asset.get("created_at") or time.time()
+        root = os.path.join(exporter.browser.root, folder)
+        # The export folder is dated, and a restore can land either side of midnight.
+        for offset in (0, -86400, 86400):
+            day = time.strftime("%Y-%m-%d", time.localtime(stamp + offset))
+            found = glob.glob(os.path.join(root, day, f"*_{asset['id'][:8]}.*"))
+            if found:
+                return found[0]
+        return None
+
     async def image_dimensions(self, asset: dict) -> tuple[int, int] | None:
         """Width and height of an image asset, or None when Pillow can't read it."""
         try:
@@ -712,7 +762,7 @@ class HawkService:
             return None
 
     async def asset_bytes(self, asset: dict) -> bytes:
-        local = self.local_asset_path(asset)
+        local = self.local_asset_path(asset) or self.drive_asset_path(asset)
         if local:
             return await asyncio.to_thread(lambda: open(local, "rb").read())
         subfolder, _, filename = asset["path"].rpartition("/")
@@ -852,10 +902,20 @@ class HawkService:
                 notes.append(image_engines.MOVED[raw])
             ladder = [pinned]
 
-        # An Atlas engine that only makes images from text still has somewhere to go when given references.
+        # An engine that only makes images from text still has somewhere to go when given references.
+        # A pinned local engine steps sideways to another local one: sending it to Seedream instead would
+        # spend the user's money on an engine they didn't ask for. A pinned Atlas engine is already paid for.
         if sources and len(ladder) == 1:
             only = image_engines.get(ladder[0])
-            if only and not only.edit and not only.local:
+            if only and not only.edit and only.local:
+                sideways = next((e for e in self.image_ladder("edit") if image_engines.get(e).local), "")
+                if not sideways:
+                    raise RequestError(
+                        f"{only.label} can't use reference images, and no local engine here can edit. "
+                        f'Drop the references, or use engine "seedream" to edit on Atlas.')
+                notes.append(f"{only.label} can't use reference images, so {image_engines.get(sideways).label} made this one.")
+                ladder = [sideways]
+            elif only and not only.edit:
                 notes.append(f"{only.label} can't use reference images, so Seedream edit made this one.")
                 ladder, atlas_override = ["seedream"], IMAGE_EDIT_MODEL
 
@@ -926,7 +986,11 @@ class HawkService:
             tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
             return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids,
                                             engine_id=image_engines.id_for_tag(tag), extra={"cost_usd": round(cost, 4)})
-        raise last_error or RequestError("No image engine could make this image.")
+        if last_error:
+            raise last_error
+        raise RequestError("No image engine could make this image. " + (
+            "Tried: " + "; ".join(f"{t['engine']}: {t.get('skipped') or t.get('error')}" for t in tried)
+            if tried else "No engine is enabled for this in Studio, under Images."))
 
     async def ready_image_engines(self, action: str = "generate") -> list[str]:
         """Enabled engines for this action that could actually run right now, best first.

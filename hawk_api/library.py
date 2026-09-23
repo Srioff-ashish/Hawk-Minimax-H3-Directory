@@ -16,6 +16,7 @@ import shutil
 import time
 import uuid
 
+from . import snapshot
 from .jobs import HawkService, RequestError
 
 log = logging.getLogger("hawk_api.library")
@@ -203,7 +204,8 @@ DRIVE_ID_ATTRS = ("user.drive.id", "user.drive.item_id", "user.drive.file_id")
 DRIVE_ID_WAIT_SECONDS = 1800.0  # big videos can take a while to upload from the mount
 DRIVE_ID_POLL_SECONDS = 10.0
 EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False,
-                   "images": True, "image_folder": "Hawk H3/Images"}
+                   "images": True, "image_folder": "Hawk H3/Images",
+                   "snapshots": True, "snapshot_folder": "Hawk H3/Backups", "snapshot_minutes": 10}
 
 
 def drive_file_id(path: str) -> str | None:
@@ -255,7 +257,8 @@ class DriveExporter:
         return {**data, "mounted": self.browser.available, "root": self.browser.root}
 
     def save_settings(self, *, enabled: bool | None = None, folder: str | None = None, segments: bool | None = None,
-                      images: bool | None = None, image_folder: str | None = None) -> dict:
+                      images: bool | None = None, image_folder: str | None = None, snapshots: bool | None = None,
+                      snapshot_folder: str | None = None, snapshot_minutes: float | None = None) -> dict:
         current = {k: v for k, v in self.settings().items() if k in EXPORT_DEFAULTS}
         clean_folder = lambda value: "/".join(p for p in value.replace("\\", "/").split("/") if p and p not in (".", ".."))
         if enabled is not None:
@@ -274,6 +277,15 @@ class DriveExporter:
             if not clean:
                 raise RequestError("Give a Drive folder for images, e.g. Hawk H3/Images.")
             current["image_folder"] = clean
+        if snapshots is not None:
+            current["snapshots"] = bool(snapshots)
+        if snapshot_folder is not None:
+            clean = clean_folder(snapshot_folder)
+            if not clean:
+                raise RequestError("Give a Drive folder for backups, e.g. Hawk H3/Backups.")
+            current["snapshot_folder"] = clean
+        if snapshot_minutes is not None:
+            current["snapshot_minutes"] = max(snapshot.MIN_MINUTES, min(snapshot.MAX_MINUTES, float(snapshot_minutes)))
         os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
         with open(self.path, "w", encoding="utf-8") as handle:
             json.dump(current, handle, indent=2)

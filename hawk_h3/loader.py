@@ -50,21 +50,34 @@ def apply_attention(model, mode: str, tau_start: float, tau_end: float):
     applied: list[str] = []
 
     if mode.startswith("sol"):
-        patch_cls = nodes.NODE_CLASS_MAPPINGS.get("MiniMaxH3ScheduledSolAttentionPatch")
+        # "SolAttnPatch" is kijai's Triton port; the older Saganaki22 pack called it
+        # MiniMaxH3ScheduledSolAttentionPatch and is no longer published.
+        patch_cls = (nodes.NODE_CLASS_MAPPINGS.get("SolAttnPatch")
+                     or nodes.NODE_CLASS_MAPPINGS.get("MiniMaxH3ScheduledSolAttentionPatch"))
         if patch_cls is None:
             logger.warning(
-                "HawkH3: 'sol scheduled' needs ComfyUI-sol-attn "
-                "(github.com/Saganaki22/ComfyUI-sol-attn); continuing without it."
+                "HawkH3: 'sol' needs ComfyUI-SolAttn_triton "
+                "(github.com/kijai/ComfyUI-SolAttn_triton) and Triton; continuing without it."
             )
         else:
             try:
-                # enabled, tau_start, tau_end, curve, min_tokens, strict, dense_percent,
-                # thresh_type, int8_qk, int8_pv, sink_conditioning, dense_blocks
-                model = patch_cls().patch(
-                    model, True, float(tau_start), float(tau_end), "linear", 4096, False,
-                    0.0, "diag", False, False, "exact_kv", "",
-                )[0]
-                applied.append(f"sol tau {tau_start:g}->{tau_end:g}")
+                if hasattr(patch_cls, "execute"):
+                    # The port takes one threshold plus the sampling window it is active over. The old
+                    # pack ramped tau from start to end; upstream has no equivalent any more, so
+                    # tau_start is the threshold and tau_end is only reported.
+                    model = patch_cls.execute(
+                        model, float(tau_start), 0.2, 0.9, 4096, True,
+                        "exact_kv_and_rows", False, "2d_frame", "", False,
+                    )[0]
+                    applied.append(f"sol tau {tau_start:g}")
+                else:
+                    # enabled, tau_start, tau_end, curve, min_tokens, strict, dense_percent,
+                    # thresh_type, int8_qk, int8_pv, sink_conditioning, dense_blocks
+                    model = patch_cls().patch(
+                        model, True, float(tau_start), float(tau_end), "linear", 4096, False,
+                        0.0, "diag", False, False, "exact_kv", "",
+                    )[0]
+                    applied.append(f"sol tau {tau_start:g}->{tau_end:g}")
             except Exception as exc:
                 logger.warning("HawkH3: Sol attention patch failed (%s); continuing without it.", exc)
 
@@ -136,16 +149,18 @@ class HawkH3ModelLoader(io.ComfyNode):
                     options=ATTENTION_MODES,
                     default="sol scheduled + sage",
                     tooltip=(
-                        "Sol needs ComfyUI-sol-attn + Triton; Sage needs sageattention. A "
+                        "Sol needs ComfyUI-SolAttn_triton + Triton; Sage needs sageattention. A "
                         "missing backend is skipped with a log line, never an error."
                     ),
                 ),
                 io.Combo.Input("weight_dtype", options=WEIGHT_DTYPES, default="default", advanced=True),
                 io.Combo.Input("clip_device", options=["default", "cpu"], default="default", advanced=True),
                 io.Float.Input("sol_tau_start", default=1.25, min=0.0, max=4.0, step=0.05, advanced=True,
-                               tooltip="Sol routing threshold on the first, noisiest step. Higher is faster."),
+                               tooltip="Sol routing threshold. Higher is sparser and faster: about 1.0 keeps "
+                                       "16% of blocks exact, 1.5 keeps 7%."),
                 io.Float.Input("sol_tau_end", default=0.8, min=0.0, max=4.0, step=0.05, advanced=True,
-                               tooltip="Sol routing threshold on the final detail steps. Lower is denser."),
+                               tooltip="Kept so older workflows still load. The current Sol-Attn takes one "
+                                       "threshold rather than ramping between two, so this is not applied."),
             ],
             outputs=[
                 H3Pipe.Output("pipe", tooltip="Connect to Hawk H3 Director."),

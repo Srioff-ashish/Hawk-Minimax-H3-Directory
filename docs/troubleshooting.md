@@ -42,7 +42,7 @@ The name in `lora_stack` must match the file's path relative to `models/loras`, 
 **`lora_stack line N (…) needs a LoRA file name…`** / **`cannot read …`**
 Use `file.safetensors : 0.8` or `file.safetensors : 0.8 : v=1 a=0.5 t=1`. Only `v`, `a` and `t` are accepted as keys.
 
-**Console: `'sol scheduled' needs ComfyUI-sol-attn…` / `Sol attention patch failed…` / `'sage' needs the sageattention package…`**
+**Console: `'sol' needs ComfyUI-SolAttn_triton…` / `Sol attention patch failed…` / `'sage' needs the sageattention package…`**
 Not errors: the backend was skipped and sampling uses ComfyUI's default attention. Install it (see [optional extras](getting-started.md#4-optional-extras)) or set `attention` to what you have. The node's summary shows which backends actually applied.
 
 **Wrong-looking results or shape errors right after loading.**

@@ -17,6 +17,8 @@ MERGED_FEELINGS = 3
 USER_KEY = "user"
 TURN_WORDS = 60  # a spoken turn stays short, like a real conversation
 STARVED_TURNS = 3  # passed over for longer than one rotation: this character speaks next, whoever was named
+ACTS = ("selfie", "snap", "share", "group_shot")
+MAX_SUBJECTS = 6  # FLUX.2 Klein takes 6 reference images; past that a group shot falls onto paid Seedream
 
 CHARACTER_TURN_PROMPT = """You are {name}, one of the characters in a group chat. Stay fully in character.
 
@@ -40,7 +42,9 @@ HOW TO SPEAK
 - Bring your own opinions, moods and quirks; tease, agree, argue or change the subject the way {name} would.
 - If the user asked you all something, work it out among yourselves (argue, compare, persuade) before anyone turns back to the user with an answer.
 - Match the chat's language and style (Hinglish in Roman script if that is how it is going).
-- If you want an image or video made (a look to try, a photo of yourself, a scene), add "make" with a full description; the director makes it and everyone sees it. Only when it matters to the conversation.
+- If you want an image or video made (a look to try, a photo of yourself, a scene), add "make" with a full description; the director makes it and everyone sees it. Only when it matters to the conversation. With "make", also say what kind it is and who is in it:
+  "act": "selfie" (you take it, you are in it) | "snap" (you take it of someone else) | "share" (a picture you are showing) | "group_shot" (you take it, several of you are in it)
+  "of": ["the names of whoever is in it"] -- your own name for a selfie.
 - Add "pause": true only when the conversation has really run its course or cannot go on without the user; not just because someone could ask the user.{adaptive}
 
 Reply with only JSON: {{"say": "...", "to": "<a name, user, or all>"{make_field}{grow_field}, "pause": false}}
@@ -79,21 +83,35 @@ def visible_to(message: dict, member_id: str | None) -> bool:
     return not private or member_id is None or private == member_id
 
 
-def mentioned(text: str, cast: list[dict], names: list[str], exclude: int | None = None) -> int | None:
-    """The first character named in text (full name, a first name only they have, or @Name), other than exclude."""
+def mentioned_all(text: str, names: list[str], exclude: int | None = None) -> list[int]:
+    """Every character named in text (full name, a first name only they have, or @Name), in the order named.
+
+    A first name shared by two characters names neither: "Riya" with a Riya Sharma and a Riya Kapoor in the
+    room is not a reference to either of them, and guessing one is how a photo ends up owned by the wrong
+    person. This is the one matcher; ownership and turn-taking both read it.
+    """
     firsts = [name.split()[0].lower() if name else "" for name in names]
-    best = None
+    found = []
     for index, name in enumerate(names):
         if index == exclude or not name:
             continue
         forms = [name]
         if len(firsts[index]) >= 3 and firsts.count(firsts[index]) == 1:
             forms.append(name.split()[0])  # "Sonia" for "Sonia Mausi"
+        best = None
         for form in forms:
             match = re.search(rf"(?<![\w@])@?{re.escape(form)}\b", text or "", re.IGNORECASE)
-            if match and (best is None or match.start() < best[0]):
-                best = (match.start(), index)
-    return best[1] if best else None
+            if match and (best is None or match.start() < best):
+                best = match.start()
+        if best is not None:
+            found.append((best, index))
+    return [index for _, index in sorted(found)]
+
+
+def mentioned(text: str, cast: list[dict], names: list[str], exclude: int | None = None) -> int | None:
+    """The first character named in text, other than exclude."""
+    found = mentioned_all(text, names, exclude)
+    return found[0] if found else None
 
 
 def next_speaker(cast: list[dict], names: list[str], last_index: int | None, last_text: str, spoke: list[int]) -> int:
@@ -110,7 +128,7 @@ def next_speaker(cast: list[dict], names: list[str], last_index: int | None, las
 
 
 def parse_turn(text: str) -> dict | None:
-    """A character's turn: {"say", "to", "make"?, "grow"?, "pause"?}."""
+    """A character's turn: {"say", "to", "make"?, "act"?, "of"?, "grow"?, "pause"?}."""
     text = (text or "").strip()
     fenced = re.match(r"^```[a-zA-Z]*\s*\n(.*?)\n?```\s*$", text, re.DOTALL)
     if fenced:
@@ -126,6 +144,16 @@ def parse_turn(text: str) -> dict | None:
         turn = {"say": data["say"].strip(), "to": str(data.get("to") or "").strip()[:40]}
         if isinstance(data.get("make"), str) and data["make"].strip():
             turn["make"] = data["make"].strip()[:1500]
+            # Only beside a make: an act with nothing to make is noise. A model that ignores both
+            # fields produces exactly the turn it did before they existed.
+            act = str(data.get("act") or "").strip().lower().replace("-", "_").replace(" ", "_")
+            if act in ACTS:
+                turn["act"] = act
+            raw = data.get("of")
+            wanted = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+            of = [str(n).strip()[:40] for n in wanted if isinstance(n, str) and str(n).strip()]
+            if of:
+                turn["of"] = of[:MAX_SUBJECTS]
         grow = []
         for item in data.get("grow") if isinstance(data.get("grow"), list) else []:
             if isinstance(item, dict) and isinstance(item.get("note"), str) and item["note"].strip():

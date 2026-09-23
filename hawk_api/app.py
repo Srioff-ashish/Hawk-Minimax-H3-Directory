@@ -19,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
+from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
 from .config import Settings
@@ -109,17 +110,24 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     )
 
     agent = AgentService(service, mcp)
+    snapshots = DbSnapshotter(exporter)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         await service.start()
         await agent.start()
-        async with mcp.session_manager.run():
-            yield
-        await imports.stop()
-        await exporter.stop()
-        await agent.stop()
-        await service.stop()
+        await snapshots.start()
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            # In a finally: a shutdown that skipped these would also skip the last snapshot, which is
+            # the one copy that matters when a Colab runtime is going away.
+            await imports.stop()
+            await exporter.stop()
+            await agent.stop()
+            await service.stop()
+            await snapshots.stop()  # last, so nothing is still writing to the database
 
     app = FastAPI(
         title="Hawk MiniMax H3 Director API",
@@ -129,6 +137,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     )
     app.state.service = service
     app.state.agent = agent
+    app.state.snapshots = snapshots
 
     @app.exception_handler(RequestError)
     async def _request_error(_request, exc: RequestError):
@@ -183,8 +192,9 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         return service.asset_view(await service.add_asset_from_url(body.url, body.filename))
 
     @app.get("/v1/assets", tags=["assets"])
-    async def list_assets(limit: int = 100):
-        return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit)]}
+    async def list_assets(limit: int = 100, by: str = "", session: str = ""):
+        """by: a character's name or member id, for their camera roll. session: only what a chat made."""
+        return {"assets": [service.asset_view(asset) for asset in service.list_assets(limit, by=by, session=session)]}
 
     @app.get("/v1/library", tags=["assets"])
     async def library(kind: str | None = None, collection: str | None = None, tag: str | None = None, q: str | None = None,
@@ -416,12 +426,23 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.get("/v1/drive/export", tags=["downloads"])
     async def drive_export_settings():
-        return exporter.settings()
+        return {**exporter.settings(), **snapshots.state()}
+
+    @app.post("/v1/drive/snapshot", tags=["downloads"])
+    async def drive_snapshot_now():
+        """Copy the chats and jobs to Drive right now, without waiting for the next scheduled one."""
+        if not drive.available:
+            raise RequestError("Google Drive is not mounted on the server. "
+                               "Run drive.mount('/content/drive') in the notebook.")
+        await snapshots.snapshot(force=True)
+        return snapshots.state()
 
     @app.put("/v1/drive/export", tags=["downloads"])
     async def drive_export_update(body: DriveExportSettings):
         return exporter.save_settings(enabled=body.enabled, folder=body.folder, segments=body.segments,
-                                     images=body.images, image_folder=body.image_folder)
+                                     images=body.images, image_folder=body.image_folder,
+                                     snapshots=body.snapshots, snapshot_folder=body.snapshot_folder,
+                                     snapshot_minutes=body.snapshot_minutes)
 
     # ------------------------------------------------------------ prompts
 

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sqlite3
 import sys
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -170,6 +173,61 @@ class Runtime(unittest.TestCase):
         self.assertTrue(hawk_colab.needs_blackwell_torch({"cap": [12, 0], "arch": ["sm_80", "sm_90"]}))
         self.assertFalse(hawk_colab.needs_blackwell_torch({"cap": [8, 0], "arch": ["sm_80"]}))
         self.assertFalse(hawk_colab.needs_blackwell_torch({}))
+
+
+class Snapshots(unittest.TestCase):
+    """Bringing a previous runtime's chats back, before the API starts."""
+
+    def setUp(self):
+        self.data = tempfile.mkdtemp(prefix="hawk_data_")
+        self.drive = tempfile.mkdtemp(prefix="hawk_drive_")
+        self.addCleanup(shutil.rmtree, self.data, True)
+        self.addCleanup(shutil.rmtree, self.drive, True)
+        self.backups = os.path.join(self.drive, hawk_colab.SNAPSHOT_FOLDER)
+        os.makedirs(self.backups, exist_ok=True)
+
+    def write_db(self, path, title):
+        db = sqlite3.connect(path)
+        db.executescript("CREATE TABLE IF NOT EXISTS agent_sessions(id TEXT PRIMARY KEY, data TEXT);")
+        db.execute("INSERT OR REPLACE INTO agent_sessions VALUES('s1', ?)", (title,))
+        db.commit()
+        db.close()
+
+    def titles(self, path):
+        db = sqlite3.connect(path)
+        try:
+            return [row[0] for row in db.execute("SELECT data FROM agent_sessions")]
+        finally:
+            db.close()
+
+    def test_a_snapshot_comes_back_on_a_fresh_runtime(self):
+        self.write_db(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME), "Diwali shoot")
+        said = hawk_colab.restore_snapshot(self.data, self.drive)
+        self.assertIn("Restored", said, said)
+        self.assertEqual(self.titles(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME)), ["Diwali shoot"])
+
+    def test_a_database_already_here_is_never_replaced(self):
+        self.write_db(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME), "older")
+        self.write_db(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME), "the live one")
+        said = hawk_colab.restore_snapshot(self.data, self.drive)
+        self.assertIn("Keeping", said, said)
+        self.assertEqual(self.titles(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME)), ["the live one"],
+                         "re-running the start cell mid-session must not drop an older copy on live chats")
+
+    def test_a_truncated_snapshot_falls_back_to_the_one_before_it(self):
+        open(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME), "wb").close()  # caught mid-copy
+        self.write_db(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME + ".prev"), "the one before")
+        said = hawk_colab.restore_snapshot(self.data, self.drive)
+        self.assertIn("Restored", said, said)
+        self.assertEqual(self.titles(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME)), ["the one before"])
+
+    def test_no_drive_mounted_is_a_message_not_a_crash(self):
+        said = hawk_colab.restore_snapshot(self.data, os.path.join(self.drive, "not-mounted"))
+        self.assertIn("No Google Drive", said, said)
+        self.assertFalse(os.path.exists(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME)))
+
+    def test_an_empty_drive_folder_just_starts_fresh(self):
+        self.assertIn("starting fresh", hawk_colab.restore_snapshot(self.data, self.drive))
 
 
 if __name__ == "__main__":

@@ -65,7 +65,8 @@ API_TUNNEL_PATTERN = rf"cloudflared tunnel --no-autoupdate --url http://127\.0\.
 TUNNEL_UPLOAD_MB = 100
 CLOUDFLARED_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
 EXTRA_NODES = {
-    "sol": "https://github.com/Saganaki22/ComfyUI-sol-attn",
+    # Saganaki22/ComfyUI-sol-attn is gone; kijai's Triton port is the maintained one.
+    "sol": "https://github.com/kijai/ComfyUI-SolAttn_triton",
     "vfi": "https://github.com/GACLove/ComfyUI-VFI",
 }
 _MODEL_EXT = (".safetensors", ".pt", ".pth", ".ckpt", ".bin", ".gguf")
@@ -350,7 +351,7 @@ def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False, 
 
     custom_nodes = os.path.join(comfy_dir, "custom_nodes")
     if sol:
-        _clone(EXTRA_NODES["sol"], os.path.join(custom_nodes, "ComfyUI-sol-attn"))
+        _clone(EXTRA_NODES["sol"], os.path.join(custom_nodes, "ComfyUI-SolAttn_triton"))
     if vfi:
         vfi_dir = os.path.join(custom_nodes, "ComfyUI-VFI")
         _clone(EXTRA_NODES["vfi"], vfi_dir)
@@ -565,6 +566,39 @@ def _start_api(session: Session) -> None:
     print("Warning: the API runs locally but the tunnel URL is not reachable yet; try the health link in a minute.")
 
 
+DRIVE_ROOT = "/content/drive/MyDrive"
+SNAPSHOT_FOLDER = "Hawk H3/Backups"
+SNAPSHOT_NAME = "jobs.sqlite3"
+
+
+def restore_snapshot(data_dir: str, drive_root: str = DRIVE_ROOT, folder: str = SNAPSHOT_FOLDER) -> str:
+    """Bring back the chats and jobs from the last run, when this runtime has none of its own.
+
+    A Colab runtime erases /content when it ends, so the API copies its database into Drive while it runs
+    (hawk_api/snapshot.py). This puts the last copy back before the server starts. An existing database
+    always wins: re-running the start cell mid-session must never replace live chats with an older copy.
+
+    Returns a line to print. It is never an error: a runtime with no Drive is still a working runtime.
+    """
+    target = os.path.join(data_dir, SNAPSHOT_NAME)
+    if os.path.exists(target):
+        return f"Keeping the chats already in {target}"
+    if not os.path.isdir(drive_root):
+        return "No Google Drive mounted, so this session's chats stay in this runtime only."
+    live = os.path.join(drive_root, folder, SNAPSHOT_NAME)
+    # .prev covers the one moment a copy is being rotated into place, and a copy that arrived truncated.
+    for candidate in (live, live + ".prev"):
+        try:
+            if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+                os.makedirs(data_dir, exist_ok=True)
+                shutil.copyfile(candidate, target)
+                megabytes = os.path.getsize(target) / 1_000_000
+                return f"Restored {megabytes:.1f} MB of chats and jobs from Drive ({os.path.basename(candidate)})."
+        except OSError as exc:
+            return f"Could not restore the chats from Drive ({exc}); starting fresh."
+    return "No earlier chats in Drive yet; starting fresh."
+
+
 def _write_lora_config(pack_dir: str, data_dir: str, turbo_lora: str | None) -> None:
     path = os.path.join(data_dir, "loras.json")
     if os.path.exists(path):
@@ -613,6 +647,9 @@ def start(
 
     data_dir = "/content/hawk_api_data" if os.path.isdir("/content") else os.path.abspath("hawk_api_data")
     _write_lora_config(pack_dir, data_dir, models["turbo_lora"])
+    # Before the API starts, and never inside _start_api: watch() and restart_api() call that again
+    # mid-session, and a restore there would drop an older database on top of a live one.
+    print(restore_snapshot(data_dir))
 
     env = dict(os.environ)
     env.update({
@@ -622,7 +659,7 @@ def start(
         "MAX_UPLOAD_MB": str(TUNNEL_UPLOAD_MB),
         "COMFY_INPUT_DIR": os.path.join(comfy_dir, "input"),
         "COMFY_OUTPUT_DIR": os.path.join(comfy_dir, "output"),
-        "HAWK_DRIVE_ROOT": "/content/drive/MyDrive",
+        "HAWK_DRIVE_ROOT": DRIVE_ROOT,
         "HAWK_UNET": models["unet_name"],
         "HAWK_CLIP": models["clip_name"],
         "HAWK_VIDEO_VAE": models["video_vae"],

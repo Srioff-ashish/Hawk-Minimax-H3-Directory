@@ -28,6 +28,7 @@ try:
     from aiohttp import web
 
     from hawk_api import agent as agent_module
+    from hawk_api import cast_talk
     from hawk_api.agent import AgentService, AgentStore, parse_reply
     from hawk_api.app import create_app
     from hawk_api.config import Settings
@@ -1635,6 +1636,86 @@ class Pieces(unittest.IsolatedAsyncioTestCase):
         view = agents.view(session["id"])
         self.assertEqual(view["session"]["status"], "idle")
         self.assertIn("server restart", view["messages"][-1]["content"]["text"])
+
+
+class Attribution(unittest.TestCase):
+    """Who a picture belongs to and who is in it, without a server: _attribution is pure enough to call."""
+
+    def setUp(self):
+        path = os.path.join(tempfile.mkdtemp(), "jobs.sqlite3")
+        service = SimpleNamespace(settings=Settings(token=TOKEN, data_dir=os.path.dirname(path)), atlas=None)
+        self.agents = AgentService(service, mcp=None, store=AgentStore(path))
+        self.session = {"id": "s1", "cast": [{"id": "m1", "name": "Maya", "persona": "stylist"},
+                                             {"id": "m2", "name": "Riya", "persona": "director"}]}
+
+    def attribute(self, prompt, **kwargs):
+        return self.agents._attribution(self.session, {"tool": "generate_image", "args": {"prompt": prompt}}, **kwargs)
+
+    def test_whoever_asked_owns_it_not_whoever_is_in_it(self):
+        found = self.attribute("a photo of Riya laughing", asked_by="Maya")
+        self.assertEqual(found["by"]["name"], "Maya", "asking for a photo is what makes it yours")
+        self.assertEqual([p["name"] for p in found["of"]], ["Riya"], "and Riya is the one in it")
+
+    def test_a_lora_file_name_is_not_a_mention_of_anyone(self):
+        action = {"tool": "generate_image",
+                  "args": {"prompt": "a marigold garland", "loras": [{"file": "riya_v2.safetensors"}]}}
+        found = self.agents._attribution(self.session, action)
+        self.assertIsNone(found["by"], "a file name is not somebody standing in the picture")
+        self.assertEqual(found["of"], [])
+
+    def test_a_first_name_two_of_them_share_names_neither(self):
+        session = {"id": "s2", "cast": [{"id": "a", "name": "Riya Sharma"}, {"id": "b", "name": "Riya Kapoor"}]}
+        found = self.agents._attribution(session, {"tool": "generate_image", "args": {"prompt": "Riya on the terrace"}})
+        self.assertIsNone(found["by"], "with two Riyas in the room, \"Riya\" picks out neither")
+        self.assertEqual(found["of"], [])
+
+    def test_nothing_to_go_on_means_nobody_rather_than_a_guess(self):
+        found = self.attribute("a diya on a windowsill")
+        self.assertIsNone(found["by"], "a made-up owner reads exactly like a real one once it is stored")
+
+    def test_a_group_shot_is_owned_by_one_of_the_people_in_it(self):
+        owners = {self.attribute("Maya and Riya on a rooftop")["by"]["name"] for _ in range(40)}
+        self.assertEqual(owners, {"Maya", "Riya"}, "somebody in the picture was holding the phone")
+        self.assertEqual(self.attribute("Maya and Riya on a rooftop")["by"]["how"], "group",
+                         "and it is marked a draw, so it never becomes a tag to filter on")
+
+    def test_the_user_can_own_a_picture_too(self):
+        action = {"tool": "generate_image", "args": {"prompt": "a diya"}, "by": "user"}
+        self.assertEqual(self.agents._attribution(self.session, action)["by"]["member"], "user")
+
+    def test_a_candid_is_by_one_person_and_of_another(self):
+        cast, names = self.session["cast"], ["Maya", "Riya"]
+        turn = {"make": "candid of Riya laughing", "act": "snap", "of": ["Riya"]}
+        self.assertEqual(self.agents._subjects_for(cast, names, 0, turn), ["Riya"],
+                         "Maya took it, so Maya is not in it")
+
+    def test_a_selfie_is_of_whoever_took_it(self):
+        cast, names = self.session["cast"], ["Maya", "Riya"]
+        self.assertEqual(self.agents._subjects_for(cast, names, 0, {"make": "me by the window", "act": "selfie"}),
+                         ["Maya"])
+
+
+class Turns(unittest.TestCase):
+    """The act/of fields a character can put on a turn."""
+
+    def test_a_turn_says_what_it_is_making_and_who_is_in_it(self):
+        turn = cast_talk.parse_turn('{"say": "hold still", "to": "Riya", "make": "a candid", "act": "snap", "of": ["Riya"]}')
+        self.assertEqual((turn["act"], turn["of"]), ("snap", ["Riya"]))
+
+    def test_an_act_without_anything_to_make_is_dropped(self):
+        turn = cast_talk.parse_turn('{"say": "hi", "to": "all", "act": "selfie"}')
+        self.assertNotIn("act", turn, "an act with nothing to make is noise, not an instruction")
+
+    def test_an_unknown_act_is_dropped_and_the_make_survives(self):
+        turn = cast_talk.parse_turn('{"say": "hi", "to": "all", "make": "a photo", "act": "nonsense"}')
+        self.assertEqual(turn["make"], "a photo")
+        self.assertNotIn("act", turn)
+
+    def test_every_name_in_a_line_is_found_not_only_the_first(self):
+        self.assertEqual(cast_talk.mentioned_all("Maya and Riya on a rooftop", ["Maya", "Riya"]), [0, 1])
+
+    def test_a_shared_first_name_matches_nobody(self):
+        self.assertEqual(cast_talk.mentioned_all("Riya on the terrace", ["Riya Sharma", "Riya Kapoor"]), [])
 
 
 if __name__ == "__main__":

@@ -48,7 +48,7 @@ None of these are required. When one is missing, the matching setting is skipped
 | Install | Unlocks | Why you'd want it |
 |---|---|---|
 | `pip install sageattention` (in ComfyUI's Python) | Model Loader → `attention: sage` | Faster sampling |
-| [ComfyUI-sol-attn](https://github.com/Saganaki22/ComfyUI-sol-attn) + Triton | Model Loader → `attention: sol scheduled` | Faster still on long / high-res segments |
+| [ComfyUI-SolAttn_triton](https://github.com/kijai/ComfyUI-SolAttn_triton) + Triton | Model Loader → `attention: sol scheduled` | Faster still on long / high-res segments |
 | [ComfyUI-VFI](https://github.com/GACLove/ComfyUI-VFI) | Director → `interpolation: 48 / 60 fps (RIFE)` | Smoother playback |
 | [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI) | **Load Video UI** node | Trim a reference video visually and get its audio |
 | [comfyui-deno-custom-nodes](https://github.com/Deno2026/comfyui-deno-custom-nodes) | **Deno Multi Image Loader** | Load many reference pictures in one node |

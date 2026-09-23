@@ -394,6 +394,10 @@
   .choose { border: 1px solid var(--accent); border-radius: 12px; padding: 12px; margin: 6px 0 10px; background: var(--surface); }
   .choose h4 { margin: 0 0 4px; font-size: 14px; }
   .choose .picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+  .choose .pick-wrap { position: relative; }
+  /* the zoom link is a sibling of the button: an <a> inside a <button> is invalid, and would also select the take */
+  .choose .zoom { position: absolute; top: 4px; right: 4px; z-index: 1; line-height: 1; text-decoration: none;
+                  background: rgba(0,0,0,.55); border-radius: 6px; padding: 3px 5px; font-size: 12px; }
   .choose .pick { border: 2px solid transparent; border-radius: 10px; padding: 0; background: none; cursor: pointer; position: relative; }
   .choose .pick img { display: block; width: 132px; height: 132px; object-fit: cover; border-radius: 8px; }
   .choose .pick[aria-pressed="true"] { border-color: var(--accent); }
@@ -806,7 +810,7 @@
               <label class="sr-only" for="agentTalkRounds">Rounds</label>
               <select class="select" id="agentTalkRounds" style="width:auto;height:32px" title="How many rounds they talk"><option value="3">3 rounds</option><option value="5" selected>5 rounds</option><option value="8">8 rounds</option><option value="10">10 rounds</option></select>
               <label class="sr-only" for="agentTalkMakes">Things they may make</label>
-              <select class="select" id="agentTalkMakes" style="width:auto;height:32px" title="How many images or videos the characters may have made while they talk"><option value="0">Make nothing</option><option value="1">Make up to 1</option><option value="2" selected>Make up to 2</option><option value="3">Make up to 3</option><option value="5">Make up to 5</option></select>
+              <select class="select" id="agentTalkMakes" style="width:auto;height:32px" title="How many images or videos EACH character may have made while they talk. The whole cast is capped at 8, so a big room can't order a dozen renders at once."><option value="0">Make nothing</option><option value="1">Up to 1 each</option><option value="2" selected>Up to 2 each</option><option value="3">Up to 3 each</option><option value="5">Up to 5 each</option></select>
               <button class="btn btn-sm" id="agentTalk" type="button" title="Each character speaks for itself, in turn, mostly to the others; press Stop any time">Let them talk</button>
               <label class="adaptive-toggle" id="agentWhispersBox" title="Whispers: start a message with @Name and only that character hears it; the others never learn it unless that character tells them."><input type="checkbox" id="agentWhispers"> 🤫 Whispers</label>
             </span>
@@ -1006,7 +1010,13 @@
             <label class="check"><input type="checkbox" id="driveExportImages"> Copy every generated image to Google Drive</label>
             <div class="field"><label class="label" for="driveExportImageFolder">Drive folder for images</label>
               <input class="input" id="driveExportImageFolder" placeholder="Hawk H3/Images"><span class="hint">Inside My Drive. Images go into a dated subfolder.</span></div>
-            <div class="row"><button class="btn btn-sm btn-primary" id="driveExportSave" type="button">Save</button><span class="hint" id="driveExportHint"></span></div>
+            <label class="check"><input type="checkbox" id="driveSnapshots"> Keep chats and jobs in Google Drive</label>
+            <div class="field"><label class="label" for="driveSnapshotFolder">Drive folder for chats</label>
+              <input class="input" id="driveSnapshotFolder" placeholder="Hawk H3/Backups"><span class="hint">A Colab runtime erases itself when it ends. This copies the chats, personas and job records to Drive so the next session can pick them up. Two files are kept there, and a copy is only written when something changed.</span></div>
+            <div class="field"><label class="label" for="driveSnapshotMinutes">Minutes between copies</label>
+              <input class="input" id="driveSnapshotMinutes" type="number" min="1" max="120" step="1" placeholder="10"><span class="hint">Anything made after the last copy is lost if the runtime ends, so a shorter gap loses less.</span></div>
+            <div class="row"><button class="btn btn-sm btn-primary" id="driveExportSave" type="button">Save</button><button class="btn btn-sm" id="driveSnapshotNow" type="button" title="Copy the chats to Drive right now">Back up chats now</button><span class="hint" id="driveSnapshotState"></span></div>
+            <div class="row"><span class="hint" id="driveExportHint"></span></div>
           </div>
         </section>
         <section class="card" style="grid-column:1/-1">
@@ -2418,6 +2428,9 @@
       ["Kind", asset.kind], ["Collection", asset.collection || "Uploads"], ["Size", bytes(asset.size)],
       ["Added", asset.created_at ? new Date(asset.created_at * 1000).toLocaleString() : ""],
       ["Tags", (asset.tags || []).map((t) => `#${t}`).join(" ")],
+      // who took it and who is in it: the same person for a selfie, different ones for a candid
+      ["Taken by", asset.by?.name || ""],
+      ["In the picture", (asset.of || []).map((p) => p.name).filter(Boolean).join(", ")],
       ["Made with", source.type === "generated" ? source.generator : ""],
       ["LoRAs", (source.loras || []).map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", ")],
       ["Prompt", source.prompt || ""], ["Asset id", asset.id],
@@ -2770,7 +2783,7 @@
     if (!prompt) return $("genPrompt").focus();
     const engine = genEngine();
     const refs = gen.refs.map((a) => a.id);
-    const body = { prompt, n: Number($("genCount").value), engine: refs.length && engine === "turbo" ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
+    const body = { prompt, n: Number($("genCount").value), engine: refs.length && ["turbo", "zimage"].includes(engine) ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
     if ($("genSize").value) body.size = $("genSize").value;
     if ($("genSeed").value !== "") body.seed = Number($("genSeed").value);
     if (refs.length && !$("genBoostField").hidden) body.ref_boost = Number($("genBoost").value);
@@ -3299,17 +3312,35 @@
     $("driveExportSegments").checked = settings.segments;
     $("driveExportImages").checked = settings.images;
     $("driveExportImageFolder").value = settings.image_folder || "";
+    $("driveSnapshots").checked = settings.snapshots !== false;
+    $("driveSnapshotFolder").value = settings.snapshot_folder || "";
+    $("driveSnapshotMinutes").value = settings.snapshot_minutes ?? 10;
+    // A backup nobody can see is a backup nobody trusts, so say plainly whether it has run.
+    const at = settings.snapshot_at;
+    $("driveSnapshotState").textContent = settings.snapshot_error
+      ? `Last copy failed: ${settings.snapshot_error}`
+      : at ? `Chats last copied ${new Date(at * 1000).toLocaleTimeString()} (${bytes(settings.snapshot_size || 0)}).`
+           : settings.snapshots === false ? "Chat backup is off."
+           : "No copy yet; the first one goes out after the next change.";
     $("driveExportHint").textContent = settings.mounted ? "" : "Mount Drive in the Colab notebook to turn this on.";
   }
   async function loadDriveExport() {
     try { paintDriveExport(await api("/v1/drive/export")); }
     catch (error) { $("driveMountChip").textContent = "Unavailable"; $("driveExportHint").textContent = error.message; }
   }
+  $("driveSnapshotNow").onclick = async () => {
+    try {
+      paintDriveExport(await post("/v1/drive/snapshot", {}));
+      toast("Chats backed up", "They will be here after the runtime restarts.", "ok", 3000);
+    } catch (error) { $("driveSnapshotState").textContent = error.message; }
+  };
   $("driveExportSave").onclick = async () => {
     try {
       paintDriveExport(await api("/v1/drive/export", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled: $("driveExportEnabled").checked, folder: $("driveExportFolder").value.trim() || "Hawk H3/Videos", segments: $("driveExportSegments").checked,
-          images: $("driveExportImages").checked, image_folder: $("driveExportImageFolder").value.trim() || "Hawk H3/Images" }) }));
+          images: $("driveExportImages").checked, image_folder: $("driveExportImageFolder").value.trim() || "Hawk H3/Images",
+          snapshots: $("driveSnapshots").checked, snapshot_folder: $("driveSnapshotFolder").value.trim() || "Hawk H3/Backups",
+          snapshot_minutes: Number($("driveSnapshotMinutes").value) || 10 }) }));
       toast("Delivery settings saved");
     } catch (error) { toast("Could not save", error.message, "bad"); }
   };
@@ -3665,9 +3696,11 @@
     const best = choose.best || choose.assets?.[0]?.asset_id || "";
     const picks = (choose.assets || []).filter((a) => a.thumb_url).map((a) => {
       const issues = (a.issues || []).join("; ");
-      return `<button type="button" class="pick" data-pick="${esc(a.asset_id)}" aria-pressed="${a.asset_id === best}"
+      const zoom = a.file_url
+        ? `<a class="zoom" href="${esc(a.file_url)}" target="_blank" rel="noopener" title="Open full size">\u{1F50D}</a>` : "";
+      return `<div class="pick-wrap">${zoom}<button type="button" class="pick" data-pick="${esc(a.asset_id)}" aria-pressed="${a.asset_id === best}"
         title="${esc(issues || "no issues listed")}"><img src="${esc(a.thumb_url)}" alt="${esc(a.asset_id)}" loading="lazy">
-        <span>${a.score != null ? `${esc(a.score)}/10 · ` : ""}${esc(a.asset_id.slice(0, 8))}</span></button>`;
+        <span>${a.score != null ? `${esc(a.score)}/10 · ` : ""}${esc(a.asset_id.slice(0, 8))}</span></button></div>`;
     }).join("");
     const acts = (choose.options || []).map((o) =>
       `<button type="button" class="btn ${o.id === "keep" ? "btn-primary" : ""}" data-choose="${esc(o.id)}"
@@ -3681,13 +3714,16 @@
     const act = event.target.closest("[data-choose]");
     const card = event.target.closest(".choose");
     if (!card || card.classList.contains("done")) return;
+    if (event.target.closest("a")) return;  // the zoom link opens the file; it never changes the choice
     if (pick) {
       card.querySelectorAll("[data-pick]").forEach((b) => b.setAttribute("aria-pressed", String(b === pick)));
       return;
     }
     if (!act) return;
     const chosen = card.querySelector('[data-pick][aria-pressed="true"]')?.dataset.pick || "";
-    const text = (act.dataset.reply || "").replace("{asset_id}", chosen || "the one you showed");
+    const every = [...card.querySelectorAll("[data-pick]")].map((b) => b.dataset.pick).join(", ");
+    const text = (act.dataset.reply || "").replace("{asset_ids}", every)
+                                          .replace("{asset_id}", chosen || "the one you showed");
     card.classList.add("done");
     $("agentInput").value = text;
     await sendAgentMessage();
@@ -3750,7 +3786,13 @@
         add(`<div class="note-line grow" title="${c.about ? `Adaptive: a private feeling only ${esc(c.speaker)} knows` : "Adaptive: remembered in this chat"}">${c.about ? "🔒" : "🌱"} ${c.speaker ? `${esc(c.speaker)}${about}: ` : ""}${esc(c.text || "")}</div>`);
         return;
       }
-      if (c.kind === "make") { add(`<div class="note-line talk" title="A character asked for this; the director is making it">🎨 ${esc(c.speaker || "")} wants: ${esc(c.text || "")}</div>`); return; }
+      if (c.kind === "make") {
+        const who = (c.of || []).filter(Boolean).join(", ");
+        const kind = { selfie: "a selfie", snap: "a photo of", group_shot: "a group photo of", share: "to share" }[c.act] || "";
+        const what = kind ? `${kind}${who ? ` ${esc(who)}` : ""}: ` : "wants: ";
+        add(`<div class="note-line talk" title="A character is taking this; the conversation carries on while it renders">🎨 ${esc(c.speaker || "")} ${what}${esc(c.text || "")}</div>`);
+        return;
+      }
       add(`<div class="note-line ${esc(c.kind || "")}">${linkify(c.text || "")}</div>`);
     }
   }

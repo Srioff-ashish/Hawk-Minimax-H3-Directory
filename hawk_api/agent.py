@@ -35,10 +35,15 @@ from .prompts import PLATFORM_RULES, render_agent_prompt
 log = logging.getLogger("hawk_api.agent")
 
 MAX_STEPS = 40
+#: Args a subject's name could plausibly appear in. Matching the whole args blob instead let a lora
+#: filename or a negative prompt decide who owned a picture.
+SUBJECT_FIELDS = ("prompt", "script", "story", "text", "brief")
+USER_OWNER_WORDS = ("user", "you", "me", "myself")
 MAX_CAST = 4  # characters in one chat
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
-MAX_TALK_MAKES = 5  # things the characters may have made during one "let them talk" (default 2)
+MAX_TALK_MAKES = 5  # things any one character may have made during one "let them talk" (default 2)
+MAX_TALK_MAKES_TOTAL = 8  # and across the whole cast, so a big room can't order a dozen renders at once
 MAKE_STEPS = 8  # model steps the director gets to make one thing
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 TURN_MAX_TOKENS = 4000  # room for reasoning models; a turn itself is short
@@ -380,6 +385,11 @@ def parse_reply(text: str) -> dict | None:
         for action, source in zip(clean, actions):
             if isinstance(source.get("by"), str) and source["by"].strip():
                 action["by"] = source["by"].strip()[:40]
+            raw = source.get("of")  # who is in the picture, as opposed to who took it
+            wanted = [raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []
+            of = [str(n).strip()[:40] for n in wanted if isinstance(n, str) and str(n).strip()]
+            if of:
+                action["of"] = of[:MAX_CAST]
         reply = {"say": say, "actions": clean, "done": bool(data.get("done"))}
         if data.get("pause"):
             reply["pause"] = True
@@ -464,6 +474,7 @@ class AgentService:
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
         self._awaiting_choice: dict[str, dict] = {}  # per chat: inspection wants a retake, the user has not picked yet
+        self._makes: dict[str, set[asyncio.Task]] = {}  # per chat: pictures still rendering beside the talk
         self._final: dict[str, str] = {}  # per running chat: the status it ends with
         settings = service.settings
         self.summary_model = settings.agent_summary_model
@@ -730,7 +741,11 @@ class AgentService:
         return {"session": session, "message": message}
 
     def talk(self, session_id: str, rounds: int = 5, makes: int = 2) -> dict:
-        """Let the characters of a group chat talk to each other for a few rounds."""
+        """Let the characters of a group chat talk to each other for a few rounds.
+
+        makes is per character, not for the room: a quiet character should still be able to ask for something
+        after a talkative one has had its fill. MAX_TALK_MAKES_TOTAL caps the cast as a whole.
+        """
         session = self.get_session(session_id)
         if session["status"] in ("running", "stopping") or session_id in self._tasks:
             raise Conflict("The agent is still working on this chat. Wait, or stop it first.")
@@ -781,6 +796,11 @@ class AgentService:
         try:
             if talk_rounds:
                 await self._talk(session_id, talk_rounds, makes)
+                # The conversation ran ahead of its pictures; wait for them before the chat says it is done,
+                # so Studio keeps polling at its working cadence until the last one has landed.
+                pending = self._makes.get(session_id) or set()
+                if pending:
+                    await asyncio.gather(*list(pending), return_exceptions=True)
             else:
                 last_user = next((m for m in reversed(self.store.messages(session_id)) if m["role"] == "user"), None)
                 private = (last_user or {}).get("content", {}).get("private_to", "") if last_user else ""
@@ -796,6 +816,8 @@ class AgentService:
             self._note(session_id, f"Agent error: {exc}", "error")
             self._final[session_id] = "error"
         finally:
+            for task in list(self._makes.pop(session_id, set())):
+                task.cancel()
             self._tasks.pop(session_id, None)
             self._stop.discard(session_id)
             self._joining.discard(session_id)
@@ -819,7 +841,8 @@ class AgentService:
             return True
         return False
 
-    async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "") -> dict | None:
+    async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "",
+                             subjects: tuple[str, ...] = ()) -> dict | None:
         """The full agent (persona or cast, tools, pipeline) works until it replies without actions. Returns the last
         reply, or None when it stopped. private_to: the user whispered to one character, so the answer is private too.
         asked_by: the character who asked for this while they were talking, so what it makes belongs to them."""
@@ -864,7 +887,7 @@ class AgentService:
             for action in reply["actions"]:
                 if session_id in self._stop:
                     break
-                await self._execute(session_id, action, asked_by)
+                await self._execute(session_id, action, asked_by, subjects)
             if (self._awaiting_choice.get(session_id) or {}).pop("blocked", False):
                 self._note(session_id, "Waiting for you to pick a take before generating again.", "warn")
                 return reply
@@ -876,6 +899,7 @@ class AgentService:
         started = time.monotonic()
         steps = 0
         spoke: list[int] = []
+        spent: dict[int, int] = {}  # makes used, per character
         last_index, last_text = self._last_speaker(session_id)
         for round_number in range(1, rounds + 1):
             if session_id in self._stop:
@@ -901,11 +925,25 @@ class AgentService:
                 if turn.get("grow"):
                     await self._grow(session_id, [{"speaker": names[index], **item} for item in turn["grow"]])
                 if turn.get("make"):
-                    if makes > 0:
-                        makes -= 1
-                        await self._make_for(session_id, names[index], turn["make"])
+                    # The budget is each character's own: one enthusiastic character used to spend the whole
+                    # talk's allowance before a quieter one ever asked for anything.
+                    if spent.get(index, 0) >= makes:
+                        self._note(session_id, f"{names[index]} wanted something made, but has already had {makes} this talk.", "warn")
+                    elif sum(spent.values()) >= MAX_TALK_MAKES_TOTAL:
+                        self._note(session_id, f"{names[index]} wanted something made, but this talk has made {MAX_TALK_MAKES_TOTAL} already.", "warn")
                     else:
-                        self._note(session_id, f"{names[index]} wanted something made, but this talk's limit is reached.", "warn")
+                        spent[index] = spent.get(index, 0) + 1
+                        subjects = tuple(self._subjects_for(cast, names, index, turn))
+                        act = turn.get("act", "")
+                        if act in ("selfie", "snap", "group_shot"):
+                            # It said what it was taking and of whom, so no director turn is needed and the
+                            # picture can render while the others keep talking.
+                            self.store.add_message(session_id, "note", {"text": turn["make"], "kind": "make",
+                                                                        "speaker": names[index], "act": act,
+                                                                        "of": list(subjects)})
+                            self._spawn_make(session_id, names[index], turn["make"], act, subjects)
+                        else:
+                            await self._make_for(session_id, names[index], turn["make"], act=act, of=subjects)
                 if turn.get("pause") and set(spoke) >= set(range(len(cast))):
                     return  # a pause counts once everyone has had a say; before that the talk goes on
 
@@ -947,7 +985,7 @@ class AgentService:
             memory=member.get("memory") or "(nothing older: everything is in the conversation below)",
             words=cast_talk.TURN_WORDS,
             adaptive=cast_talk.ADAPTIVE_TURN if session.get("adaptive") else "",
-            make_field=', "make": "optional"',
+            make_field=', "make": "optional", "act": "selfie|snap|share|group_shot", "of": ["names"]',
             grow_field=', "grow": []' if session.get("adaptive") else "",
             rules=PLATFORM_RULES,
         )
@@ -1002,57 +1040,184 @@ class AgentService:
             what = f"images {', '.join(ids)}" if ids else json.dumps(brief, ensure_ascii=False)[:200]
             return [f"[{content['tool']}: {what}]"]
         if role == "note" and content.get("kind") == "make":
-            return [f"[{content.get('speaker')} asked for this to be made: {content.get('text', '')}]"]
+            # The characters read this line back, so it has to say who took it and who is in it: a selfie
+            # and a candid of someone else are different events to react to.
+            of = ", ".join(str(n) for n in (content.get("of") or []) if n)
+            kind = {"selfie": "took a selfie", "snap": f"took a photo of {of}" if of else "took a photo",
+                    "group_shot": f"took a group photo of {of}" if of else "took a group photo",
+                    "share": "shared a picture"}.get(content.get("act"), "asked for this to be made")
+            return [f"[{content.get('speaker')} {kind}: {content.get('text', '')}]"]
         return []
 
-    def _owner_for(self, session: dict, action: dict, asked_by: str = "") -> dict | None:
-        """Who owns what this call makes, in a group chat.
-
-        The character marked on the action wins, then the one the character asked for it; a picture or video of
-        several characters belongs to a random one of them, which is how a group photo gets an owner at all. With
-        nobody named anywhere, a random member of the cast takes it."""
-        cast = cast_of(session)
-        if len(cast) < 2:
+    def _resolve_owner(self, session: dict, cast: list[dict], names: list[str], who: str) -> dict | None:
+        """A name (a character's, or the user's) as an owner record."""
+        key = (who or "").strip().lstrip("@").lower()
+        if not key:
             return None
-        names = [display_name(member, index, len(cast)) for index, member in enumerate(cast)]
-        text = json.dumps(action.get("args") or {}, ensure_ascii=False)
-        named = [index for index, name in enumerate(names)
-                 if name and re.search(rf"(?<![\w@])@?{re.escape(name.split()[0])}\b", text, re.IGNORECASE)]
-        index = find_member(cast, str(action.get("by") or "").strip())
-        if index is None and len(named) == 1:
-            index = named[0]
-        elif index is None and len(named) > 1:
-            index = random.choice(named)  # a group shot: one of the characters in it owns it
+        if key in USER_OWNER_WORDS:
+            return {"name": "You", "member": USER_KEY, "session": session["id"]}
+        index = find_member(cast, who)
         if index is None:
-            index = find_member(cast, asked_by)
-        if index is None:
-            index = random.randrange(len(cast))
+            return None
         return {"name": names[index], "member": cast[index].get("id", ""), "session": session["id"]}
 
-    def _take_ownership(self, session: dict, action: dict, result, asked_by: str = "") -> dict | None:
-        """Mark the assets (and the render job) a call produced as that character's own."""
+    def _attribution(self, session: dict, action: dict, asked_by: str = "",
+                     subjects: tuple[str, ...] = ()) -> dict:
+        """Who took this, and who is in it.
+
+        "by" is the photographer and "of" the subjects. They are the same person for a selfie and opposite
+        ones for a candid, and conflating them is how "Maya, take a photo of Riya" ended up as Riya's photo.
+
+        by: marked on the call -> the character who asked for it -> the one character the prompt names -> nobody.
+        of: marked on the call -> the subjects the caller already knows -> everyone the prompt names.
+
+        Whoever asked outranks a name in the description, because asking is evidence of authorship and being
+        described is evidence of being photographed. Nobody is invented: an owner we cannot work out is left
+        unset rather than drawn at random, since a guess is indistinguishable from a fact once it is stored.
+        """
+        cast = cast_of(session)
+        names = [display_name(member, index, len(cast)) for index, member in enumerate(cast)]
+        # Only the fields a person's name would actually appear in: the whole args blob also carries lora
+        # filenames, negatives and engine ids, and "riya_v2.safetensors" is not a mention of Riya.
+        args = action.get("args") or {}
+        text = " ".join(str(args.get(field) or "") for field in SUBJECT_FIELDS)
+        named = cast_talk.mentioned_all(text, names)
+
+        of: list[dict] = []
+        for who in (action.get("of") or ()) or subjects or ():
+            found = self._resolve_owner(session, cast, names, str(who))
+            if found and not any(p["member"] == found["member"] for p in of):
+                of.append({"name": found["name"], "member": found["member"]})
+        if not of:
+            of = [{"name": names[i], "member": cast[i].get("id", "")} for i in named]
+
+        by = self._resolve_owner(session, cast, names, str(action.get("by") or ""))
+        how = "marked" if by else ""
+        if by is None and asked_by:
+            by, how = self._resolve_owner(session, cast, names, asked_by), "asked"
+        if by is None and len(named) == 1:
+            by, how = self._resolve_owner(session, cast, names, names[named[0]]), "named"
+        if by is None and len(named) > 1:
+            # A picture of several of them was taken by one of them: whose phone it was is genuinely
+            # arbitrary, so the draw is the answer rather than a stand-in for one.
+            by, how = self._resolve_owner(session, cast, names, names[random.choice(named)]), "group"
+        if by:
+            by["how"] = how
+        return {"by": by, "of": of[:cast_talk.MAX_SUBJECTS]}
+
+    def _owner_for(self, session: dict, action: dict, asked_by: str = "",
+                   subjects: tuple[str, ...] = ()) -> dict | None:
+        """Who owns what this call makes. See _attribution."""
+        return self._attribution(session, action, asked_by, subjects)["by"]
+
+    def _take_ownership(self, session: dict, action: dict, result, asked_by: str = "",
+                        subjects: tuple[str, ...] = ()) -> dict | None:
+        """Mark the assets (and the render job) a call produced with who took them and who is in them."""
         if not isinstance(result, dict):
             return None
         assets = [a for a in result.get("assets") or [] if a.get("id") or a.get("asset_id")]
         job = result["id"] if result.get("kind") in ("plan", "render") and result.get("id") else None
-        owner = self._owner_for(session, action, asked_by) if (assets or job) else None
-        if not owner:  # a call that made nothing (inspect_image, list_references) belongs to nobody
+        if not (assets or job):  # a call that made nothing (inspect_image, list_references) belongs to nobody
+            return None
+        found = self._attribution(session, action, asked_by, subjects)
+        owner, of = found["by"], found["of"]
+        if not owner and not of:
             return None
         for asset in assets:
             try:
-                self.service.update_asset(asset.get("id") or asset["asset_id"], owner=owner)
-                asset["by"] = owner
+                self.service.update_asset(asset.get("id") or asset["asset_id"], owner=owner, of=of)
+                if owner:
+                    asset["by"] = owner
+                if of:
+                    asset["of"] = of
             except (NotFound, RequestError):
                 continue
-        if job:
+        if job and owner:
             self.service.set_job_owner(job, owner)
         return owner
 
 
-    async def _make_for(self, session_id: str, speaker: str, request: str) -> None:
-        """A character asked for something to be made: the director, with its tools, makes it and presents it."""
-        self.store.add_message(session_id, "note", {"text": request, "kind": "make", "speaker": speaker})
-        await self._director_turn(session_id, MAKE_STEPS, asked_by=speaker)
+    def _subjects_for(self, cast: list[dict], names: list[str], speaker_index: int, turn: dict) -> list[str]:
+        """Who is in what this character asked for, resolved to real cast names.
+
+        Named outright if they said so, else whoever the description names. A selfie is of the speaker; a
+        snap deliberately is not, because a candid is by one person and of another -- the case guessing from
+        the description always got backwards.
+        """
+        found = []
+        for who in turn.get("of") or ():
+            index = find_member(cast, str(who))
+            if index is not None and names[index] not in found:
+                found.append(names[index])
+        if not found:
+            found = [names[i] for i in cast_talk.mentioned_all(turn.get("make") or "", names)]
+        act = turn.get("act")
+        if act == "selfie" and names[speaker_index] not in found:
+            found.insert(0, names[speaker_index])
+        elif act == "group_shot" and not found:
+            found = list(names)
+        return found[:cast_talk.MAX_SUBJECTS]
+
+    def _avatars_for(self, session: dict, names: list[str]) -> list[str]:
+        """The avatar asset id of each named character, in order, skipping any who have none."""
+        cast = cast_of(session)
+        display = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
+        found = []
+        for name in names:
+            index = find_member(cast, name)
+            if index is None:
+                continue
+            avatar = str(cast[index].get("avatar_asset_id") or "")
+            if avatar and avatar not in found:
+                found.append(avatar)
+        return found[:cast_talk.MAX_SUBJECTS]
+
+    async def _snap_for(self, session_id: str, speaker: str, request: str, act: str, of: tuple[str, ...]) -> None:
+        """A character took a picture: make it straight away, without waking the director.
+
+        A turn that says what it is making and who is in it has already answered everything the director
+        would have reasoned out, so this calls the image engine itself. That is what lets it run beside the
+        conversation: the director rewrites the chat's summary as it works, and a second one doing that while
+        the characters are still talking would lose whichever of the two saved the session last. This writes
+        no session state at all -- only messages, which are append-only.
+        """
+        session = self.get_session(session_id)
+        refs = self._avatars_for(session, list(of))
+        action = {"tool": "generate_image", "args": {"prompt": request, "reference_asset_ids": refs},
+                  "by": speaker, "of": list(of)}
+        try:
+            result = await self.service.generate_images(request, reference_asset_ids=refs, engine="auto")
+            ok, error = True, None
+        except Exception as exc:
+            result, ok, error = None, False, str(exc) or type(exc).__name__
+        content = {"tool": "generate_image", "args": action["args"], "ok": ok,
+                   "result": result, "error": error, "act": act}
+        if ok:
+            owner = self._take_ownership(self.get_session(session_id), action, result, speaker, tuple(of))
+            if owner:
+                content["by"] = owner
+        self.store.add_message(session_id, "tool", content)
+
+    def _spawn_make(self, session_id: str, speaker: str, request: str, act: str, of: tuple[str, ...]) -> None:
+        """Start making it and let the conversation carry on. _run waits for these before it goes idle."""
+        task = asyncio.create_task(self._snap_for(session_id, speaker, request, act, of))
+        self._makes.setdefault(session_id, set()).add(task)
+        task.add_done_callback(lambda t: self._makes.get(session_id, set()).discard(t))
+
+    async def _make_for(self, session_id: str, speaker: str, request: str, *, act: str = "",
+                        of: tuple[str, ...] = ()) -> None:
+        """A character asked for something to be made: the director, with its tools, makes it and presents it.
+
+        The speaker and the subjects travel with the request, so what comes back is attributed from what the
+        character actually said rather than from guessing at names in the description.
+        """
+        note = {"text": request, "kind": "make", "speaker": speaker}
+        if act:
+            note["act"] = act
+        if of:
+            note["of"] = list(of)
+        self.store.add_message(session_id, "note", note)
+        await self._director_turn(session_id, MAKE_STEPS, asked_by=speaker, subjects=tuple(of))
 
     async def _remember(self, session: dict, member_id: str, force: bool = False) -> bool:
         """Fold older parts of the chat into one character's own memory (its point of view), with the cheap model."""
@@ -1177,6 +1342,29 @@ class AgentService:
         nxt = ladder[top + 1]
         return nxt if not image_engines.get(nxt).local else None
 
+    def _retake_args(self, asset_ids: list[str]) -> dict:
+        """What another take of these images would be, read off the assets themselves.
+
+        _step_up_engine picks the ladder from its args -- "edit" when there are references, local-only when
+        there are LoRAs -- and inspect_image is told none of that, only which images to look at. Inventing
+        {"engine": "auto"} therefore sent every edit down the generate ladder, where it could be offered
+        z-image/turbo, which takes no references at all. Generated assets record what made them.
+        """
+        args: dict = {"engine": "auto"}
+        refs: list[str] = []
+        loras: list = []
+        for asset_id in asset_ids:
+            source = (self.service.store.get_asset(asset_id) or {}).get("source") or {}
+            for ref in source.get("references") or []:
+                if str(ref) not in refs:
+                    refs.append(str(ref))
+            loras = loras or list(source.get("loras") or [])
+        if refs:
+            args["reference_asset_ids"] = refs
+        if loras:  # adult LoRAs included: only the local engines run them, so a retake must stay there
+            args["loras"] = loras
+        return args
+
     def _record_takes(self, session_id: str, verdict: dict) -> bool:
         """A batch that inspection rejects (every image "retry", or the best below PASS_SCORE) marks its engine failed.
 
@@ -1198,7 +1386,8 @@ class AgentService:
                 self._failed_engines.setdefault(session_id, set()).add(engine)
         return True
 
-    async def _execute(self, session_id: str, action: dict, asked_by: str = "") -> None:
+    async def _execute(self, session_id: str, action: dict, asked_by: str = "",
+                       subjects: tuple[str, ...] = ()) -> None:
         name, args = action["tool"], action["args"]
         stepped = await self._step_up_engine(session_id, args) if name == "generate_image" else None
         if stepped:
@@ -1229,7 +1418,7 @@ class AgentService:
             result, ok = {"_error": str(exc) or type(exc).__name__}, False
         if stepped and ok and isinstance(result, dict):
             result = {**result, "engine_note": f"An earlier take failed inspection, so engine auto used {stepped} this time."}
-        owner = self._take_ownership(self.get_session(session_id), action, result, asked_by) if ok else None
+        owner = self._take_ownership(self.get_session(session_id), action, result, asked_by, subjects) if ok else None
         content = {"tool": name, "args": args, "ok": ok, "result": result if ok else None,
                    "error": None if ok else result.get("_error")}
         if owner:
@@ -1378,12 +1567,13 @@ class AgentService:
             result = {"model": model, **verdict}
             if failures:
                 result["skipped_models"] = failures
-            nxt = await self._step_up_engine(session_id, {"engine": "auto"})
+            step_args = self._retake_args(ids)
+            nxt = await self._step_up_engine(session_id, step_args)
             paid = None
             if nxt:
                 result["next_engine"] = f"The next generate_image with engine auto will use {nxt}."
             else:
-                paid = await self._paid_rung(session_id, {"engine": "auto"})
+                paid = await self._paid_rung(session_id, step_args)
                 if paid:
                     spec = image_engines.get(paid)
                     price = IMAGE_PRICES.get(spec.price_key, 0.0)
@@ -1419,6 +1609,10 @@ class AgentService:
                            "thumb_url": shown.get("thumb_url"), "file_url": shown.get("file_url")})
         options = [{"id": "keep", "label": "Use this one",
                     "reply": "Keep image {asset_id} as it is. Don't take it again."}]
+        if len(assets) > 1:
+            # Judging a whole batch one take at a time is the tedious part; keeping them all is one answer.
+            options.append({"id": "keep_all", "label": f"Keep all {len(assets)}",
+                            "reply": "Keep all of these images as they are: {asset_ids}. Don't take them again."})
         if stepped:
             options.append({"id": "retry", "label": f"Try again on {image_engines.get(stepped).label}",
                             "reply": 'Try again with engine "auto".'})

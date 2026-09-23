@@ -135,7 +135,7 @@ models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors   (optio
 | Package | Enables |
 |---|---|
 | `sageattention` (pip) | `attention: sage` |
-| [ComfyUI-sol-attn](https://github.com/Saganaki22/ComfyUI-sol-attn) + Triton | `attention: sol scheduled` |
+| [ComfyUI-SolAttn_triton](https://github.com/kijai/ComfyUI-SolAttn_triton) + Triton | `attention: sol scheduled` |
 | [ComfyUI-VFI](https://github.com/GACLove/ComfyUI-VFI) | `interpolation: 48 / 60 fps (RIFE)` |
 | [WhatDreamsCost-ComfyUI](https://github.com/WhatDreamsCost/WhatDreamsCost-ComfyUI) | `Load Video UI` for trimming reference videos |
 | [comfyui-deno-custom-nodes](https://github.com/Deno2026/comfyui-deno-custom-nodes) | `Deno Multi Image Loader` for picture batches |
@@ -165,6 +165,6 @@ The script, tag and LoRA-stack logic is pure Python and is tested without ComfyU
 
 ## Credits
 
-Built on ComfyUI's MiniMax H3 nodes. LoRA modality split adapted from [ComfyUI-Plaguekind-Nodes](https://github.com/Plaguekind/ComfyUI-Plaguekind-Nodes). Sol attention via [ComfyUI-sol-attn](https://github.com/Saganaki22/ComfyUI-sol-attn). Atlas client from [HawkNodes](https://github.com/Srioff-ashish/HawkNodes). The planner's prompting guide is adapted from the MiniMax H3 Prompt Engineer system prompt used in the original workflow.
+Built on ComfyUI's MiniMax H3 nodes. LoRA modality split adapted from [ComfyUI-Plaguekind-Nodes](https://github.com/Plaguekind/ComfyUI-Plaguekind-Nodes). Sol attention via [ComfyUI-SolAttn_triton](https://github.com/kijai/ComfyUI-SolAttn_triton). Atlas client from [HawkNodes](https://github.com/Srioff-ashish/HawkNodes). The planner's prompting guide is adapted from the MiniMax H3 Prompt Engineer system prompt used in the original workflow.
 
 MIT License.
