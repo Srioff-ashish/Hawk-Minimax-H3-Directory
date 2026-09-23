@@ -1161,7 +1161,6 @@ class AgentService:
     def _avatars_for(self, session: dict, names: list[str]) -> list[str]:
         """The avatar asset id of each named character, in order, skipping any who have none."""
         cast = cast_of(session)
-        display = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
         found = []
         for name in names:
             index = find_member(cast, name)
