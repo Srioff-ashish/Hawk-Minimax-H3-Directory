@@ -74,10 +74,12 @@ class Script:
     segments: list[Segment]
     style: str = ""
 
-    def to_json(self, warnings: list[str] | None = None) -> str:
+    def to_json(self, warnings: list[str] | None = None, references_to_make: list[dict] | None = None) -> str:
         data: dict = {"style": self.style, "segments": [asdict(s) for s in self.segments]}
         if warnings:
             data["warnings"] = list(warnings)  # informational; parse_script ignores it
+        if references_to_make:
+            data["references_to_make"] = list(references_to_make)  # stills to generate before the render
         return json.dumps(data, indent=2, ensure_ascii=False)
 
 
@@ -381,6 +383,38 @@ def remap_tags(
 
 
 _LIST_FIELDS = (("pictures", "Picture"), ("poses", "Pose"), ("videos", "Video"), ("audios", "Audio"))
+
+
+REFERENCE_KINDS = ("picture", "pose")
+MAX_PLANNED_REFERENCES = 9
+
+
+def clean_reference_plan(data, available: dict[str, int] | None = None) -> list[dict]:
+    """The planner's ``references_to_make``: stills that do not exist yet, each with the job it does and a prompt
+    to generate it. Numbering continues after the references already connected, so the rows say what to make and
+    in which order to connect them. Malformed rows are dropped rather than failing a whole plan."""
+    rows = data if isinstance(data, list) else []
+    counts = {kind: (available or {}).get(kind.capitalize(), 0) for kind in REFERENCE_KINDS}
+    clean: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "picture").strip().lower()
+        prompt = " ".join(str(row.get("prompt") or "").split())
+        if kind not in REFERENCE_KINDS or not prompt:
+            continue
+        counts[kind] += 1
+        if counts[kind] > MAX_PLANNED_REFERENCES:
+            continue
+        segments = [n for n in (row.get("segments") or []) if isinstance(n, int) and n > 0]
+        clean.append({
+            "number": counts[kind],  # renumbered here: the model's own numbering is often off by one
+            "kind": kind,
+            "label": " ".join(str(row.get("label") or "").split())[:120],
+            "prompt": prompt[:1500],
+            "segments": sorted(set(segments)),
+        })
+    return clean
 
 
 def reference_counts_line(available: dict[str, int]) -> str:

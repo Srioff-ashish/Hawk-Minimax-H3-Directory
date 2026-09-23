@@ -137,6 +137,19 @@ Scale `detailed_description` (or `integrated_multimodal_description`) to the seg
 - Any sexual content involving anyone who appears under 18.
 - Copying a copyrighted melody.
 
+## Images this film still needs
+
+MiniMax H3 is a reference model: a beat with no reference image drifts in face, wardrobe and place. The request lists what is already attached; anything else the story needs, you ask for in `references_to_make`, and the renderer's operator generates it before the render.
+
+- **Number them after the attached ones.** One picture attached means the next is `<Picture 2>`; poses count separately. Never renumber or reuse an attached reference's number. Stay inside the budget the CONSTRAINTS give you. These numbers describe the order to connect them in later; they are not usable in this script's segments, and no segment prompt may write a tag for one.
+- **What earns a picture:** one identity sheet per recurring character (head and shoulders, neutral light, the face the film keeps), each distinct location, each outfit or look change, and a hero prop or product the story turns on.
+- **Reuse the identity sheet.** A character that appears in five segments needs one requested picture whose `segments` names all five, not five pictures. Ask for a second picture of the same person only when the look itself changes.
+- **Every hard cut needs one.** A segment with `"continuity": "off"` starts fresh with no carried frames, so it needs a picture: an attached one in its `pictures`, or a requested one naming it in `segments`. Otherwise the face and the place are whatever the model invents.
+- **`"kind": "pose"`** only where the body action is the point (a throw, a turn, a reach, a dance step). A pose guides the body only, never identity or clothing, so that segment still needs its identity picture too.
+- **Write the prompt for an image model**, 40-100 words: subject in concrete visual language (textures, materials, skin, fabric), then camera and composition (close-up, low-angle, 85mm, shallow depth of field), lighting, and a rendering word that sets the look (editorial photography, film grain, candid phone snapshot). No keyword lists, no "masterpiece, 8K", no negatives.
+- **`label`** is the one narrow job that reference has ("Meera's face and hair", "Rooftop at dusk, wide", "Pose: throwing the diya"), and `segments` lists the segment numbers that use it.
+- Keep the total small: every extra reference costs a generation and slows the render. Ask for what the story cannot hold together without.
+
 ## Output
 
 Return ONLY a JSON object, no commentary, exactly in this shape:
@@ -155,6 +168,10 @@ Return ONLY a JSON object, no commentary, exactly in this shape:
       "continuity": "inherit",
       "prompt": "subject_definitions:\n<Subject 1> is ...\n\nsummary:\n...\n\nretention_analysis:\n...\n\ndetailed_description:\n[Shot 1] ...\n\noverall_soundscape: ...\n\nnon_diegetic_music: N/A"
     }
+  ],
+  "references_to_make": [
+    {"number": 2, "kind": "picture", "label": "Rooftop at dusk, wide", "segments": [2, 3],
+     "prompt": "image prompt for the still that has to be generated first"}
   ]
 }
 
@@ -162,3 +179,4 @@ Return ONLY a JSON object, no commentary, exactly in this shape:
 - `continuity` is one of "inherit", "off", "last_frame", "tail_5", "tail_22", "tail_39" ("inherit" uses the renderer's setting; the first segment's value is ignored).
 - Use `[]` for a reference kind a segment does not use. `poses` lists the poses mentioned in that segment's prompt.
 - Lists only contain numbers that exist in the REFERENCES list for that kind (the request states how many of each are connected). Never put a picture's number in `poses`, or a pose's number in `pictures`.
+- `references_to_make` lists the stills that do not exist yet (see below). With everything the film needs already attached, return `[]`. It is a shopping list for the operator only: never put one of its numbers in a segment's `pictures` / `poses`, which name connected references and nothing else.
