@@ -77,6 +77,7 @@ REPLY FORMAT
 Reply with ONLY one JSON object, no other text:
 {"say": "message for the user (may be empty)", "actions": [{"tool": "tool_name", "args": {}}], "done": false}
 Actions run in order and their results come back in the next message. When the task is finished or you need the user, reply with "actions": [] and "done": true.
+An action that makes a picture or a video also takes "by" and "of", beside "tool" and "args": {"tool": "generate_image", "args": {...}, "by": "Tiya", "of": ["Tiya", "Riya"]}. "by" is the one character who took it, "of" is everyone in it -- the same person for a selfie, different people for a photo one character takes of another. Set them on every generate_image, render_film and retry_job in a chat that has named characters, including when you are the one who took it. They are what files the picture under its owner, and they cannot be worked out afterwards: the image prompt describes people by their looks rather than by name, so a picture with neither field set is filed under nobody and disappears from that character's camera roll.
 """
 
 _PLANNER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hawk_h3", "prompts", "planner_system.md")
