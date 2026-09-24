@@ -1587,7 +1587,8 @@ class AgentService:
         log.warning("inspect_image failed on every model: %s", failures)
         raise RequestError("No vision model could inspect these images (" + "; ".join(f[:300] for f in failures) + "). "
                            "Don't regenerate only because inspection is unavailable: show the images and let the user judge. "
-                           "For a retake without LoRAs use engine \"seedream\"; LoRA images (adult ones included) only come from local Krea 2.")
+                           "For a retake without LoRAs use engine \"seedream\"; LoRA images (adult ones included) only come "
+                           "from the local engines.")
 
     def _offer_choice(self, session_id: str, verdict: dict, stepped: str | None, paid: str | None) -> dict:
         """What inspection rejected, handed back to the user to decide on.

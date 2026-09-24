@@ -32,7 +32,8 @@ class LoraIn(BaseModel):
 
 
 class ImageLoraIn(BaseModel):
-    name: str = Field(description="A Krea 2 LoRA file from image_options, or a unique part of its name such as 'realism'.")
+    name: str = Field(description="A LoRA file from image_options, for the family of the local engine that will run "
+                                  "(Qwen Image 2.1 or Krea 2), or a unique part of its name such as 'realism'.")
     strength: float | None = Field(None, ge=-4, le=4, description="Omit for the LoRA's recommended strength; 0 leaves it out.")
 
 
@@ -108,7 +109,11 @@ class VideoRequest(BaseModel):
 
 class ImageRequest(BaseModel):
     prompt: str = Field(min_length=1, description="What the image should show, or how to change the reference images.")
-    reference_asset_ids: list[str] = Field(default_factory=list, max_length=10, description="Image assets to edit or combine. Krea 2 edit (auto/local) takes 1, or 2: the scene first, then the person; Seedream edit takes up to 10.")
+    reference_asset_ids: list[str] = Field(default_factory=list, max_length=16, description=
+        "Image assets to edit or combine. Qwen Image 2.1 (auto/local) takes up to 16: the first is the canvas whose "
+        "framing and untargeted content survive and whose size the output follows, the rest supply material. Refer to "
+        "them in the prompt as <image1>, <image2> in this order -- nothing labels them otherwise. Krea 2 takes 1, or 2 "
+        "with the scene first and the person second; Seedream edit takes up to 10.")
     model: str | None = Field(None, description="Atlas image model or alias: 'turbo' (z-image/turbo, the text-to-image default: fast, ~$0.01, no edits) "
                               "'seedream' (Seedream v5.0 Pro: best quality, ~$0.036 up to 2.36 MP, ~$0.072 above) or 'seedream-lite' "
                               "(Seedream v5.0 Lite: 2K+ output for ~$0.032). Reference images use the matching Seedream edit.")
@@ -116,10 +121,17 @@ class ImageRequest(BaseModel):
                       "stays in Pro's cheaper 1.5K tier (e.g. 1328x1776); larger, like 2048x2048, bills the 2K tier at twice the price. Omit for the default.")
     n: int = Field(1, ge=1, le=4, description="How many images.")
     seed: int | None = Field(None, ge=0)
-    engine: str | None = Field(None, description="auto (default: local Krea 2 when idle, else z-image/turbo, else Seedream), local, turbo, seedream or seedream-lite.")
-    loras: list[ImageLoraIn] = Field(default_factory=list, description="Krea 2 LoRAs for local generation (file name or a unique part, optional strength).")
-    steps: int | None = Field(None, ge=1, le=50, description="Local Krea 2 steps; default 8 (or the LoRA's recommendation).")
-    ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit likeness dial: 4 (default) strong likeness, 1 looser and more creative, above 10 breaks removals.")
+    engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then Krea 2, then "
+                               "z-image/turbo, then Seedream), or one of qwen21, krea2, zimage, local, turbo, seedream, "
+                               "seedream-lite. 'klein' still resolves, to qwen21.")
+    loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "
+                                     "engine's family (file name or a unique part, optional strength). Qwen Image 2.1 "
+                                     "always adds its repair LoRA on top, whatever is named here.")
+    steps: int | None = Field(None, ge=1, le=50, description="Steps for the local engine. Omit for its default: "
+                              "Qwen Image 2.1 30, Krea 2 8, or a LoRA's own recommendation.")
+    ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit only, ignored by every other engine: "
+                                   "likeness dial, 4 (default) strong likeness, 1 looser and more creative, above 10 "
+                                   "breaks removals. On Qwen Image 2.1 say what stays in the prompt instead.")
     negative: str = Field("", max_length=2000, description=
         "What to keep out, for the local engines only (Atlas ignores it). It has no effect while the engine samples "
         "at cfg 1.0 -- Krea 2 Turbo and Z-Image -- because guidance at cfg 1 collapses to the positive prompt. On "
@@ -129,7 +141,8 @@ class ImageRequest(BaseModel):
         "working; too high posterises (blown greens and blues, banded surfaces). Qwen Image 2.1 defaults to 2.0, "
         "and drops to 1.0 when its adult LoRA is attached; Krea 2 Turbo and Z-Image are trained for 1.0 and "
         "should be left there.")
-    max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult Krea 2 LoRAs one image may stack (up to 3; a note warns above a combined strength of 2.0). Lower it to be stricter.")
+    max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult LoRAs one image may stack (up to 3; a note "
+                                 "warns above a combined strength of 2.0). Lower it to be stricter.")
 
 
 class AssetUpdate(BaseModel):

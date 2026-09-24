@@ -326,5 +326,32 @@ class MirroredConstants(unittest.TestCase):
                                   "with a kind and a strength")
 
 
+try:
+    from hawk_api.schemas import ImageRequest
+except ImportError as exc:  # pragma: no cover
+    ImageRequest = None
+    _SCHEMA_WHY = str(exc)
+
+
+@unittest.skipIf(ImageRequest is None, "schema test dependencies missing")
+class TheRequestSchemaAndTheEngines(unittest.TestCase):
+    """The request schema is checked before any engine is chosen, so a cap lower than an engine's
+    own reach refuses references the engine would have accepted, and no engine code ever runs."""
+
+    def test_the_reference_cap_reaches_the_widest_engine(self):
+        widest = max(e.max_refs for e in ie.ENGINES.values())
+        cap = next(m.max_length for m in ImageRequest.model_fields["reference_asset_ids"].metadata
+                   if getattr(m, "max_length", None) is not None)
+        self.assertGreaterEqual(cap, widest,
+                                f"the schema stops at {cap} references but {widest} are usable, so the widest "
+                                "engine can never be given a full set")
+
+    def test_a_full_set_of_references_is_accepted(self):
+        widest = max(e.max_refs for e in ie.ENGINES.values())
+        request = ImageRequest(prompt="put her at the table", reference_asset_ids=[f"a{i}" for i in range(widest)])
+        self.assertEqual(len(request.reference_asset_ids), widest,
+                         "every reference the widest engine takes should survive validation")
+
+
 if __name__ == "__main__":
     unittest.main()

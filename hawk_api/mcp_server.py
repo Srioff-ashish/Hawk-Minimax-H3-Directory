@@ -106,22 +106,33 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         return {"assets": updated}
 
     @mcp.tool(description=(
-        "Generate or edit images. engine 'auto' (default, text only) tries local Krea 2 on this GPU (free; used when installed "
-        "and ComfyUI is idle), then Atlas z-image/turbo (about $0.01), then Seedream v5.0 Pro. engine 'local', 'turbo', "
-        "'seedream' or 'seedream-lite' picks one; Seedream Pro costs about $0.036 an image up to 2.36 MP and $0.072 above "
-        "(e.g. 2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
-        "$0.032, a little below Pro in quality. Results carry cost_usd for Atlas images. the result says which engine made it and what was skipped (tried). loras (local Krea 2 only): "
-        "[{name, strength}] from image_options, e.g. a realism or detail LoRA for photo portraits, a style LoRA for a look; follow "
-        "the GO-TO / AVOID notes. The GO-TO adult pair (SNOFS + Mystic XXX) is attached to local generations automatically; naming your own adult LoRA replaces it, up to 3. "
-        "Edits: with reference_asset_ids, 'auto' / 'local' use Krea 2 Identity Edit on this GPU when installed and idle (free; "
-        "1 image, or 2: the scene first, then the person to place in it; plain-English instructions like 'Change her outfit "
-        "to a red raincoat', 'Place this person at the cafe table'; ref_boost is the likeness dial: 4 default, 1 looser, "
-        "keep it under 10), else Seedream edit (up to 10 images; also 'seedream'). z-image can't edit. Keep a face, change "
-        "outfit, pose, scene, light or style, make variations. Krea 2 edits of uploaded photos (not images made here) are "
-        "refused if sexual or with adult LoRAs. Returns new image assets (asset_id, thumb_url) that work as picture "
-        "references in plan_film and render_film, e.g. to lock a character's identity across segments. size like 1024x1536 "
-        "or 1536x1536 (z-image: 512-2048 a side; Seedream snaps to its nearest preset) is optional; n is 1-4. Write rich, "
-        "specific prompts: subject, face, hair, expression, outfit, setting, light, camera and lens, mood, style. Never create sexual content involving anyone who appears under 18, or sexual or nude images of real, identifiable people."
+        "Generate or edit images. engine 'auto' (default) tries local Qwen Image 2.1 on this GPU (free; used when "
+        "installed and ComfyUI is idle), then local Krea 2, then Atlas z-image/turbo (about $0.01), then Seedream v5.0 "
+        "Pro. engine 'qwen21', 'krea2', 'zimage', 'local', 'turbo', 'seedream' or 'seedream-lite' picks one ('klein' "
+        "still resolves, to qwen21); Seedream Pro costs about $0.036 an image up to 2.36 MP and $0.072 above (e.g. "
+        "2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
+        "$0.032, a little below Pro in quality. Results carry cost_usd for Atlas images. The result says which engine "
+        "made it and what was skipped (tried). loras (local engines only): [{name, strength}] from image_options, from "
+        "the family of the engine that will run -- a Qwen 2.1 LoRA cannot go on Krea 2 or the reverse; follow the GO-TO "
+        "/ AVOID notes. Qwen Image 2.1 always adds its own repair LoRA, and each family's adult default is attached to "
+        "local generations automatically; naming your own adult LoRA replaces that default, up to 3. "
+        "Prompts: Qwen 2.1 wants a long paragraph describing the finished frame as if you were looking at it -- medium "
+        "and style first, then the background, then the frame walked with positional phrases, light its own sentence, "
+        "and text to be rendered in straight double quotes. Give ages as a life stage ('in her thirties'), never a "
+        "number of years. No 'masterpiece, 8K'. "
+        "Edits: with reference_asset_ids, 'auto' / 'local' use Qwen Image 2.1 on this GPU when idle (free; up to 16 "
+        "images). Refer to them in the prompt as <image1>, <image2> in the order given -- nothing labels them for you, "
+        "so 'the woman in the second photo' points at nothing. <image1> is the canvas: its framing and untargeted "
+        "content survive and the output takes its size. Lead with the operation, name only what changes, and say what "
+        "stays ('Keep the room and the lighting of <image1> exactly as they are'); to keep a face, point at its image "
+        "rather than describing it, because describing it makes the model repaint it. Krea 2 (engine 'krea2') is the "
+        "1-or-2 image alternative -- scene first, then the person -- and is the only engine using ref_boost (likeness "
+        "dial: 4 default, 1 looser, under 10). Seedream edit takes up to 10 ('seedream'). z-image can't edit. "
+        "Local edits of uploaded photos (not images made here) are refused if sexual or with adult LoRAs. Returns new "
+        "image assets (asset_id, thumb_url) that work as picture references in plan_film and render_film, e.g. to lock "
+        "a character's identity across segments. size like 1024x1536 or 1536x1536 (z-image: 512-2048 a side; Seedream "
+        "snaps to its nearest preset) is optional; n is 1-4. Never create sexual content involving anyone who appears "
+        "under 18, or sexual or nude images of real, identifiable people."
     ))
     async def generate_image(
         prompt: str,
@@ -141,9 +152,11 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
                                                  ref_boost=None if ref_boost is None else max(0.0, min(20.0, ref_boost))))
 
     @mcp.tool(description=(
-        "Image engines and Krea 2 LoRAs: whether local Krea 2 is installed and busy (a video render is using ComfyUI), and "
-        "each LoRA's file, kind (realism, detail, style, adult), label, default strength and range, trigger and notes. Call it "
-        "before choosing loras for generate_image."
+        "Image engines and their LoRAs: the generate and edit ladders with each engine's max_refs and whether it is "
+        "ready, which local engines are installed and whether ComfyUI is busy (a video render), and per family each "
+        "LoRA's file, kind (realism, detail, style, adult), label, default strength and range, trigger and notes. Call "
+        "it before choosing loras for generate_image, and read lora_family off the engine that will run: a LoRA only "
+        "works on its own family."
     ))
     async def image_options() -> dict:
         return await run(service.image_options())
