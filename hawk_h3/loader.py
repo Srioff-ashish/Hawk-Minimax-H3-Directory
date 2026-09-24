@@ -1,8 +1,8 @@
 """HawkH3ModelLoader -- the stock template's whole "Models" group in one node.
 
-UNET -> MiniMax H3 sigma shift -> LoRA stack -> Sol attention -> Sage attention,
-in the same order the reference workflow chains them, plus the text encoder and
-both VAEs. The Director takes the resulting pipe; the raw MODEL / CLIP / VAE
+UNET -> MiniMax H3 sigma shift -> LoRA stack -> Sage attention -> Sol attention,
+plus the text encoder and both VAEs. The reference workflow chains Sol before
+Sage; we do the reverse, for the reason in ``apply_attention``. The Director takes the resulting pipe; the raw MODEL / CLIP / VAE
 outputs are there for anything else in the graph.
 """
 
@@ -46,40 +46,17 @@ def _choices(folder: str, preferred: str, *hints: str) -> tuple[list[str], str]:
 
 def apply_attention(model, mode: str, tau_start: float, tau_end: float):
     """Optional attention backends. Each one degrades to a logged no-op when its
-    package is missing, so a shared workflow still runs on a plainer machine."""
-    applied: list[str] = []
+    package is missing, so a shared workflow still runs on a plainer machine.
 
-    if mode.startswith("sol"):
-        # "SolAttnPatch" is kijai's Triton port; the older Saganaki22 pack called it
-        # MiniMaxH3ScheduledSolAttentionPatch and is no longer published.
-        patch_cls = (nodes.NODE_CLASS_MAPPINGS.get("SolAttnPatch")
-                     or nodes.NODE_CLASS_MAPPINGS.get("MiniMaxH3ScheduledSolAttentionPatch"))
-        if patch_cls is None:
-            logger.warning(
-                "HawkH3: 'sol' needs ComfyUI-SolAttn_triton "
-                "(github.com/kijai/ComfyUI-SolAttn_triton) and Triton; continuing without it."
-            )
-        else:
-            try:
-                if hasattr(patch_cls, "execute"):
-                    # The port takes one threshold plus the sampling window it is active over. The old
-                    # pack ramped tau from start to end; upstream has no equivalent any more, so
-                    # tau_start is the threshold and tau_end is only reported.
-                    model = patch_cls.execute(
-                        model, float(tau_start), 0.2, 0.9, 4096, True,
-                        "exact_kv_and_rows", False, "2d_frame", "", False,
-                    )[0]
-                    applied.append(f"sol tau {tau_start:g}")
-                else:
-                    # enabled, tau_start, tau_end, curve, min_tokens, strict, dense_percent,
-                    # thresh_type, int8_qk, int8_pv, sink_conditioning, dense_blocks
-                    model = patch_cls().patch(
-                        model, True, float(tau_start), float(tau_end), "linear", 4096, False,
-                        0.0, "diag", False, False, "exact_kv", "",
-                    )[0]
-                    applied.append(f"sol tau {tau_start:g}->{tau_end:g}")
-            except Exception as exc:
-                logger.warning("HawkH3: Sol attention patch failed (%s); continuing without it.", exc)
+    Sage is applied FIRST, which is not the order the reference workflow uses. Both
+    backends write the same ``transformer_options["optimized_attention_override"]`` slot,
+    and Sol reads whatever is already in it and calls that for every block it declines --
+    masked attention, blocks outside its sigma window, anything under ``min_tokens``.
+    Applying Sol first and Sage second silently overwrites Sol's routing while leaving its
+    object patches in place: you pay Sol's overhead and get none of its speedup, and the
+    summary still reports both as applied.
+    """
+    applied: list[str] = []
 
     if mode.endswith("sage"):
         from comfy.ldm.modules import attention as comfy_attention
@@ -97,6 +74,51 @@ def apply_attention(model, mode: str, tau_start: float, tau_end: float):
             options["optimized_attention_override"] = attention_override_sage
             model.model_options["transformer_options"] = options
             applied.append("sage")
+
+    if mode.startswith("sol"):
+        # "SolAttnPatch" is kijai's Triton port; the older Saganaki22 pack called it
+        # MiniMaxH3ScheduledSolAttentionPatch and is no longer published.
+        patch_cls = (nodes.NODE_CLASS_MAPPINGS.get("SolAttnPatch")
+                     or nodes.NODE_CLASS_MAPPINGS.get("MiniMaxH3ScheduledSolAttentionPatch"))
+        if patch_cls is None:
+            logger.warning(
+                "HawkH3: 'sol' needs ComfyUI-SolAttn_triton "
+                "(github.com/kijai/ComfyUI-SolAttn_triton) and Triton; continuing without it."
+            )
+        else:
+            before = model
+            try:
+                if hasattr(patch_cls, "execute"):
+                    # The port takes one threshold plus the sampling window it is active over. The old
+                    # pack ramped tau from start to end; upstream has no equivalent any more, so
+                    # tau_start is the threshold and tau_end is only reported.
+                    # Positional, in the port's own schema order:
+                    #   model, tau, start_percent, end_percent, min_tokens, int8_qk,
+                    #   sink_conditioning, morton, morton_curve, dense_blocks, verbose
+                    model = patch_cls.execute(
+                        model, float(tau_start), 0.2, 0.9, 4096, True,
+                        "exact_kv_and_rows", False, "2d_frame", "", False,
+                    )[0]
+                    applied.append(f"sol tau {tau_start:g}")
+                else:
+                    # enabled, tau_start, tau_end, curve, min_tokens, strict, dense_percent,
+                    # thresh_type, int8_qk, int8_pv, sink_conditioning, dense_blocks
+                    model = patch_cls().patch(
+                        model, True, float(tau_start), float(tau_end), "linear", 4096, False,
+                        0.0, "diag", False, False, "exact_kv", "",
+                    )[0]
+                    applied.append(f"sol tau {tau_start:g}->{tau_end:g}")
+            except Exception as exc:
+                logger.warning("HawkH3: Sol attention patch failed (%s); continuing without it.", exc)
+                model = before
+
+    # A backend that reports as applied but left no override in place is the failure that
+    # started this: it looks fast in the summary and samples dense. Say so instead.
+    if applied and "optimized_attention_override" not in model.model_options.get("transformer_options", {}):
+        logger.warning(
+            "HawkH3: %s reported as applied but no attention override is installed; "
+            "sampling will fall back to ComfyUI's default attention.", " + ".join(applied)
+        )
 
     return model, applied
 
