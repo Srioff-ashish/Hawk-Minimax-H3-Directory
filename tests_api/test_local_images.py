@@ -353,5 +353,20 @@ class TheRequestSchemaAndTheEngines(unittest.TestCase):
                          "every reference the widest engine takes should survive validation")
 
 
+class ThePromptKeptOnAnAsset(unittest.TestCase):
+    """What the library shows for a picture, and the only thing that makes one reproducible by hand."""
+
+    def test_a_full_length_qwen_prompt_survives_being_recorded(self):
+        from hawk_api.jobs import PROMPT_RECORD_LIMIT
+
+        # The agent is told to write Qwen a paragraph of four to five hundred words. At an average of
+        # six characters a word with its spaces, that is the length the record has to hold.
+        longest_asked_for = 500 * 6
+        self.assertGreaterEqual(
+            PROMPT_RECORD_LIMIT, longest_asked_for,
+            f"prompts are written up to about {longest_asked_for} characters but only "
+            f"{PROMPT_RECORD_LIMIT} are kept, so the library shows a sentence or two and the rest is lost")
+
+
 if __name__ == "__main__":
     unittest.main()

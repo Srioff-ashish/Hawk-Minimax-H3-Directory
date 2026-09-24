@@ -253,6 +253,13 @@ def asset_kind(filename: str, content_type: str | None) -> str:
 # ------------------------------------------------------------------- store
 
 
+#: How much of an image's prompt is kept on the asset. It was 500, which fitted the keyword-style prompts
+#: the earlier engines wanted but cuts a Qwen Image 2.1 prompt off in its second sentence -- that model is
+#: asked for four to five hundred *words*, so the record kept about a seventh of it, ending mid-word. The
+#: prompt is what makes a picture reproducible by hand, so it is stored whole at any length anyone writes.
+PROMPT_RECORD_LIMIT = 4000
+
+
 class Store:
     _SCHEMA = """
     CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at REAL NOT NULL);
@@ -1138,7 +1145,7 @@ class HawkService:
         # "engine" is the registry id; the agent reads it to know which rung made an image, instead of
         # guessing from the model name. Assets written before this field fall back to image_engines.id_for_tag.
         source = {"type": "generated", "engine": engine_id or image_engines.id_for_tag(engine_tag), "generator": model,
-                  "prompt": prompt.strip()[:500], "references": list(reference_asset_ids or [])}
+                  "prompt": prompt.strip()[:PROMPT_RECORD_LIMIT], "references": list(reference_asset_ids or [])}
         if extra and extra.get("loras"):
             source["loras"] = extra["loras"]
         assets = []
