@@ -613,8 +613,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_engine_order_is_a_setting(self):
         view = (await self.http.get("/v1/images/engines")).json()
-        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["klein", "krea2", "zimage", "turbo", "seedream"])
-        self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["klein", "krea2", "seedream"])
+        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["qwen21", "krea2", "seedream"])
         self.assertEqual(view["busy"]["mode"], "fall_through", "unchanged until the user says otherwise")
 
         # the agent reads the live order from image_options, so an edited prompt can't leave it stale
@@ -625,7 +625,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         ready = [r["engine"] for r in options["generate_ladder"] if r["ready"] and r["enabled"]]
         self.assertEqual(ready, ["turbo", "seedream"], "the disabled lite engine is ready but not in play")
         self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]],
-                         ["klein", "krea2", "zimage", "turbo", "seedream"])
+                         ["qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
 
         # put Seedream first and the next image goes straight there, with no local attempt to skip past
@@ -640,8 +640,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         # every engine is listed with whether it can actually run, so the UI can show them all honestly
         ladder = {r["engine"]: r for r in (await self.http.get("/v1/images/options")).json()["generate_ladder"]}
-        self.assertEqual(ladder["klein"]["ready"], False, "its weights are not on this pod")
-        self.assertIn("flux-2-klein", ladder["klein"]["why_not"], "say which file is missing")
+        self.assertEqual(ladder["qwen21"]["ready"], False, "its weights are not on this pod")
+        self.assertIn("qwen_image_2.1", ladder["qwen21"]["why_not"], "say which file is missing")
         self.assertEqual(ladder["seedream"]["ready"], True)
         self.assertEqual(ladder["krea2"]["ready"], False, "Krea 2 is not installed in this fixture")
         self.assertIn("not on this pod", ladder["krea2"]["why_not"])
@@ -651,7 +651,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bad.status_code, 422)
         self.assertIn("Z-Image Turbo", bad.json()["error"])
         self.assertEqual([r["engine"] for r in (await self.http.get("/v1/images/engines")).json()["edit"] if r["enabled"]],
-                         ["klein", "krea2", "seedream"], "a refused save changes nothing")
+                         ["qwen21", "krea2", "seedream"], "a refused save changes nothing")
 
     async def test_inspect_image_then_upgrade_to_seedream(self):
         agent_module.WAIT_POLL_SECONDS = 0.05
@@ -1073,12 +1073,12 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.atlas.image_requests), spent, "a refused prompt never reaches a paid engine")
 
         # a LoRA for another local engine must not be reachable from a Krea 2 image, by any name
-        self.fake.model_files["loras"] += ["klein_snofs.safetensors", "zit_mystic_xxx.safetensors"]
-        for name in ("klein_snofs", "zit_mystic_xxx"):
+        self.fake.model_files["loras"] += ["lenovo_qwen21.safetensors", "zit_mystic_xxx.safetensors"]
+        for name in ("lenovo_qwen21", "zit_mystic_xxx"):
             wrong = await self.http.post("/v1/images", json={"prompt": "A lamp", "loras": [{"name": name}]})
             self.assertEqual(wrong.status_code, 422, f"{name} is not a Krea 2 LoRA")
         images = (await self.http.get("/v1/images/options")).json()["local"]["loras"]
-        self.assertNotIn("klein_snofs.safetensors", [l["file"] for l in images], "another engine's LoRA isn't offered")
+        self.assertNotIn("lenovo_qwen21.safetensors", [l["file"] for l in images], "another engine's LoRA isn't offered")
 
         # with its weights present, the local Z-Image builds its own graph rather than Krea 2's
         files = self.fake.model_files
@@ -1105,7 +1105,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.fake.running["render"] = asyncio.get_event_loop().create_future()  # a video render holds ComfyUI
         busy = (await self.http.post("/v1/images", json={"prompt": "A lamp"})).json()
         self.assertEqual(busy["engine"], "z-image")
-        # klein and zimage are not installed in this fixture, so the busy Krea 2 is further down "tried"
+        # qwen21 and zimage are not installed in this fixture, so the busy Krea 2 is further down "tried"
         self.assertTrue(any("busy" in t["skipped"] for t in busy["tried"]), busy["tried"])
         self.assertEqual((await self.http.post("/v1/images", json={"prompt": "A lamp", "engine": "local"})).status_code, 422)
 

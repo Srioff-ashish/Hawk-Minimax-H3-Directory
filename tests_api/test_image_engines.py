@@ -91,24 +91,37 @@ class Families(unittest.TestCase):
             "krea2_identity_edit_v1_2.safetensors": "krea2",
             "snofs_photodetail_slider.safetensors": "krea2",
             "zit_mystic_xxx.safetensors": "zit",
-            "klein_snofs.safetensors": "klein",
-            "klein_nsfw_no_face_change.safetensors": "klein",
+            "qwen-image-2.1-fix-1.0-comfy.safetensors": "qwen21",
+            "PornMaster_QI2.1_Age_Slider_V1.safetensors": "qwen21",
+            "elusarcas-qwen2-1-detailer-v1.safetensors": "qwen21",
+            "lenovo_qwen21.safetensors": "qwen21",
         }
         for filename, family in cases.items():
             self.assertEqual(ie.family_of(filename), family, filename)
 
+    def test_a_qwen_lora_whose_own_name_says_nothing_is_classified_by_its_folder(self):
+        # Three of the shipped Qwen 2.1 LoRAs are published with spaces or CJK in the name and no usable
+        # prefix. Downloading them into models/loras/qwen21/ is what classifies them, so they never have to
+        # be renamed -- and a rename is exactly the step a user would skip.
+        for filename in ("NSFW Qwen Lora.safetensors", "qwen2.1\u89d2\u8272\u5361-4.safetensors",
+                         "Qwen Image2.1_Anime2Real.safetensors"):
+            self.assertEqual(ie.family_of(f"qwen21/{filename}"), "qwen21",
+                             f"{filename} in a qwen21 folder should be a Qwen Image 2.1 LoRA")
+        self.assertEqual(ie.family_of("NSFW Qwen Lora.safetensors"), "h3",
+                         "out of that folder its name alone says nothing, so it falls back to video")
+
     def test_a_declared_family_wins_over_the_filename(self):
-        self.assertEqual(ie.family_of("oddly_named.safetensors", declared="klein"), "klein")
+        self.assertEqual(ie.family_of("oddly_named.safetensors", declared="qwen21"), "qwen21")
         self.assertEqual(ie.family_of("krea2_thing.safetensors", declared="zit"), "zit")
         # a declared family that is not real is ignored rather than trusted
-        self.assertEqual(ie.family_of("klein_thing.safetensors", declared="nonsense"), "klein")
+        self.assertEqual(ie.family_of("lenovo_qwen21.safetensors", declared="nonsense"), "qwen21")
 
     def test_an_unknown_file_is_treated_as_video(self):
         # video is the side that refuses unknown names, so it is the safe default
         self.assertEqual(ie.family_of("something_new.safetensors"), "h3")
 
     def test_a_subfolder_path_is_classified_by_its_basename(self):
-        self.assertEqual(ie.family_of("Krea2/klein_snofs.safetensors"), "klein")
+        self.assertEqual(ie.family_of("Krea2/lenovo_qwen21.safetensors"), "qwen21")
 
     def test_every_image_family_has_a_label(self):
         for family in ie.IMAGE_FAMILIES:
@@ -118,7 +131,7 @@ class Families(unittest.TestCase):
 
 class Order(unittest.TestCase):
     STORED = [
-        {"engine": "klein", "enabled": True},
+        {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},
         {"engine": "seedream", "enabled": True},
@@ -126,11 +139,11 @@ class Order(unittest.TestCase):
     ]
 
     def test_generate_keeps_the_stored_order(self):
-        self.assertEqual(ie.order(self.STORED, "generate"), ["klein", "krea2", "zimage", "seedream"])
+        self.assertEqual(ie.order(self.STORED, "generate"), ["qwen21", "krea2", "zimage", "seedream"])
 
     def test_a_generate_only_engine_is_left_out_of_the_edit_ladder(self):
         # zimage cannot edit, and turbo is both disabled and generate-only
-        self.assertEqual(ie.order(self.STORED, "edit"), ["klein", "krea2", "seedream"])
+        self.assertEqual(ie.order(self.STORED, "edit"), ["qwen21", "krea2", "seedream"])
 
     def test_disabled_engines_are_skipped(self):
         self.assertNotIn("turbo", ie.order(self.STORED, "generate"))
@@ -151,7 +164,7 @@ class Order(unittest.TestCase):
         appended = {row["engine"]: row["enabled"] for row in rows[1:]}
         self.assertTrue(all(enabled is False for enabled in appended.values()))
         # a new engine is offered in Studio, never silently switched on
-        self.assertIn("klein", appended)
+        self.assertIn("qwen21", appended)
 
     def test_full_order_omits_engines_that_cannot_do_the_action(self):
         engines = {row["engine"] for row in ie.full_order(self.STORED, "edit")}
@@ -192,15 +205,15 @@ class Store(unittest.TestCase):
         self.store = ie.ImageEngineStore(self.dir)
 
     def test_an_unconfigured_pod_puts_the_local_engines_first(self):
-        self.assertEqual(self.store.order("generate"), ["klein", "krea2", "zimage", "turbo", "seedream"])
-        self.assertEqual(self.store.order("edit"), ["klein", "krea2", "seedream"], "zimage and turbo cannot edit")
+        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("edit"), ["qwen21", "krea2", "seedream"], "zimage and turbo cannot edit")
         order = self.store.order("generate")
         self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
     def test_saving_an_order_survives_a_reload(self):
-        self.store.save(generate=[{"engine": "klein"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
-        self.assertEqual(ie.ImageEngineStore(self.dir).order("generate"), ["klein", "krea2", "zimage", "seedream"])
+        self.store.save(generate=[{"engine": "qwen21"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
+        self.assertEqual(ie.ImageEngineStore(self.dir).order("generate"), ["qwen21", "krea2", "zimage", "seedream"])
 
     def test_an_engine_left_out_of_a_saved_order_comes_back_switched_off(self):
         view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "seedream"}])
@@ -209,15 +222,15 @@ class Store(unittest.TestCase):
         self.assertNotIn("turbo", self.store.order("generate"))
 
     def test_a_disabled_engine_keeps_its_place(self):
-        self.store.save(generate=[{"engine": "klein"}, {"engine": "krea2", "enabled": False}, {"engine": "seedream"}])
+        self.store.save(generate=[{"engine": "qwen21"}, {"engine": "krea2", "enabled": False}, {"engine": "seedream"}])
         order = [row["engine"] for row in self.store.settings()["generate"]]
-        self.assertEqual(order[:3], ["klein", "krea2", "seedream"], "off, but still second")
-        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+        self.assertEqual(order[:3], ["qwen21", "krea2", "seedream"], "off, but still second")
+        self.assertEqual(self.store.order("generate"), ["qwen21", "seedream"])
 
     def test_only_the_parts_given_are_changed(self):
-        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
+        self.store.save(generate=[{"engine": "qwen21"}, {"engine": "seedream"}])
         self.store.save(busy_mode="wait")
-        self.assertEqual(self.store.order("generate"), ["klein", "seedream"], "the order was not touched")
+        self.assertEqual(self.store.order("generate"), ["qwen21", "seedream"], "the order was not touched")
         self.assertEqual(self.store.wait_seconds(), 120.0)
 
     def test_waiting_zero_seconds_is_falling_through(self):
@@ -247,15 +260,15 @@ class Store(unittest.TestCase):
             self.store.save(generate=[{"engine": "krea2", "enabled": False}])
 
     def test_a_refused_save_changes_nothing_on_disk(self):
-        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
+        self.store.save(generate=[{"engine": "qwen21"}, {"engine": "seedream"}])
         with self.assertRaises(ie.SettingsError):
             self.store.save(generate=[{"engine": "nope"}])
-        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["qwen21", "seedream"])
 
     def test_all_paid_warns_and_all_local_warns(self):
         view = self.store.save(generate=[{"engine": "seedream"}, {"engine": "turbo"}])
         self.assertTrue(any("billed to Atlas" in w for w in view["warnings"]))
-        view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "klein"}])
+        view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "qwen21"}])
         self.assertTrue(any("ComfyUI is busy" in w for w in view["warnings"]))
 
     def test_a_mixed_ladder_warns_about_nothing(self):
@@ -266,12 +279,12 @@ class Store(unittest.TestCase):
     def test_a_corrupt_file_falls_back_to_the_defaults(self):
         with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
             handle.write("{ not json")
-        self.assertEqual(self.store.order("generate"), ["klein", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
 
     def test_a_family_with_no_stored_defaults_falls_back_to_the_shipped_pair(self):
-        self.assertIsNone(self.store.defaults("klein"), "never set is not the same as empty")
-        self.assertEqual([r["name"] for r in self.store.view()["defaults"]["klein"]],
-                         list(ie.DEFAULT_ADULT_LORAS["klein"]))
+        self.assertIsNone(self.store.defaults("qwen21"), "never set is not the same as empty")
+        self.assertEqual([r["name"] for r in self.store.view()["defaults"]["qwen21"]],
+                         list(ie.DEFAULT_ADULT_LORAS["qwen21"]))
 
     def test_stored_defaults_replace_the_shipped_ones(self):
         view = self.store.save(defaults={"zit": [{"name": "zit_betternudes.safetensors", "strength": 0.6}]})
@@ -284,8 +297,8 @@ class Store(unittest.TestCase):
 
     def test_a_lora_from_another_family_is_refused(self):
         with self.assertRaises(ie.SettingsError) as caught:
-            self.store.save(defaults={"klein": [{"name": "zit_mystic_xxx.safetensors"}]})
-        self.assertIn("FLUX.2 Klein", str(caught.exception))
+            self.store.save(defaults={"qwen21": [{"name": "zit_mystic_xxx.safetensors"}]})
+        self.assertIn("Z-Image Turbo", str(caught.exception), "it should name the family the file really belongs to")
 
     def test_an_unknown_family_is_refused(self):
         with self.assertRaises(ie.SettingsError):
@@ -296,9 +309,9 @@ class Store(unittest.TestCase):
             self.store.save(defaults={"zit": [{"name": "zit_mystic_xxx.safetensors", "strength": 9}]})
 
     def test_saving_defaults_leaves_the_ladders_alone(self):
-        self.store.save(generate=[{"engine": "klein"}, {"engine": "seedream"}])
-        self.store.save(defaults={"klein": [{"name": "klein_snofs.safetensors"}]})
-        self.assertEqual(self.store.order("generate"), ["klein", "seedream"])
+        self.store.save(generate=[{"engine": "qwen21"}, {"engine": "seedream"}])
+        self.store.save(defaults={"qwen21": [{"name": "NSFW Qwen Lora.safetensors"}]})
+        self.assertEqual(self.store.order("generate"), ["qwen21", "seedream"])
 
 
     def test_the_file_is_written_atomically(self):
@@ -316,18 +329,18 @@ class FamilyFolders(unittest.TestCase):
     """A folder named after a family classifies the files in it, so downloads keep their published names."""
 
     def test_a_named_folder_classifies_an_unprefixed_file(self):
-        self.assertEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "klein")
+        self.assertEqual(ie.family_of("qwen21/UltraReal_QI21_V4.safetensors"), "qwen21")
         self.assertEqual(ie.family_of("zit/Hands_v2.1.safetensors"), "zit")
         self.assertEqual(ie.family_of("Krea2/Identity_Edit.safetensors"), "krea2")
         self.assertEqual(ie.family_of("h3/Bouncing_REF2VA.safetensors"), "h3")
 
     def test_an_alias_folder_counts_too(self):
         self.assertEqual(ie.family_of("z-image/whatever.safetensors"), "zit")
-        self.assertEqual(ie.family_of("flux-2/whatever.safetensors"), "klein")
+        self.assertEqual(ie.family_of("qwen-image-2.1/whatever.safetensors"), "qwen21")
 
     def test_the_file_name_still_beats_the_folder(self):
-        # a misfiled Klein LoRA is still a Klein LoRA; loading it into Krea 2 would just make a worse image
-        self.assertEqual(ie.family_of("Krea2/klein_snofs.safetensors"), "klein")
+        # a misfiled Qwen LoRA is still a Qwen LoRA; loading it into Krea 2 would just make a worse image
+        self.assertEqual(ie.family_of("Krea2/lenovo_qwen21.safetensors"), "qwen21")
 
     def test_an_unknown_folder_and_name_is_still_video(self):
         self.assertEqual(ie.family_of("misc/Unknown_Thing.safetensors"), "h3")
@@ -338,11 +351,11 @@ class FolderDiscovery(unittest.TestCase):
 
     def test_a_file_in_a_family_folder_is_that_family(self):
         # the case folders exist for: a Civitai download that kept its published name
-        self.assertEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "klein")
-        self.assertNotEqual(ie.family_of("klein/UltraReal_KL9B_V4.safetensors"), "h3")
+        self.assertEqual(ie.family_of("qwen21/UltraReal_QI21_V4.safetensors"), "qwen21")
+        self.assertNotEqual(ie.family_of("qwen21/UltraReal_QI21_V4.safetensors"), "h3")
 
     def test_the_same_file_loose_is_still_video(self):
-        self.assertEqual(ie.family_of("UltraReal_KL9B_V4.safetensors"), "h3")
+        self.assertEqual(ie.family_of("UltraReal_QI21_V4.safetensors"), "h3")
 
 
 class DefaultNameForms(unittest.TestCase):
@@ -350,11 +363,11 @@ class DefaultNameForms(unittest.TestCase):
 
     def test_the_stem_is_what_matches(self):
         from hawk_api.local_images import _same_lora
-        for stored in ("klein_eros_v9", "klein_eros_v9.safetensors", "klein/klein_eros_v9.safetensors"):
-            self.assertTrue(_same_lora("klein/klein_eros_v9.safetensors", stored), stored)
-            self.assertTrue(_same_lora("klein_eros_v9.safetensors", stored), stored)
+        for stored in ("lenovo_qwen21", "lenovo_qwen21.safetensors", "qwen21/lenovo_qwen21.safetensors"):
+            self.assertTrue(_same_lora("qwen21/lenovo_qwen21.safetensors", stored), stored)
+            self.assertTrue(_same_lora("lenovo_qwen21.safetensors", stored), stored)
 
     def test_a_different_lora_still_does_not_match(self):
         from hawk_api.local_images import _same_lora
-        self.assertFalse(_same_lora("klein_eros_v9.safetensors", "klein_snofs"))
-        self.assertFalse(_same_lora("klein_eros_v9.safetensors", ""))
+        self.assertFalse(_same_lora("lenovo_qwen21.safetensors", "lenovo_krea2"))
+        self.assertFalse(_same_lora("lenovo_qwen21.safetensors", ""))

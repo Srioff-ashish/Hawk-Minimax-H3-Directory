@@ -407,8 +407,8 @@ class HawkService:
         return files
 
     async def available_loras(self, refresh: bool = False, family: str = "h3") -> list[str]:
-        """LoRA files of one family. ComfyUI keeps a single models/loras folder, so MiniMax H3, Krea 2, Klein and
-        Z-Image files all sit in it together and a file from the wrong family produces garbage rather than an
+        """LoRA files of one family. ComfyUI keeps a single models/loras folder, so MiniMax H3, Krea 2, Qwen Image 2.1
+        and Z-Image files all sit in it together and a file from the wrong family produces garbage rather than an
         error. family="" returns the folder as it is."""
         files = await self.available_models("loras", refresh)
         if not family:
@@ -1021,17 +1021,17 @@ class HawkService:
 
     #: Reported as the result's "model". Deliberately not "z-image/..." -- that prefix means the Atlas engine
     #: to _text_only_image_model, and a local id must never be mistaken for it.
-    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "klein": "klein/9b", "zimage": "zimage/turbo"}
+    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo"}
 
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""
         if action == "edit":
-            if spec.id == "klein":
-                local = await self.local_images.edit_klein(
+            if spec.id == "qwen21":
+                local = await self.local_images.edit_qwen21(
                     prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
                     steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"],
                     wait_seconds=kwargs["wait_seconds"], negative=kwargs["negative"], cfg=kwargs["cfg"])
-                return local, "klein/9b-edit"
+                return local, "qwen-image/2.1-edit"
             local = await self.local_images.edit(
                 prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
                 steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"],
@@ -1067,8 +1067,16 @@ class HawkService:
 
     async def image_options(self) -> dict:
         local = await self.local_images.status()
-        local["engines"] = {name: await self.local_images.status(name) for name in ("klein", "zimage")}
-        engines = self.image_engines.view()
+        # every wired local engine but Krea 2, whose status is the top-level one this merges into
+        local["engines"] = {name: await self.local_images.status(name)
+                            for name in local_images.LOCAL_MODELS if name != "krea2"}
+        # The LoRA listing is passed in so view() can warn about an always-on LoRA that is configured but
+        # not on the pod. It attaches nothing and raises nothing, so this is the only place it can show.
+        try:
+            installed = await self.local_images.lora_basenames()
+        except Exception:  # ComfyUI down; "local" above already says so, and a second complaint helps nobody
+            installed = None
+        engines = self.image_engines.view(installed)
         ladders = {action: self._ladder_view(action, engines, local) for action in ("generate", "edit")}
         return {
             "default_engine": self.settings.image_engine,

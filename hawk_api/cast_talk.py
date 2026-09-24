@@ -18,7 +18,7 @@ USER_KEY = "user"
 TURN_WORDS = 60  # a spoken turn stays short, like a real conversation
 STARVED_TURNS = 3  # passed over for longer than one rotation: this character speaks next, whoever was named
 ACTS = ("selfie", "snap", "share", "group_shot")
-MAX_SUBJECTS = 6  # FLUX.2 Klein takes 6 reference images; past that a group shot falls onto paid Seedream
+MAX_SUBJECTS = 6  # Qwen Image 2.1 takes 16 references, so this is a coherence limit now, not an engine one
 
 CHARACTER_TURN_PROMPT = """You are {name}, one of the characters in a group chat. Stay fully in character.
 

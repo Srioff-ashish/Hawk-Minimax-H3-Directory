@@ -122,12 +122,13 @@ class ImageRequest(BaseModel):
     ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit likeness dial: 4 (default) strong likeness, 1 looser and more creative, above 10 breaks removals.")
     negative: str = Field("", max_length=2000, description=
         "What to keep out, for the local engines only (Atlas ignores it). It has no effect while the engine samples "
-        "at cfg 1.0 -- that is every local build except FLUX.2 Klein \"base\" -- because guidance at cfg 1 collapses "
-        "to the positive prompt. On builds above cfg 1 it is the place for \"fused bodies, missing limbs, extra arms\".")
+        "at cfg 1.0 -- Krea 2 Turbo and Z-Image -- because guidance at cfg 1 collapses to the positive prompt. On "
+        "Qwen Image 2.1, which samples at cfg 2.0, it is the place for \"fused bodies, missing limbs, extra arms\".")
     cfg: float | None = Field(None, ge=0.0, le=15.0, description=
         "Guidance for the local engines. Omit for the engine's own default. Above 1.0 the negative prompt starts "
-        "working; too high posterises (blown greens and blues, banded surfaces). FLUX.2 Klein \"base\" defaults "
-        "to 3.0 and burns at 5.0; the distilled builds are trained for 1.0 and should be left there.")
+        "working; too high posterises (blown greens and blues, banded surfaces). Qwen Image 2.1 defaults to 2.0, "
+        "and drops to 1.0 when its adult LoRA is attached; Krea 2 Turbo and Z-Image are trained for 1.0 and "
+        "should be left there.")
     max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult Krea 2 LoRAs one image may stack (up to 3; a note warns above a combined strength of 2.0). Lower it to be stricter.")
 
 
@@ -165,13 +166,14 @@ class DriveExportSettings(BaseModel):
 
 
 class ImageEngineRung(BaseModel):
-    engine: str = Field(description="Engine id from /v1/images/engines, e.g. klein, krea2, zimage, turbo, seedream.")
+    engine: str = Field(description="Engine id from /v1/images/engines, e.g. qwen21, krea2, zimage, turbo, seedream.")
     enabled: bool = Field(True, description="Off keeps its place in the order but is never tried.")
 
 
 class ImageLoraDefault(BaseModel):
     name: str = Field(description="LoRA file name, from image_options. Must belong to that family.")
-    strength: float = Field(0.8, ge=0.0, le=2.0)
+    # 2.0 covers the content LoRAs; slider-style ones run to 3. Kept in step with image_engines.MAX_DEFAULT_STRENGTH.
+    strength: float = Field(0.8, ge=0.0, le=3.0)
 
 
 class ImageEngineSettings(BaseModel):
@@ -184,7 +186,7 @@ class ImageEngineSettings(BaseModel):
     pick_takes: bool | None = Field(
         None, description="Show a rejected take and wait for your choice, instead of letting the agent take it again.")
     defaults: dict[str, list[ImageLoraDefault]] | None = Field(
-        None, description='LoRAs a family attaches on its own, keyed by family (krea2, klein, zit). An empty list switches them off.')
+        None, description='LoRAs a family attaches on its own, keyed by family (krea2, qwen21, zit). An empty list switches them off.')
 
 
 class RenderModelSettings(BaseModel):

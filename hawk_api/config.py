@@ -106,9 +106,9 @@ class Settings:
     krea_unet: str = "krea2_turbo_fp8_scaled.safetensors"
     krea_clip: str = "qwen3vl_4b_fp8_scaled.safetensors"
     krea_vae: str = "qwen_image_vae.safetensors"
-    klein_unet: str = "flux-2-klein-9b-nvfp4.safetensors"
-    klein_clip: str = "qwen_3_8b_fp4mixed.safetensors"
-    klein_vae: str = "flux2-vae.safetensors"
+    qwen21_unet: str = "qwen_image_2.1_int8_convrot.safetensors"
+    qwen21_clip: str = "qwen3vl_8b_bf16.safetensors"
+    qwen21_vae: str = "qwen_image_2.1_vae_bf16.safetensors"
     zimage_unet: str = "z_image_turbo_nvfp4.safetensors"
     zimage_clip: str = "qwen_3_4b_fp4_mixed.safetensors"
     zimage_vae: str = "z_image_ae.safetensors"
@@ -168,9 +168,9 @@ class Settings:
             krea_unet=_env("HAWK_KREA_UNET", cls.krea_unet),
             krea_clip=_env("HAWK_KREA_CLIP", cls.krea_clip),
             krea_vae=_env("HAWK_KREA_VAE", cls.krea_vae),
-            klein_unet=_env("HAWK_KLEIN_UNET", cls.klein_unet),
-            klein_clip=_env("HAWK_KLEIN_CLIP", cls.klein_clip),
-            klein_vae=_env("HAWK_KLEIN_VAE", cls.klein_vae),
+            qwen21_unet=_env("HAWK_QWEN21_UNET", cls.qwen21_unet),
+            qwen21_clip=_env("HAWK_QWEN21_CLIP", cls.qwen21_clip),
+            qwen21_vae=_env("HAWK_QWEN21_VAE", cls.qwen21_vae),
             zimage_unet=_env("HAWK_ZIMAGE_UNET", cls.zimage_unet),
             zimage_clip=_env("HAWK_ZIMAGE_CLIP", cls.zimage_clip),
             zimage_vae=_env("HAWK_ZIMAGE_VAE", cls.zimage_vae),

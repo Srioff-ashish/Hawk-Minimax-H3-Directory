@@ -1,6 +1,6 @@
 {
   "version": 5,
-  "_comment": "Krea 2 LoRAs for local image generation. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. When this example's version goes up, the copy is replaced (the old one is kept as image_loras.json.bak). kind: realism, detail, style, adult. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler override the Krea 2 Turbo defaults (8, simple, euler) when this LoRA is used. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
+  "_comment": "Image LoRAs for local generation, one entry per file. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. Entries added here later show up in an existing copy too; only a version bump replaces it wholesale (the old one is kept as image_loras.json.bak). family: which model the file is for -- a file from the wrong family makes a worse image rather than an error, so download into models/loras/<family>/ (e.g. models/loras/qwen21/) and the folder classifies it whatever it is named. kind: realism, detail, style, adult, other. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler / cfg override the engine's defaults when this LoRA is used -- Krea 2 Turbo's are 8 / simple / euler / 1.0, Qwen Image 2.1's are 30 / simple / euler / 2.0. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
     {
       "file": "krea2_realism_v1.safetensors",
@@ -140,66 +140,6 @@
       "family": "krea2"
     },
     {
-      "file": "klein_snofs.safetensors",
-      "family": "klein",
-      "kind": "adult",
-      "label": "SNOFS (Klein)",
-      "strength": 0.8,
-      "range": [
-        0.6,
-        1.0
-      ],
-      "notes": "GO-TO adult LoRA for FLUX.2 Klein, the Klein 9b build of SNOFS. Fictional adults only."
-    },
-    {
-      "file": "klein_nsfw_no_face_change.safetensors",
-      "family": "klein",
-      "kind": "adult",
-      "label": "Klein NSFW (no face change)",
-      "strength": 0.7,
-      "range": [
-        0.5,
-        0.9
-      ],
-      "notes": "GO-TO with SNOFS: adult content while leaving the face alone, which is what makes a character hold across shots."
-    },
-    {
-      "file": "klein_nsfw_unlocked.safetensors",
-      "family": "klein",
-      "kind": "adult",
-      "label": "Klein NSFW Unlocked",
-      "strength": 0.7,
-      "range": [
-        0.5,
-        0.9
-      ],
-      "notes": "Broader adult coverage. Use instead of SNOFS, not with it."
-    },
-    {
-      "file": "klein_nipple_detail.safetensors",
-      "family": "klein",
-      "kind": "detail",
-      "label": "NippleDiffusion (Klein)",
-      "strength": 0.6,
-      "range": [
-        0.4,
-        0.8
-      ],
-      "notes": "Anatomical detail only; stacks with an adult LoRA rather than replacing one."
-    },
-    {
-      "file": "klein_realism_engine.safetensors",
-      "family": "klein",
-      "kind": "realism",
-      "label": "Realism Engine (Klein)",
-      "strength": 0.8,
-      "range": [
-        0.6,
-        1.0
-      ],
-      "notes": "Photographic skin and light. Safe to stack with anything."
-    },
-    {
       "file": "zit_mystic_xxx.safetensors",
       "family": "zit",
       "kind": "adult",
@@ -236,52 +176,94 @@
       "family": "krea2"
     },
     {
-      "file": "klein_eros_v9.safetensors",
+      "file": "qwen-image-2.1-fix-1.0-comfy.safetensors",
+      "family": "qwen21",
+      "kind": "detail",
+      "label": "Qwen Image 2.1 Fix (Envy)",
+      "strength": 1.0,
+      "range": [
+        0.8,
+        1.0
+      ],
+      "notes": "ALWAYS ON: attached to every Qwen Image 2.1 image, adult or not. Repairs layers the base model ships broken, which is what its advertised quality depends on. Nothing to ask for."
+    },
+    {
+      "file": "NSFW Qwen Lora.safetensors",
+      "family": "qwen21",
       "kind": "adult",
-      "label": "Eros v9 (Klein)",
+      "label": "NSFW (Qwen 2.1, TheseAlpacas)",
+      "strength": 0.85,
+      "range": [
+        0.7,
+        1.0
+      ],
+      "steps": 25,
+      "cfg": 1.0,
+      "sampler": "er_sde",
+      "scheduler": "beta",
+      "notes": "GO-TO adult LoRA for Qwen Image 2.1. Only behaves at cfg 1 on er_sde/beta, which it sets itself. Fictional adults only."
+    },
+    {
+      "file": "PornMaster_QI2.1_Age_Slider_V1.safetensors",
+      "family": "qwen21",
+      "kind": "other",
+      "label": "Age slider (Qwen 2.1)",
+      "strength": 2.0,
+      "range": [
+        0.0,
+        3.0
+      ],
+      "notes": "Slider, not a content LoRA: higher pushes the face older. Ask for it when a subject is reading younger than the prompt says. Not attached on its own."
+    },
+    {
+      "file": "elusarcas-qwen2-1-detailer-v1.safetensors",
+      "family": "qwen21",
+      "kind": "detail",
+      "label": "Detail Enhancer (Elusarca)",
       "strength": 0.8,
       "range": [
         0.6,
         1.0
       ],
-      "notes": "Teaches acts and positions the base model was never trained on. Needs cfg above 1, so it only bites on the Klein base build, not the distilled one. Fictional adults only.",
-      "family": "klein"
+      "trigger": "enhance this image",
+      "notes": "GO-TO for sharpening an existing image on an edit. Its trigger is the whole instruction: edit with the prompt 'enhance this image' and little else."
     },
     {
-      "file": "klein_anatomy_quality_fixer.safetensors",
-      "kind": "detail",
-      "label": "Anatomy Quality Fixer (Klein)",
-      "strength": 0.6,
+      "file": "lenovo_qwen21.safetensors",
+      "family": "qwen21",
+      "kind": "realism",
+      "label": "Lenovo UltraReal (Qwen 2.1)",
+      "strength": 0.55,
       "range": [
         0.4,
-        0.8
+        0.7
       ],
-      "notes": "Targets fused bodies, missing limbs and bad joins in multi-figure scenes. Like every Klein LoRA it needs cfg above 1 to do much.",
-      "family": "klein"
+      "trigger": "l3n0v0",
+      "notes": "Photoreal skin and light. Keep it light -- above about 0.7 it takes over the whole look."
     },
     {
-      "file": "klein_copy_pose.safetensors",
-      "kind": "other",
-      "label": "Copy Pose (Klein)",
-      "strength": 0.8,
+      "file": "Qwen Image2.1_Anime2Real.safetensors",
+      "family": "qwen21",
+      "kind": "style",
+      "label": "Anime to Realism (Qwen 2.1)",
+      "strength": 1.0,
       "range": [
-        0.6,
+        0.8,
         1.0
       ],
-      "notes": "Takes the pose from a reference image instead of inventing one. Use it on the edit path with a reference: text alone cannot place two interlocking bodies.",
-      "family": "klein"
+      "notes": "Edit-only: turns an anime or cartoon reference into a photograph. Pointless on a photo."
     },
     {
-      "file": "klein_ultrareal_v3.safetensors",
-      "kind": "realism",
-      "label": "UltraReal v3 (Klein)",
-      "strength": 0.7,
+      "file": "qwen2.1角色卡-4.safetensors",
+      "family": "qwen21",
+      "kind": "style",
+      "label": "Portrait2CharRef (Qwen 2.1)",
+      "strength": 0.85,
       "range": [
-        0.5,
-        0.9
+        0.7,
+        1.0
       ],
-      "notes": "Photographic skin and lighting.",
-      "family": "klein"
+      "notes": "Edit-only: turns one portrait into a multi-angle character sheet on white. Wants a 3:2 size."
     }
   ]
 }

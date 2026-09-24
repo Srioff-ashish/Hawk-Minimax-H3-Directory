@@ -1,11 +1,15 @@
-"""Local image generation with Krea 2 Turbo on the pod's own ComfyUI (text to image, no edits).
+"""Local image generation and editing on the pod's own ComfyUI.
 
-The graph follows Comfy-Org's ``image_krea2_turbo_t2i`` template without its optional
-prompt-expansion step: UNETLoader -> LoraLoaderModelOnly x N -> KSampler (8 steps, cfg 1,
-euler / simple), CLIPLoader(type "krea2") -> CLIPTextEncode, ConditioningZeroOut as the
-negative, EmptyLatentImage, VAEDecode -> SaveImage.
+Three engines, each with its own graph and its own LoRA family, because a file or an encoder
+type from one produces nonsense in another rather than an error:
 
-It shares the GPU and the queue with video renders, so ``busy()`` tells callers to use a
+* **Qwen Image 2.1** -- the lead engine. 30 steps at cfg 2.0 on euler / simple, encoder type
+  "qwen_image". Edits take up to sixteen references through one TextEncodeQwenImage21 node.
+* **Krea 2 Turbo** -- 8 steps at cfg 1, encoder type "krea2". Edits through Krea 2 Identity
+  Edit, which needs the comfyui-krea2edit node pack and takes at most two references.
+* **Z-Image Turbo** -- 8 steps, encoder type "lumina2", through ModelSamplingAuraFlow. No edits.
+
+All three share the GPU and the queue with video renders, so ``busy()`` tells callers to use a
 cloud engine instead of waiting behind a long render.
 """
 
@@ -28,8 +32,8 @@ DEFAULT_STEPS = 8
 WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
-#: Local engines whose ComfyUI graphs exist. Klein and Z-Image join this as their graphs land.
-WIRED_ENGINES = ("krea2", "klein", "zimage")
+#: Local engines whose ComfyUI graphs exist.
+WIRED_ENGINES = ("krea2", "qwen21", "zimage")
 # Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
 # else the first match, higher precision first.
 MODEL_FAMILIES = {
@@ -38,8 +42,10 @@ MODEL_FAMILIES = {
     "vae": re.compile(r"qwen[-_ ]?image[-_ ]?vae", re.IGNORECASE),
 }
 #: Per local engine: which file to look for in each ComfyUI folder, and which setting names it.
-#: The Qwen text encoders are deliberately distinct -- Krea 2 wants qwen3vl_4b, Z-Image qwen_3_4b and Klein
-#: qwen_3_8b -- so the patterns must not match each other.
+#: The Qwen text encoders are deliberately distinct -- Krea 2 wants qwen3vl_4b, Z-Image qwen_3_4b and
+#: Qwen Image 2.1 qwen3vl_8b -- so the patterns must not match each other. Klein's old encoder pattern was
+#: a bare qwen_3_8b, which also matched qwen3vl_8b; requiring "vl" and "8b" together is what keeps
+#: Qwen 2.1's unambiguous now that it owns the 8b slot.
 LOCAL_MODELS: dict[str, dict] = {
     "krea2": {
         "files": {"unet": ("diffusion_models", MODEL_FAMILIES["diffusion_models"]),
@@ -47,11 +53,11 @@ LOCAL_MODELS: dict[str, dict] = {
                   "vae": ("vae", MODEL_FAMILIES["vae"])},
         "configured": {"unet": "krea_unet", "clip": "krea_clip", "vae": "krea_vae"},
     },
-    "klein": {
-        "files": {"unet": ("diffusion_models", re.compile(r"flux.?2.?klein", re.IGNORECASE)),
-                  "clip": ("text_encoders", re.compile(r"qwen[-_ ]?3[-_ ]?8b", re.IGNORECASE)),
-                  "vae": ("vae", re.compile(r"flux2[-_ ]?vae|full_encoder_small_decoder", re.IGNORECASE))},
-        "configured": {"unet": "klein_unet", "clip": "klein_clip", "vae": "klein_vae"},
+    "qwen21": {
+        "files": {"unet": ("diffusion_models", re.compile(r"qwen[-_ ]?image[-_ ]?2\.?1", re.IGNORECASE)),
+                  "clip": ("text_encoders", re.compile(r"qwen[-_ ]?3[-_ ]?vl[-_ ]?8b", re.IGNORECASE)),
+                  "vae": ("vae", re.compile(r"qwen[-_ ]?image[-_ ]?2\.?1[-_ ]?vae", re.IGNORECASE))},
+        "configured": {"unet": "qwen21_unet", "clip": "qwen21_clip", "vae": "qwen21_vae"},
     },
     "zimage": {
         "files": {"unet": ("diffusion_models", re.compile(r"z[-_ ]?image(?!.*ae\.safetensors$)", re.IGNORECASE)),
@@ -60,17 +66,15 @@ LOCAL_MODELS: dict[str, dict] = {
         "configured": {"unet": "zimage_unet", "clip": "zimage_clip", "vae": "zimage_vae"},
     },
 }
-#: FLUX.2 Klein ships distilled and "base" builds that want very different settings. Guessing wrong does not
-#: fail, it just makes slow over-cooked images, so read it off the file name.
-#: The base build's guidance is the one number worth being careful with: 5.0 posterises it -- blown greens and
-#: blues, banded surfaces -- on any prompt, with or without LoRAs. Pass ``cfg`` on the request to tune it.
-KLEIN_BASE_STEPS, KLEIN_BASE_CFG = 20, 3.0
-KLEIN_TURBO_STEPS, KLEIN_TURBO_CFG = 4, 1.0
+#: Qwen Image 2.1's own defaults, from the reference ComfyUI workflows. A LoRA in the catalogue may override
+#: any of them -- the NSFW one wants 25 steps at cfg 1 on er_sde/beta, which is why ImageLora carries a cfg.
+QWEN21_STEPS, QWEN21_CFG = 30, 2.0
+QWEN21_SAMPLER, QWEN21_SCHEDULER = "euler", "simple"
+QWEN21_EDIT_RESOLUTION = 1024
+QWEN21_MAX_REFS = 16  # TextEncodeQwenImage21 has image_1 .. image_16 and no more
+QWEN21_EDIT_NODE = "TextEncodeQwenImage21"  # core, ComfyUI 0.36.0+; edits cannot be built without it
+QWEN21_CACHE_NODE = "QwenImage21Cache"  # core, 0.36.0+; a speed-up, so its absence is not an error
 ZIMAGE_STEPS = 8
-
-
-def klein_settings(unet: str) -> tuple[int, float]:
-    return (KLEIN_BASE_STEPS, KLEIN_BASE_CFG) if "base" in unet.lower() else (KLEIN_TURBO_STEPS, KLEIN_TURBO_CFG)
 _PRECISION = ("bf16", "fp16", "fp8", "")
 
 # Krea 2 Identity Edit (conradlocke/krea2-identity-edit): a LoRA plus the comfyui-krea2edit node pack,
@@ -91,6 +95,21 @@ _SEXUAL = re.compile(
 )
 
 
+def _sampler_hint(items: list) -> "ImageLora | None":
+    """The first LoRA with an opinion about how to sample it, or None.
+
+    ``cfg`` counts like the rest: a LoRA that only names a guidance -- and several do, because guidance is
+    the one setting that breaks them -- would otherwise be skipped and quietly sampled at the engine default.
+    """
+    return next((item for item in items
+                 if item.steps or item.scheduler or item.sampler or item.cfg is not None), None)
+
+
+def _stem(value) -> str:
+    """A LoRA name reduced to what identifies it: no folder, no suffix, no case."""
+    return str(value or "").strip().rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
+
+
 def _same_lora(file: str, name: str) -> bool:
     """Whether a stored or requested name points at this file.
 
@@ -98,8 +117,7 @@ def _same_lora(file: str, name: str) -> bool:
     suffix and with or without its folder. An exact compare here fails silently -- the default saves,
     then simply never attaches -- so it has to be the forgiving kind.
     """
-    stem = lambda value: str(value or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
-    return bool(stem(name)) and stem(file) == stem(name)
+    return bool(_stem(name)) and _stem(file) == _stem(name)
 
 
 def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:
@@ -118,9 +136,14 @@ ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to ov
 #: fallback: Studio's defaults panel overrides them per family, and an empty list there switches them off.
 DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
     "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
-    "klein": ("klein_snofs.safetensors", "klein_nsfw_no_face_change.safetensors"),
+    "qwen21": ("NSFW Qwen Lora.safetensors",),
     "zit": ("zit_mystic_xxx.safetensors",),
 }
+#: Per family, attached to every image whatever else was asked for. Unlike the adult defaults above, a
+#: request naming its own adult LoRA does not displace these: Qwen Image 2.1 ships with broken layers that
+#: its repair LoRA fixes, so an image made without it is simply a worse image, not a different choice.
+#: Mirrored in image_engines.BASE_LORAS, which cannot import this module.
+BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = dict(image_engines.BASE_LORAS)
 
 # Local generation has no provider-side moderation, so refuse prompts that point at minors.
 _MINOR = re.compile(
@@ -154,6 +177,7 @@ class ImageLora:
     steps: int | None = None
     scheduler: str | None = None
     sampler: str | None = None
+    cfg: float | None = None  # some LoRAs only behave at a particular guidance (the Qwen 2.1 NSFW one wants 1.0)
     installed: bool = False
     family: str = "krea2"  # which model this LoRA is for; a file from another family produces garbage, not an error
     automatic: bool = False  # attached by default (the adult pair), not asked for: its sampler hints don't take over
@@ -263,6 +287,7 @@ def load_catalogue(path: str) -> list[ImageLora]:
             file=str(entry["file"]), kind=str(entry.get("kind") or "other").lower(), label=str(entry.get("label") or ""),
             strength=float(entry.get("strength", 0.8)), range=(float(low), float(high)), trigger=str(entry.get("trigger") or ""),
             notes=str(entry.get("notes") or ""), steps=entry.get("steps"), scheduler=entry.get("scheduler"), sampler=entry.get("sampler"),
+            cfg=None if entry.get("cfg") is None else float(entry["cfg"]),
             family=str(entry.get("family") or "krea2"),
         ))
     return items
@@ -280,8 +305,8 @@ def _negative_node(text: str, positive: list, clip_node: str = "2") -> dict:
     """The negative conditioning slot.
 
     Empty means ConditioningZeroOut, which is what every graph did before there was a field for this. Note that
-    at cfg 1.0 the guider collapses to the positive term, so a negative prompt is inert on the distilled builds
-    and only starts doing anything on a build that samples above cfg 1 (FLUX.2 Klein "base").
+    at cfg 1.0 the guider collapses to the positive term, so a negative prompt is inert on Krea 2 Turbo and
+    Z-Image, and only does anything on an engine that samples above cfg 1 -- Qwen Image 2.1, at cfg 2.0.
     """
     if not text.strip():
         return {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": positive}}
@@ -385,14 +410,24 @@ def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lor
     return graph
 
 
-def _klein_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]]) -> tuple[dict, list]:
-    """Loaders and the LoRA chain shared by both FLUX.2 Klein graphs."""
+def _qwen21_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]], cache: bool = False) -> tuple[dict, list]:
+    """Loaders and the LoRA chain shared by both Qwen Image 2.1 graphs.
+
+    The CLIP type is the field to be careful with: "qwen_image", not Klein's "flux2" or Z-Image's "lumina2".
+    A wrong type loads and produces nonsense rather than failing.
+
+    ``cache`` adds QwenImage21Cache, a speed-up that needs ComfyUI 0.36.0. The caller decides from
+    object_info whether the node exists; without it the chain is identical, only slower.
+    """
     graph: dict = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
-        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "flux2", "device": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "qwen_image", "device": "default"}},
         "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
     }
     model = ["1", 0]
+    if cache:
+        graph["c"] = {"class_type": "QwenImage21Cache", "inputs": {"model": model, "device": "auto", "dtype": "default"}}
+        model = ["c", 0]
     for index, (name, strength) in enumerate(loras):
         node = f"l{index}"
         graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
@@ -400,62 +435,60 @@ def _klein_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]]) 
     return graph, model
 
 
-def klein_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
-                unet: str, clip: str, vae: str, steps: int, cfg: float, prefix: str, negative: str = "") -> dict:
-    """FLUX.2 Klein text to image. Uses the advanced sampler path, not KSampler."""
-    graph, model = _klein_base(unet, clip, vae, loras)
+def qwen21_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
+                 unet: str, clip: str, vae: str, steps: int, cfg: float, sampler: str, scheduler: str,
+                 prefix: str, negative: str = "", cache: bool = False) -> dict:
+    """Qwen Image 2.1 text to image. A plain KSampler, unlike Klein's SamplerCustomAdvanced path."""
+    graph, model = _qwen21_base(unet, clip, vae, loras, cache)
     graph.update({
         "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
         "5": _negative_node(negative, ["4", 0]),
-        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
-        "7": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": ["4", 0], "negative": ["5", 0], "cfg": cfg}},
-        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
-        "9": {"class_type": "Flux2Scheduler", "inputs": {"steps": steps, "width": width, "height": height}},
-        "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
-        "11": {"class_type": "SamplerCustomAdvanced", "inputs": {
-            "noise": ["10", 0], "guider": ["7", 0], "sampler": ["8", 0], "sigmas": ["9", 0], "latent_image": ["6", 0]}},
-        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
-        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": prefix}},
+        "6": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+        "7": {"class_type": "KSampler", "inputs": {
+            "model": model, "positive": ["4", 0], "negative": ["5", 0], "latent_image": ["6", 0], "seed": seed,
+            "steps": steps, "cfg": cfg, "sampler_name": sampler, "scheduler": scheduler, "denoise": 1.0}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": prefix}},
     })
     return graph
 
 
-def klein_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
-                     loras: list[tuple[str, float]], unet: str, clip: str, vae: str, steps: int, cfg: float,
-                     megapixels: float, prefix: str, negative: str = "") -> dict:
-    """FLUX.2 Klein edit, with any number of reference images.
+def qwen21_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
+                      loras: list[tuple[str, float]], unet: str, clip: str, vae: str, steps: int, cfg: float,
+                      sampler: str, scheduler: str, prefix: str, negative: str = "",
+                      resolution: int = QWEN21_EDIT_RESOLUTION, cache: bool = False) -> dict:
+    """Qwen Image 2.1 edit, with up to sixteen reference images.
 
-    Each reference is scaled to about one megapixel, encoded, and folded into both the positive and the negative
-    conditioning by its own ReferenceLatent. They chain, which is why Klein takes more than two references where
-    Krea 2 Identity Edit takes two. Output size follows the first reference unless one was asked for.
+    One TextEncodeQwenImage21 node does the whole job: it takes the references on image_1 .. image_16, the
+    prompt and the negative prompt, and returns conditioning for both plus a latent sized from the
+    references. That is why this takes sixteen where Klein's chained ReferenceLatents took six.
+
+    Output size follows the references unless one was asked for, in which case an EmptyLatentImage replaces
+    the node's own latent.
     """
-    graph, model = _klein_base(unet, clip, vae, loras)
-    graph["4"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}}
-    graph["5"] = _negative_node(negative, ["4", 0])
-    positive, negative = ["4", 0], ["5", 0]
-    for index, path in enumerate(images):
+    if not images:
+        raise LocalImageError("Qwen Image 2.1 edit needs at least one reference image.", fatal=True)
+    if len(images) > QWEN21_MAX_REFS:
+        raise LocalImageError(f"Qwen Image 2.1 edit takes at most {QWEN21_MAX_REFS} reference images; "
+                              f"{len(images)} were given.", fatal=True)
+    graph, model = _qwen21_base(unet, clip, vae, loras, cache)
+    encode = {"clip": ["2", 0], "vae": ["3", 0], "prompt": prompt, "negative_prompt": negative,
+              "resolution": resolution}
+    for index, path in enumerate(images, start=1):
         graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
-        graph[f"s{index}"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
-            "image": [f"i{index}", 0], "upscale_method": "lanczos", "megapixels": megapixels, "resolution_steps": 1}}
-        graph[f"e{index}"] = {"class_type": "VAEEncode", "inputs": {"pixels": [f"s{index}", 0], "vae": ["3", 0]}}
-        graph[f"rp{index}"] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": positive, "latent": [f"e{index}", 0]}}
-        graph[f"rn{index}"] = {"class_type": "ReferenceLatent", "inputs": {"conditioning": negative, "latent": [f"e{index}", 0]}}
-        positive, negative = [f"rp{index}", 0], [f"rn{index}", 0]
+        encode[f"image_{index}"] = [f"i{index}", 0]
+    graph["4"] = {"class_type": "TextEncodeQwenImage21", "inputs": encode}
     if width and height:
-        size_w, size_h = width, height
-    else:  # follow the first reference, which is already at a size the model likes
-        graph["gs"] = {"class_type": "GetImageSize", "inputs": {"image": ["s0", 0]}}
-        size_w, size_h = ["gs", 0], ["gs", 1]
+        graph["6"] = {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}}
+        latent = ["6", 0]
+    else:  # the encode node already sized a latent from the references
+        latent = ["4", 2]
     graph.update({
-        "6": {"class_type": "EmptyFlux2LatentImage", "inputs": {"width": size_w, "height": size_h, "batch_size": 1}},
-        "7": {"class_type": "CFGGuider", "inputs": {"model": model, "positive": positive, "negative": negative, "cfg": cfg}},
-        "8": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
-        "9": {"class_type": "Flux2Scheduler", "inputs": {"steps": steps, "width": size_w, "height": size_h}},
-        "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
-        "11": {"class_type": "SamplerCustomAdvanced", "inputs": {
-            "noise": ["10", 0], "guider": ["7", 0], "sampler": ["8", 0], "sigmas": ["9", 0], "latent_image": ["6", 0]}},
-        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["3", 0]}},
-        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": prefix}},
+        "7": {"class_type": "KSampler", "inputs": {
+            "model": model, "positive": ["4", 0], "negative": ["4", 1], "latent_image": latent, "seed": seed,
+            "steps": steps, "cfg": cfg, "sampler_name": sampler, "scheduler": scheduler, "denoise": 1.0}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": prefix}},
     })
     return graph
 
@@ -499,16 +532,28 @@ class LocalImageEngine:
         """Every local engine's status, keyed by engine id."""
         return {engine: await self.status(engine) for engine in LOCAL_MODELS}
 
+    async def _has_cache_node(self) -> bool:
+        """Whether this ComfyUI has QwenImage21Cache (0.36.0+). Without it the graph is the same, only slower,
+        so a missing node is not worth failing over -- unlike TextEncodeQwenImage21, which edits need."""
+        try:
+            return bool(await self.service.comfy.object_info(QWEN21_CACHE_NODE))
+        except Exception:  # ComfyUI down: the caller is about to fail on something louder than this
+            return False
+
     async def edit_status(self, engine: str = "krea2") -> dict:
         """What an engine needs to edit, beyond its base files.
 
-        Krea 2 needs the comfyui-krea2edit nodes and the identity-edit LoRA. Klein edits with core nodes and
-        its own weights, so it is ready as soon as those are.
+        Krea 2 needs the comfyui-krea2edit nodes and the identity-edit LoRA. Qwen Image 2.1 needs one core
+        node that only exists from ComfyUI 0.36.0, so an older pod is told which node rather than having
+        ComfyUI reject the graph at submit time. Everything else edits with its own weights alone.
         """
         if engine != "krea2":
             spec = image_engines.get(engine)
             if not spec or not spec.edit:
                 return {"installed": False, "missing": [f"{spec.label if spec else engine} does not edit images."], "lora": None}
+            if engine == "qwen21" and not await self.service.comfy.object_info(QWEN21_EDIT_NODE):
+                return {"installed": False, "lora": None,
+                        "missing": [f"core node {QWEN21_EDIT_NODE} (needs ComfyUI 0.36.0 or newer)"]}
             return {"installed": True, "missing": [], "lora": None}
         missing = [f"custom node {node} (comfyui-krea2edit)" for node in EDIT_NODES if not await self.service.comfy.object_info(node)]
         lora = self._edit_lora(await self.service.available_models("loras"))
@@ -557,7 +602,7 @@ class LocalImageEngine:
             item.family = image_engines.family_of(at, item.family)
         for name in files:
             base = name.rsplit("/", 1)[-1]
-            # The whole path, not the base: a file in models/loras/klein is a Klein LoRA even when its own
+            # The whole path, not the base: a file in models/loras/qwen21 is a Qwen 2.1 LoRA even when its own
             # name says nothing, which is the point of downloading into a folder named after the family.
             found = image_engines.family_of(name)
             if base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base):
@@ -580,27 +625,43 @@ class LocalImageEngine:
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:
         """Match the requested LoRAs against the ones this engine can actually load.
 
-        Only ``family``'s files are candidates: a Klein LoRA in a Krea 2 graph does not fail, it just makes
+        Only ``family``'s files are candidates: a Qwen 2.1 LoRA in a Krea 2 graph does not fail, it just makes
         a worse image, so the wrong family must never be reachable by name.
         """
         requested = list(requested or [])
         items = [item for item in await self.catalogue(family) if item.installed]
-        automatic = set()
-        if adult_default and not _names_adult(requested, items):
+        automatic: set[str] = set()
+        # Read before anything is attached: whether the *request* names an adult LoRA is what decides if the
+        # family's adult defaults step aside, and the base LoRAs appended below must not change that answer.
+        names_adult = _names_adult(requested, items)
+
+        def attach(wanted: list[dict]) -> None:
+            """Append defaults the request has not already named, remembering which arrived on their own."""
+            asked = {_stem(spec.get("name")) for spec in requested}
+            for entry in wanted:
+                stem = _stem(entry.get("name"))
+                # never add one the request already names, or it is applied twice at double strength;
+                # and only what is installed, so a pod missing one still generates
+                if not stem or stem in asked or not any(_same_lora(i.file, entry.get("name")) for i in items):
+                    continue
+                automatic.add(stem)
+                requested.append(dict(entry))
+                asked.add(stem)
+
+        # Always-on repair LoRAs, attached first and *not* displaced by a request naming its own adult LoRA.
+        base = BASE_LORAS.get(family, ())
+        attach([{"name": name, "strength": strength} for name, strength in base])
+        # A name that does not match any installed file attaches nothing and says nothing, so the only place
+        # a typo in an always-on LoRA can surface is here.
+        warnings = [f"{image_engines.family_label(family)} always attaches {name!r}, which is not installed on "
+                    "this pod, so this image was made without it."
+                    for name, _ in base if not any(_same_lora(i.file, name) for i in items)]
+        if adult_default and not names_adult:
             stored = self.service.image_engines.defaults(family)
             wanted = stored if stored is not None else [{"name": n} for n in DEFAULT_ADULT_LORAS.get(family, ())]
-            # never add one the request already names, or it is applied twice at double strength
-            asked = {str(spec.get("name") or "").strip().lower().removesuffix(".safetensors") for spec in requested}
-            automatic = {str(entry.get("name") or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
-                         for entry in wanted
-                         if any(_same_lora(i.file, entry.get("name"))
-                                for i in items)  # only what is installed, so a pod missing one still generates
-                         and str(entry.get("name") or "").lower().removesuffix(".safetensors") not in asked}
-            requested += [dict(entry) for entry in wanted
-                          if str(entry.get("name") or "").rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
-                          in automatic]
+            attach(wanted)
         if not requested:
-            return [], [], []
+            return [], [], warnings
         files = await self.service.available_models("loras")
         chosen: list[tuple[str, float]] = []
         used: list[ImageLora] = []
@@ -624,7 +685,6 @@ class LocalImageEngine:
         if len(adult) > max_adult:
             raise LocalImageError("Use one adult LoRA at a time; they overlap and fight each other." if max_adult == 1
                                   else f"At most {max_adult} adult LoRAs in one image.", fatal=True)
-        warnings = []
         total = sum(abs(strength) for _, strength in adult)
         if len(adult) > 1 and total > ADULT_STRENGTH_WARN:
             warnings.append(f"{len(adult)} adult LoRAs at a combined strength of {total:.2f}: above about {ADULT_STRENGTH_WARN:.1f} "
@@ -675,17 +735,20 @@ class LocalImageEngine:
         width, height = parse_size(size)
         text = self._with_triggers(prompt, used)
         asked = [item for item in used if not item.automatic]
-        hint = next((item for item in (asked or used) if item.steps or item.scheduler or item.sampler), None)
+        hint = _sampler_hint(asked or used)
         files = status["files"]
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         batch = max(1, min(4, n))
         started = time.monotonic()
-        if engine == "klein":
-            klein_steps, klein_cfg = klein_settings(files["unet"])
-            graph = klein_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
-                                unet=files["unet"], clip=files["clip"], vae=files["vae"],
-                                steps=steps or klein_steps, cfg=cfg if cfg is not None else klein_cfg,
-                                prefix="hawk_images/klein", negative=negative)
+        if engine == "qwen21":
+            graph = qwen21_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+                                 unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                                 steps=steps or (hint.steps if hint and hint.steps else QWEN21_STEPS),
+                                 cfg=cfg if cfg is not None else (hint.cfg if hint and hint.cfg is not None else QWEN21_CFG),
+                                 sampler=(hint.sampler if hint and hint.sampler else QWEN21_SAMPLER),
+                                 scheduler=(hint.scheduler if hint and hint.scheduler else QWEN21_SCHEDULER),
+                                 prefix="hawk_images/qwen21", negative=negative,
+                                 cache=await self._has_cache_node())
         elif engine == "zimage":
             graph = zimage_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                  unet=files["unet"], clip=files["clip"], vae=files["vae"],
@@ -705,32 +768,40 @@ class LocalImageEngine:
         images = await self._submit(graph, spec.label)
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 
-    async def edit_klein(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
-                         seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
-                         max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0,
-                         negative: str = "", cfg: float | None = None) -> LocalResult:
-        """FLUX.2 Klein edit: every reference folded in through its own ReferenceLatent."""
+    async def edit_qwen21(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
+                          seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
+                          max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0,
+                          negative: str = "", cfg: float | None = None) -> LocalResult:
+        """Qwen Image 2.1 edit: up to sixteen references, all through one TextEncodeQwenImage21 node.
+
+        Unlike the Klein edit this replaced, a LoRA's sampler hints apply here too -- the go-to adult LoRA
+        for this family only behaves at cfg 1 on er_sde/beta, which a fixed edit recipe could not express.
+        """
         check_prompt(prompt)
-        status = await self.status("klein")
-        await self._ready(status, "klein", "edit", wait_seconds=wait_seconds)
+        status = await self.status("qwen21")
+        await self._ready(status, "qwen21", "edit", wait_seconds=wait_seconds)
         photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
-                                                          adult_default=self.adult_default and not photo, family="klein")
+                                                          adult_default=self.adult_default and not photo, family="qwen21")
         check_edit(prompt, sources, used, self.service.store.get_asset)
         text = self._with_triggers(prompt, used)
         width, height = parse_size(size) if size else (None, None)
         files = status["files"]
-        klein_steps, klein_cfg = klein_settings(files["unet"])
+        asked = [item for item in used if not item.automatic]
+        hint = _sampler_hint(asked or used)
+        cache = await self._has_cache_node()
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         started, images = time.monotonic(), []
         for index in range(max(1, min(4, n))):
-            graph = klein_edit_graph(text, images=[a["path"] for a in sources], width=width, height=height,
-                                     seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
-                                     vae=files["vae"], steps=steps or klein_steps,
-                                     cfg=cfg if cfg is not None else klein_cfg,
-                                     megapixels=EDIT_MEGAPIXELS, prefix="hawk_images/klein_edit",
-                                     negative=negative)
-            images += await self._submit(graph, "FLUX.2 Klein edit")
+            graph = qwen21_edit_graph(text, images=[a["path"] for a in sources], width=width, height=height,
+                                      seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
+                                      vae=files["vae"],
+                                      steps=steps or (hint.steps if hint and hint.steps else QWEN21_STEPS),
+                                      cfg=cfg if cfg is not None else (hint.cfg if hint and hint.cfg is not None else QWEN21_CFG),
+                                      sampler=(hint.sampler if hint and hint.sampler else QWEN21_SAMPLER),
+                                      scheduler=(hint.scheduler if hint and hint.scheduler else QWEN21_SCHEDULER),
+                                      prefix="hawk_images/qwen21_edit", negative=negative, cache=cache)
+            images += await self._submit(graph, "Qwen Image 2.1 edit")
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
 
     async def edit(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1, seed: int | None = None,

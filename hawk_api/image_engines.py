@@ -63,9 +63,9 @@ class ImageEngine:
 #: Canonical engines, in the order they are shown in Studio. The order a request actually tries them in
 #: comes from the stored settings, not from here.
 ENGINES: dict[str, ImageEngine] = {
-    "klein": ImageEngine(
-        id="klein", label="FLUX.2 Klein 9B", where="local", generate=True, edit=True, max_refs=6,
-        lora_family="klein", checks=True, tag="klein", edit_tag="klein-edit",
+    "qwen21": ImageEngine(
+        id="qwen21", label="Qwen Image 2.1", where="local", generate=True, edit=True, max_refs=16,
+        lora_family="qwen21", checks=True, tag="qwen21", edit_tag="qwen21-edit",
     ),
     "krea2": ImageEngine(
         id="krea2", label="Krea 2", where="local", generate=True, edit=True, max_refs=2,
@@ -98,7 +98,11 @@ ENGINES: dict[str, ImageEngine] = {
 #: the Atlas model — see IMAGE_ALIASES in jobs.py.
 ALIASES = {
     "local": "krea2", "krea": "krea2", "krea2": "krea2", "krea-2": "krea2",
-    "klein": "klein", "flux": "klein", "flux2": "klein", "flux-2": "klein",
+    "qwen21": "qwen21", "qwen": "qwen21", "qwen2.1": "qwen21", "qwen-image-2.1": "qwen21",
+    "qwen_image_2.1": "qwen21", "qwen-image": "qwen21",
+    # Klein's spellings are kept pointing at its replacement so assets, pinned engines and retakes made
+    # before the swap still resolve; MOVED says so out loud rather than letting it look like Klein ran.
+    "klein": "qwen21", "flux": "qwen21", "flux2": "qwen21", "flux-2": "qwen21",
     "z-image": "zimage", "zimage": "zimage", "zit": "zimage", "z-image-local": "zimage",
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
@@ -109,6 +113,10 @@ ALIASES = {
 MOVED = {
     "z-image": "engine 'z-image' now means the local Z-Image Turbo on this GPU; use 'turbo' for the Atlas one.",
     "zimage": "engine 'z-image' now means the local Z-Image Turbo on this GPU; use 'turbo' for the Atlas one.",
+    "klein": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'klein' now runs Qwen.",
+    "flux": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux' now runs Qwen.",
+    "flux2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux2' now runs Qwen.",
+    "flux-2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux-2' now runs Qwen.",
 }
 
 #: LoRA families: one ComfyUI models/loras folder holds all of them, and a file from the wrong family
@@ -117,7 +125,10 @@ MOVED = {
 LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "h3": ("MiniMax H3 video", ("minimax_h3", "h3_", "hmnsfw", "hmbreasts", "hmpenis", "mysticxxx_mmh3", "synthpussy_h3")),
     "krea2": ("Krea 2", ("krea2", "snofs_krea2", "snofs_photodetail")),
-    "klein": ("FLUX.2 Klein", ("klein_",)),
+    # Qwen 2.1 LoRAs are published under the author's own names rather than a common prefix, so these cover
+    # the catalogued ones and FAMILY_FOLDERS covers the rest -- several ship with spaces or CJK in the name.
+    "qwen21": ("Qwen Image 2.1", ("qwen21_", "qwen_image_2.1", "qwen-image-2.1", "qwen2.1", "qwen image2.1",
+                                  "lenovo_qwen21", "pornmaster_qi2.1", "elusarcas-qwen2-1")),
     "zit": ("Z-Image Turbo", ("zit_",)),
 }
 
@@ -125,12 +136,20 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
 #: plain names to avoid importing local_images, which imports this module.
 DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
     "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
-    "klein": ("klein_snofs.safetensors", "klein_nsfw_no_face_change.safetensors"),
+    "qwen21": ("NSFW Qwen Lora.safetensors",),
     "zit": ("zit_mystic_xxx.safetensors",),
 }
 
+#: Attached to every image from this family, whatever else the request asks for -- unlike the adult
+#: defaults above, which step aside when the request names its own adult LoRA. A model that needs a repair
+#: LoRA to produce its advertised quality should not depend on the user remembering to ask for it.
+#: Mirrored in local_images.BASE_LORAS for the same reason as DEFAULT_ADULT_LORAS.
+BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = {
+    "qwen21": (("qwen-image-2.1-fix-1.0-comfy.safetensors", 1.0),),
+}
+
 #: The families that belong to images; everything else is a video LoRA.
-IMAGE_FAMILIES = frozenset({"krea2", "klein", "zit"})
+IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
 _TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream"}
@@ -150,7 +169,9 @@ def resolve(name: str) -> str:
 FAMILY_FOLDERS: dict[str, tuple[str, ...]] = {
     "h3": ("minimax_h3", "minimax-h3", "video"),
     "krea2": ("krea-2", "krea"),
-    "klein": ("flux2", "flux-2", "flux2_klein"),
+    # The folder is how a Qwen 2.1 LoRA whose own name says nothing -- "NSFW Qwen Lora.safetensors",
+    # "qwen2.1角色卡-4.safetensors" -- gets classified without being renamed first.
+    "qwen21": ("qwen-image-2.1", "qwen_image_2.1", "qwenimage21", "qwen2.1", "qwen"),
     "zit": ("zimage", "z_image", "z-image"),
 }
 
@@ -240,7 +261,7 @@ def full_order(stored: list[dict] | None, action: str = "generate") -> list[dict
 #: skipped by the walk, so listing all three local engines here costs a pod that lacks one nothing.
 DEFAULTS = {
     "generate": [
-        {"engine": "klein", "enabled": True},
+        {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},
         # below all three local engines, so it only ever fires when none of them can run -- and then it is
@@ -250,7 +271,7 @@ DEFAULTS = {
         {"engine": "seedream-lite", "enabled": False},
     ],
     "edit": [
-        {"engine": "klein", "enabled": True},  # the only local engine that takes more than two references
+        {"engine": "qwen21", "enabled": True},  # 16 references, so a group shot no longer falls onto paid Seedream
         {"engine": "krea2", "enabled": True},
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
@@ -263,6 +284,9 @@ DEFAULTS = {
 }
 BUSY_MODES = ("wait", "fall_through")
 MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
+#: Ceiling on a stored default's strength. 2.0 covers the content LoRAs; slider-style ones (the Qwen 2.1
+#: age slider runs to 3) are meant to be pushed past it, so the cap is theirs rather than the common case's.
+MAX_DEFAULT_STRENGTH = 3.0
 
 
 class SettingsError(ValueError):
@@ -343,7 +367,10 @@ class ImageEngineStore:
         busy = self.settings()["busy"]
         return float(busy["max_wait_seconds"]) if busy["mode"] == "wait" else 0.0
 
-    def warnings(self, data: dict | None = None) -> list[str]:
+    def warnings(self, data: dict | None = None, installed: set[str] | None = None) -> list[str]:
+        """What is wrong with this ladder. ``installed`` is the LoRA basenames on the pod, when the caller
+        has them: a base LoRA that is configured but missing attaches to nothing and says nothing, so the
+        only place a typo in its name can surface is here."""
         data = data or self.settings()
         found = []
         for action in ("generate", "edit"):
@@ -354,14 +381,30 @@ class ImageEngineStore:
                 found.append(f"No local engine is on for {action}: every image will be billed to Atlas.")
             elif all(engine.local for engine in live):
                 found.append(f"Only local engines are on for {action}: it fails when ComfyUI is busy or down.")
+        found += self.missing_base_loras(installed)
         return found
 
-    def view(self) -> dict:
+    @staticmethod
+    def missing_base_loras(installed: set[str] | None) -> list[str]:
+        """One warning per always-on LoRA that is not on the pod. Empty when the caller has no listing."""
+        if installed is None:
+            return []
+        stems = {str(name).rsplit("/", 1)[-1].lower().removesuffix(".safetensors") for name in installed}
+        return [f"{family_label(family)} always attaches {name!r}, which is not installed: every image from it "
+                "is missing that LoRA. Put the file in models/loras or correct the name."
+                for family, entries in BASE_LORAS.items() for name, _ in entries
+                if name.rsplit("/", 1)[-1].lower().removesuffix(".safetensors") not in stems]
+
+    def view(self, installed: set[str] | None = None) -> dict:
         data = self.settings()
         shown = {family: (self.defaults(family) if self.defaults(family) is not None
                           else [{"name": n, "strength": 0.8} for n in DEFAULT_ADULT_LORAS.get(family, ())])
                  for family in sorted(IMAGE_FAMILIES)}
-        return {**data, "warnings": self.warnings(data), "defaults": shown,
+        # Base LoRAs are not editable here -- they are shown so the panel can say what is already attached,
+        # rather than leaving the user to wonder why a LoRA they never chose is in every result.
+        base = {family: [{"name": n, "strength": s} for n, s in BASE_LORAS.get(family, ())]
+                for family in sorted(IMAGE_FAMILIES)}
+        return {**data, "warnings": self.warnings(data, installed), "defaults": shown, "base": base,
                 "families": {f: family_label(f) for f in sorted(IMAGE_FAMILIES)}, "engines": [
             {"id": e.id, "label": e.label, "where": e.where, "generate": e.generate, "edit": e.edit,
              "max_refs": e.max_refs, "lora_family": e.lora_family, "price_key": e.price_key}
@@ -394,14 +437,21 @@ class ImageEngineStore:
             name = str((entry or {}).get("name") or "").strip()
             if not name:
                 raise SettingsError(f"Give a LoRA file name for {family_label(family)}.")
-            if family_of(name) != family:
-                raise SettingsError(f"{name!r} is not a {family_label(family)} LoRA, so it can't be one of its defaults.")
+            # Refuse a name that positively belongs to another image family; accept one whose name says
+            # nothing. Several published Qwen 2.1 LoRAs carry no usable prefix ("NSFW Qwen Lora.safetensors"),
+            # and the folder that classifies them on disk is not part of the name the panel round-trips. What
+            # actually protects a render is resolve_loras, which only ever loads installed files of the
+            # engine's own family -- this check is here to catch an obvious mix-up, not to be the gate.
+            found = family_of(name)
+            if found != family and found in IMAGE_FAMILIES:
+                raise SettingsError(f"{name!r} is a {family_label(found)} LoRA, so it can't be one of "
+                                    f"{family_label(family)}'s defaults.")
             try:
                 strength = float((entry or {}).get("strength", 0.8))
             except (TypeError, ValueError):
                 raise SettingsError(f"{name!r} needs a number for strength.") from None
-            if not 0.0 <= strength <= 2.0:
-                raise SettingsError(f"{name!r}: strength should be between 0 and 2.")
+            if not 0.0 <= strength <= MAX_DEFAULT_STRENGTH:
+                raise SettingsError(f"{name!r}: strength should be between 0 and {MAX_DEFAULT_STRENGTH:g}.")
             cleaned.append({"name": name, "strength": strength})
         return cleaned
 

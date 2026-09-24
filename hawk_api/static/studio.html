@@ -2638,10 +2638,10 @@
   }
   // How to write the prompt for the engine that will run it (from each model's prompting guide): [words, tip, example].
   const PROMPT_TIPS = {
-    klein: [[40, 120], "FLUX.2 Klein: plain descriptive sentences. Subject with age and features, what they wear and the fabric, the place, light with a direction, then lens and mood. It follows long prompts closely, so say what you want rather than piling on style words.",
-      "A 26-year-old woman in a green cotton saree with a gold zari border, standing in a haveli courtyard, soft morning light from the left, 85mm, shallow depth of field, warm natural tones"],
-    kleinEdit: [[6, 60], "Klein edit: one instruction naming only what changes, and say what must stay. It takes several references -- call them image 1, image 2 in the order you added them -- and folds each one in, so it can combine subjects from different pictures.",
-      "Put the woman from image 2 at the table in image 1, keep her face and the lighting exactly as they are."],
+    qwen21: [[120, 450], "Qwen Image 2.1 wants a long paragraph describing the finished picture as if you were looking at it \u2014 around twenty sentences, and the same length whether your idea is three words or three hundred. Open with one sentence naming the medium, the style, the subject and the background; then the background; then walk the frame with about ten positional phrases (upper-left, across the top, in the centre, along the lower third) so nothing piles up in the middle. Give the light its own sentence, and close with a single \u201cThe overall composition is \u2026\u201d. Colours take a modifier (deep navy, warm terracotta), surfaces get their material (brushed metal, coarse linen), and age is a life stage, not a number of years. Hedging (\u201cappears to be\u201d, \u201clikely\u201d) reads as natural here. No \u201cmasterpiece, 8K\u201d. Text to appear in the image goes in straight double quotes. For a transparent PNG, wrap the description: This is an RGBA format image with transparency. \u2026 The image has an alpha channel and a transparent background.",
+      "A vertical realistic photograph of a woman in her late twenties standing in a haveli courtyard, the ochre sandstone arches behind her falling into soft blur. She wears a deep green cotton saree with a fine gold zari border, the weave visible along the pallu, and small gold jhumkas that catch the light. In the lower-left of the frame a brass water pot sits on worn stone, and across the upper edge a carved wooden balcony runs the width of the courtyard. The lighting is soft morning daylight from the left, warm on her cheek and throwing a long shadow to the right. The overall composition is calm and slightly off-centre, in warm ochres and deep greens."],
+    qwen21Edit: [[15, 120], "Qwen 2.1 edit: lead with the operation, not with a description of the finished picture. Name only what changes and push it hard \u2014 what survives is bought by saying what stays, not by going gently. Refer to references as <image1>, <image2> in the order you added them: image 1 is the canvas that survives and sets the output size, the rest supply material. Do not describe a face you want kept \u2014 point at its image, because describing it makes the model repaint it and lose the likeness. Say what stays affirmatively (\u201ckeep the background exactly as in <image1>\u201d) rather than as a prohibition, and quote any text that must appear. Up to 16 references load, but the model is only documented to 10.",
+      "Put the woman from <image2> at the table in <image1>, seated on the near side and facing the camera. Keep her facial identity exactly as in <image2>. Keep the room, the table setting and the lighting of <image1> exactly as they are."],
     krea2: [[40, 100], "Krea 2: subject first in specific visual language (textures, fabric, skin), then camera terms (close-up, low-angle, 85mm, shallow depth of field), light, and a look word (editorial photography, film grain, candid phone snapshot). Plain descriptive phrases; no \u201cmasterpiece, 8K\u201d.",
       "Close-up editorial portrait of a 28-year-old Delhi stylist, textured linen kurta in rust, silver jhumkas, freckled skin, rooftop at golden hour, warm rim light from the right, 85mm, shallow depth of field, film grain, editorial photography"],
     krea2Edit: [[4, 40], "Krea 2 Identity Edit: one plain instruction naming only what changes: put, place, replace, remove, turn, restage. With 2 images, image 1 is the scene and image 2 the person. Replace is reliable; removals and outfit swaps less so.",
@@ -2673,7 +2673,7 @@
   }
   function tipKey() {
     const id = plannedEngine(), edit = genAction() === "edit";
-    if (id === "klein") return edit ? "kleinEdit" : "klein";
+    if (id === "qwen21") return edit ? "qwen21Edit" : "qwen21";
     if (id === "krea2") return edit ? "krea2Edit" : "krea2";
     if (id === "zimage" || id === "turbo") return id;
     return edit ? "seedreamEdit" : "seedream";
@@ -2724,7 +2724,7 @@
       : "4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.";
     const sizeDefault = $("genSize").querySelector('option[value=""]');
     if (sizeDefault) sizeDefault.textContent = genAction() === "edit" ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
-    $("genSteps").placeholder = krea2Edit ? "10" : id === "klein" ? "4" : "8";
+    $("genSteps").placeholder = krea2Edit ? "10" : id === "qwen21" ? "30" : "8";
 
     // LoRAs belong to whichever local engine will run, and only that engine's family loads cleanly
     const installed = loraSetFor(row && row.where === "local" ? id : "").filter((l) => l.installed);
@@ -3180,6 +3180,8 @@
       host.appendChild(line);
     });
   }
+  const loraStem = (v) => String(v || "").split("/").pop().toLowerCase().replace(/\.safetensors$/, "");
+  const sameLora = (a, b) => !!loraStem(b) && loraStem(a) === loraStem(b);
   function paintEngineDefaults(data) {
     const host = $("engineDefaults");
     host.innerHTML = "";
@@ -3188,11 +3190,20 @@
       const block = document.createElement("div");
       block.innerHTML = `<div style="font-size:12px;color:var(--ink-2);margin:6px 0 4px">${label}</div>`;
       const installed = (engineState.familyLoras[family] || []);
+      ((data.base || {})[family] || []).forEach((row) => {
+        const here = installed.some((f) => sameLora(f, row.name));
+        const line = document.createElement("div");
+        line.className = "engine-row";
+        line.innerHTML = `<span class="engine-name">${esc(row.name)}</span>
+          <span class="hint">always on \u00b7 ${row.strength}</span>`;
+        if (!here) line.innerHTML += `<span class="hint" style="color:var(--warn)">not installed</span>`;
+        block.appendChild(line);
+      });
       rows.forEach((row, index) => {
         const line = document.createElement("div");
         line.className = "engine-row";
         line.innerHTML = `<span class="engine-name">${row.name}</span>
-          <input class="input" type="number" min="0" max="2" step="0.1" style="width:80px" value="${row.strength}">
+          <input class="input" type="number" min="0" max="3" step="0.1" style="width:80px" value="${row.strength}">
           <button class="btn btn-sm" type="button">Remove</button>`;
         line.querySelector("input").onchange = (e) => { row.strength = Number(e.target.value) || 0; };
         line.querySelector("button").onclick = () => { rows.splice(index, 1); paintEngineDefaults(data); };
@@ -3254,7 +3265,7 @@
       line.innerHTML = `<span class="engine-name">${row.name}</span>
         ${row.present ? "" : '<span class="chip warn">not on this pod</span>'}
         ${row.required ? '<span class="chip">required</span>' : ""}
-        <input class="input" type="number" min="0" max="2" step="0.1" style="width:80px" value="${row.strength}">`;
+        <input class="input" type="number" min="0" max="3" step="0.1" style="width:80px" value="${row.strength}">`;
       line.querySelector("input").onchange = (e) => {
         engineState.video[index].strength = Number(e.target.value) || 0;
         line.className = `engine-row${engineState.video[index].strength ? "" : " off"}`;
@@ -3289,7 +3300,8 @@
         const family = (engineState.engines[id] || {}).lora_family;
         if (family) engineState.familyLoras[family] = (st.loras || []).filter((l) => l.installed).map((l) => l.file);
       });
-      paintEngineDefaults({ families: (await api("/v1/images/engines")).families || {} });
+      const engineView = await api("/v1/images/engines");
+      paintEngineDefaults({ families: engineView.families || {}, base: engineView.base || {} });
       paintVideoDefaults(((await api("/v1/loras/defaults").catch(() => ({}))).defaults) || []);
       const sys = options.system || {};
       const chip = $("engineHostChip");
