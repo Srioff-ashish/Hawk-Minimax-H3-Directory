@@ -459,7 +459,8 @@ def qwen21_edit_graph(prompt: str, *, images: list[str], width: int | None, heig
                       resolution: int = QWEN21_EDIT_RESOLUTION, cache: bool = False) -> dict:
     """Qwen Image 2.1 edit, with up to sixteen reference images.
 
-    One TextEncodeQwenImage21 node does the whole job: it takes the references on image_1 .. image_16, the
+    One TextEncodeQwenImage21 node does the whole job: it takes the references on images.image_1 ..
+    images.image_16, the
     prompt and the negative prompt, and returns conditioning for both plus a latent sized from the
     references. That is why this takes sixteen where Klein's chained ReferenceLatents took six.
 
@@ -476,7 +477,11 @@ def qwen21_edit_graph(prompt: str, *, images: list[str], width: int | None, heig
               "resolution": resolution}
     for index, path in enumerate(images, start=1):
         graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
-        encode[f"image_{index}"] = [f"i{index}", 0]
+        # "images.image_1", not "image_1": the node takes its references through an Autogrow input
+        # named "images", and ComfyUI matches the slots by their namespaced id, gathering them into one
+        # dict argument. A flat "image_1" matches nothing, survives as a stray keyword and lands as
+        # "execute() got an unexpected keyword argument 'image_1'" at sampling time.
+        encode[f"images.image_{index}"] = [f"i{index}", 0]
     graph["4"] = {"class_type": "TextEncodeQwenImage21", "inputs": encode}
     if width and height:
         graph["6"] = {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}}
@@ -720,7 +725,7 @@ class LocalImageEngine:
             await self.service.comfy.submit(graph, prompt_id)
         except ComfyError as exc:
             raise LocalImageError(f"ComfyUI rejected the {label} graph: {exc}") from exc
-        return await self._collect(prompt_id)
+        return await self._collect(prompt_id, label)
 
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
                        loras: list[dict] | None = None, steps: int | None = None,
@@ -873,14 +878,9 @@ class LocalImageEngine:
             loras=[(status["edit"]["lora"], 1.0)] + chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
             steps=steps or EDIT_STEPS, ref_boost=boost, prefix="hawk_images/krea2_edit", cfg=cfg,
         )
-        prompt_id = str(uuid.uuid4())
-        try:
-            await self.service.comfy.submit(graph, prompt_id)
-        except ComfyError as exc:
-            raise LocalImageError(f"ComfyUI rejected the Krea 2 edit graph: {exc}") from exc
-        return await self._collect(prompt_id)
+        return await self._submit(graph, "Krea 2 edit")
 
-    async def _collect(self, prompt_id: str) -> list[bytes]:
+    async def _collect(self, prompt_id: str, label: str) -> list[bytes]:
         deadline = time.monotonic() + WAIT_SECONDS
         while True:
             try:
@@ -893,7 +893,7 @@ class LocalImageEngine:
                     error = next((data for name, data in status.get("messages", []) if name == "execution_error"), {})
                     message = str(error.get("exception_message") or "ComfyUI reported an error.").strip()
                     where = f" in {error['node_type']} (node {error.get('node_id')})" if error.get("node_type") else ""
-                    raise LocalImageError(f"Krea 2 failed{where}: {message}")
+                    raise LocalImageError(f"{label} failed{where}: {message}")
                 files = [image for output in (history.get("outputs") or {}).values() for image in output.get("images") or []]
                 if files:
                     return [await self._read(image) for image in files]

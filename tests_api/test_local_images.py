@@ -86,9 +86,13 @@ class Qwen21EditGraph(unittest.TestCase):
         self.assertEqual(len(nodes_of(graph, "LoadImage")), 16, "all sixteen references should be loaded")
         encode = nodes_of(graph, "TextEncodeQwenImage21")[0]["inputs"]
         for slot in range(1, 17):
-            self.assertEqual(encode[f"image_{slot}"], [f"i{slot}", 0],
-                             f"image_{slot} should read the {slot}th reference loader")
-        self.assertNotIn("image_17", encode, "the node has no seventeenth slot")
+            # namespaced by the Autogrow input's own id; a bare "image_1" reaches execute() as a
+            # stray keyword instead of being gathered into the node's images argument
+            self.assertEqual(encode[f"images.image_{slot}"], [f"i{slot}", 0],
+                             f"images.image_{slot} should read the {slot}th reference loader")
+            self.assertNotIn(f"image_{slot}", encode,
+                             f"image_{slot} without the images. prefix matches no slot on the node")
+        self.assertNotIn("images.image_17", encode, "the node has no seventeenth slot")
 
     def test_more_references_than_the_node_has_slots_is_refused(self):
         with self.assertRaises(li.LocalImageError) as caught:
