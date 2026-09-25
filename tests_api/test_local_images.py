@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -380,6 +381,81 @@ class ThePromptKeptOnAnAsset(unittest.TestCase):
             PROMPT_RECORD_LIMIT, longest_asked_for,
             f"prompts are written up to about {longest_asked_for} characters but only "
             f"{PROMPT_RECORD_LIMIT} are kept, so the library shows a sentence or two and the rest is lost")
+
+
+class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
+    """What happens to an edit when a restarted runtime kept the database and lost the pixels.
+
+    The methods are exercised straight off HawkService rather than through a built service: all three
+    reach only settings, the input folder and the Drive exporter, and standing those up is the whole
+    point of the test.
+    """
+
+    def setUp(self):
+        from hawk_api.jobs import HawkService
+
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.input_dir = os.path.join(self.root, "comfy_input")
+        self.drive = os.path.join(self.root, "drive")
+        os.makedirs(self.input_dir)
+
+        service = type("Service", (), {
+            "ensure_asset_on_disk": HawkService.ensure_asset_on_disk,
+            "local_asset_path": HawkService.local_asset_path,
+            "drive_asset_path": HawkService.drive_asset_path,
+        })()
+        service.settings = type("S", (), {"comfy_input_dir": self.input_dir})()
+        browser = type("B", (), {"available": True, "root": self.drive})()
+        service.drive_exporter = type("E", (), {
+            "browser": browser, "settings": staticmethod(lambda: {"image_folder": "Images"}),
+        })()
+        self.service = service
+        self.asset = {"id": "64d37a92a0e1", "kind": "image", "filename": "shot.png",
+                      "path": "hawk_api/64d37a92a0e1/shot.png", "created_at": time.time()}
+
+    def export(self, name="gen_a_shot_64d37a92.png"):
+        """One exported copy, named the way export_assets names them: <slug>_<asset_id[:8]>.<ext>."""
+        day = time.strftime("%Y-%m-%d", time.localtime(self.asset["created_at"]))
+        folder = os.path.join(self.drive, "Images", day)
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, name), "wb") as handle:
+            handle.write(b"exported pixels")
+
+    def on_disk(self):
+        return os.path.join(self.input_dir, self.asset["path"])
+
+    async def test_the_export_is_copied_back_under_the_path_the_asset_records(self):
+        # ComfyUI loads a reference by that stored path, so restoring it anywhere else would not help.
+        self.export()
+        self.assertTrue(await self.service.ensure_asset_on_disk(self.asset),
+                        "an export exists, so the file should have been restored")
+        self.assertEqual(open(self.on_disk(), "rb").read(), b"exported pixels",
+                         "the reference should be readable at exactly the path the asset names")
+
+    async def test_a_file_already_there_is_left_alone(self):
+        os.makedirs(os.path.dirname(self.on_disk()))
+        with open(self.on_disk(), "wb") as handle:
+            handle.write(b"original pixels")
+        self.export()
+        self.assertTrue(await self.service.ensure_asset_on_disk(self.asset))
+        self.assertEqual(open(self.on_disk(), "rb").read(), b"original pixels",
+                         "the file on disk is the original; an export must never overwrite it")
+
+    async def test_no_export_to_restore_from_is_reported_rather_than_guessed_at(self):
+        # The honest answer when the database outlived the pixels: the edit cannot run, and the caller
+        # says so by name instead of letting ComfyUI fail inside its loader.
+        self.assertFalse(await self.service.ensure_asset_on_disk(self.asset),
+                         "nothing was exported, so this must report the file as unrecoverable")
+        self.assertFalse(os.path.exists(self.on_disk()))
+
+    async def test_an_export_from_the_day_either_side_still_counts(self):
+        # A restore can land either side of midnight from the export that made the file.
+        self.asset["created_at"] = time.time() - 86400
+        self.export()
+        self.asset["created_at"] = time.time()
+        self.assertTrue(await self.service.ensure_asset_on_disk(self.asset),
+                        "the dated folder is a day out, which a restore near midnight makes ordinary")
 
 
 if __name__ == "__main__":
