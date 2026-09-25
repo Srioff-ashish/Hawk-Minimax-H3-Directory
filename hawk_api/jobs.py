@@ -664,6 +664,39 @@ class HawkService:
         self.store.add_asset(asset)
         return asset
 
+    def provenance(self, asset_id: str) -> dict:
+        """Where an image came from, as the content checks see it.
+
+        Fetched on demand rather than folded into asset_view: the walk is a lookup per ancestor, and a
+        listing of a thousand assets should not pay for it a thousand times over.
+        """
+        asset = self.store.get_asset(asset_id)
+        if asset is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        chain, seen, queue = [], set(), [asset]
+        while queue:
+            current = queue.pop(0)
+            if current["id"] in seen or len(chain) > 40:
+                continue
+            seen.add(current["id"])
+            source = current.get("source") or {}
+            chain.append({"id": current["id"], "filename": current.get("filename", ""),
+                          "type": source.get("type", ""), "generator": source.get("generator", ""),
+                          "corrected": bool(source.get("corrected_at"))})
+            for ref_id in source.get("references") or []:
+                ref = self.store.get_asset(str(ref_id))
+                if ref is None:
+                    chain.append({"id": str(ref_id), "filename": "", "type": "missing", "generator": "",
+                                  "corrected": False})
+                else:
+                    queue.append(ref)
+        return {"id": asset["id"],
+                "from_upload": local_images.from_upload(asset, self.store.get_asset),
+                # what the refusal is actually pointing at, which the message never used to name
+                "upload_roots": [row["id"] for row in chain if row["type"] in ("upload", "missing")],
+                "corrected_from": ((asset.get("source") or {}).get("corrected_from") or None),
+                "chain": chain}
+
     def _correct_provenance(self, asset: dict, source_id: str) -> None:
         """Record that this file is a copy of an asset made here, not something brought in from outside.
 

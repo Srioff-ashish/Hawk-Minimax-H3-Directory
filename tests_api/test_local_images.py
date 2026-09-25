@@ -577,6 +577,26 @@ class CorrectingWhereAFileCameFrom(unittest.IsolatedAsyncioTestCase):
             with self.subTest(origin=origin), self.assertRaises(RequestError):
                 self.service.update_asset("copy", generated_from=origin)
 
+    def test_the_panel_can_say_which_ancestor_makes_it_a_photograph(self):
+        # The refusal used to name neither the reason nor the file, so an image made here from a prompt
+        # looked simply broken. This is what the viewer reads to say "an uploaded photo, through <id>".
+        from hawk_api.jobs import HawkService
+
+        self.service.provenance = HawkService.provenance.__get__(self.service)
+        report = self.service.provenance("of_photo")
+        self.assertTrue(report["from_upload"])
+        self.assertEqual(report["upload_roots"], ["photo"], "name the ancestor the refusal is really about")
+        self.assertEqual([row["id"] for row in report["chain"]], ["of_photo", "photo"])
+
+        clean = self.service.provenance("made")
+        self.assertFalse(clean["from_upload"])
+        self.assertEqual(clean["upload_roots"], [])
+
+        self.service.update_asset("copy", generated_from="made")
+        fixed = self.service.provenance("copy")
+        self.assertFalse(fixed["from_upload"])
+        self.assertEqual(fixed["corrected_from"], {"type": "upload"}, "the override stays visible in the panel")
+
     def test_undoing_a_correction_that_was_never_made_is_refused(self):
         from hawk_api.jobs import RequestError
 

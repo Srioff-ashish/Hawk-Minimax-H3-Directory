@@ -209,6 +209,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                                        add_tags=body.add_tags, remove_tags=body.remove_tags,
                                                        filename=body.filename, generated_from=body.generated_from))
 
+    @app.get("/v1/assets/{asset_id}/provenance", tags=["assets"])
+    async def asset_provenance(asset_id: str):
+        """Where an image came from, as the content checks see it: whether it counts as an uploaded photo,
+        which ancestors make it one, and whether its origin has been corrected."""
+        return service.provenance(asset_id)
+
     @app.delete("/v1/assets/{asset_id}", tags=["assets"])
     async def delete_asset(asset_id: str):
         service.delete_asset(asset_id)

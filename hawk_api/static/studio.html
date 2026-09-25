@@ -2448,6 +2448,7 @@
       ["Prompt", source.prompt || ""], ["Asset id", asset.id],
     ].filter(([, value]) => value);
     $("viewerMeta").innerHTML = meta.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(String(value))}</dd></div>`).join("");
+    if (asset.kind === "image") paintProvenance(asset);
     $("viewerActions").innerHTML = (asset.kind === "image" ? `<button class="btn btn-sm" type="button" data-view="remix">✨ Edit / remix</button>` : "")
       + `<button class="btn btn-sm" type="button" data-view="create">Use in Create</button><button class="btn btn-sm" type="button" data-view="agent">Attach to agent</button>`
       + `<button class="btn btn-sm" type="button" data-view="select">${media.selected.has(asset.id) ? "Unselect" : "Select"}</button>`
@@ -2510,6 +2511,42 @@
   };
   stage.addEventListener("pointerup", endDrag);
   stage.addEventListener("pointercancel", endDrag);
+  async function paintProvenance(asset) {
+    // Fetched rather than read off the asset: whether an image counts as a photograph depends on its whole
+    // ancestry, and the listing does not carry it. Until this lands the panel simply says nothing.
+    let info;
+    try { info = await api(`/v1/assets/${asset.id}/provenance`); } catch { return; }
+    if (viewer.list[viewer.index]?.id !== asset.id) return;  // swiped on while it was loading
+    const roots = (info.upload_roots || []).join(", ");
+    const line = info.from_upload
+      ? `An uploaded photo${roots ? `, through ${roots}` : ""}. It may show a real person, so adult LoRAs and sexual edits are refused on it.`
+      : "Made here from a prompt, so the normal rules apply.";
+    $("viewerMeta").insertAdjacentHTML("beforeend",
+      `<div><dt>Counts as</dt><dd>${esc(line)}${info.corrected_from ? " Its origin has been corrected." : ""}</dd></div>`);
+    if (info.from_upload) {
+      $("viewerActions").insertAdjacentHTML("beforeend",
+        `<button class="btn btn-sm" type="button" data-view="origin" title="Use this when the file is a copy of an image made here: a client that could not reach the original downloaded it and uploaded it back, which loses the history">Fix origin\u2026</button>`);
+    } else if (info.corrected_from) {
+      $("viewerActions").insertAdjacentHTML("beforeend",
+        `<button class="btn btn-sm" type="button" data-view="origin-undo">Undo origin fix</button>`);
+    }
+  }
+
+  async function setOrigin(asset, originId) {
+    try {
+      const updated = await api(`/v1/assets/${asset.id}`, {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ generated_from: originId }),
+      });
+      viewer.list[viewer.index] = updated;
+      toast(originId ? "Origin corrected" : "Origin fix undone",
+            originId ? `${asset.filename} now counts as made here, and so does everything made from it` : asset.filename,
+            originId ? "ok" : "warn");
+      renderViewer();
+      loadMedia();
+    } catch (error) { toast("Could not change the origin", error.message, "bad"); }
+  }
+
   $("viewerActions").addEventListener("click", async (event) => {
     const button = event.target.closest("[data-view]");
     const asset = viewer.list[viewer.index];
@@ -2521,6 +2558,17 @@
     else if (action === "select") {
       if (media.selected.has(asset.id)) media.selected.delete(asset.id); else media.selected.add(asset.id);
       renderViewer();
+    } else if (action === "origin") {
+      const origin = await askInput("Fix where this came from",
+        "Asset id of the image this file is a copy of (open that image and copy its Asset id)", "");
+      if (!origin || !origin.trim()) return;
+      if (!(await confirmAction(`Treat ${asset.filename} as made here?`,
+        "Do this only for a file you have compared against that image. It lifts the checks that apply to "
+        + "photographs of real people, from this file and from everything made from it. The change is "
+        + "recorded on the asset and can be undone.", "Fix origin"))) return;
+      await setOrigin(asset, origin.trim());
+    } else if (action === "origin-undo") {
+      await setOrigin(asset, "");
     } else if (action === "delete") {
       if (!(await confirmAction(`Delete ${asset.filename}?`, "It is removed from the library and the GPU server.", "Delete"))) return;
       try {
