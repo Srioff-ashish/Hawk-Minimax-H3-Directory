@@ -757,6 +757,34 @@ class HawkService:
                 return found[0]
         return None
 
+    async def ensure_asset_on_disk(self, asset: dict) -> bool:
+        """Put a reference's file back under its recorded path when a restored runtime has lost it.
+
+        ComfyUI loads a reference by the relative path stored on the asset, so an edit of an image whose
+        file is gone fails in the loader. After a Colab restore the database is back but ComfyUI's input
+        folder is empty, and the Drive export holds the only surviving pixels -- copying one back means the
+        asset id keeps working instead of the edit failing.
+
+        This is what stops a client falling back to downloading the image and uploading it again. That
+        workaround makes a *new* asset marked as an upload, and an upload is treated as a photograph that
+        may show a real person, so an image this pod generated from a prompt ends up under the rules meant
+        for real people. Restoring the file keeps the provenance the library already recorded.
+
+        False only when the file is known to be missing and no export was found to restore it from.
+        """
+        input_dir = self.settings.comfy_input_dir
+        if not input_dir or not os.path.isdir(input_dir):
+            return True  # ComfyUI is on another machine; its own input folder is the authority
+        if self.local_asset_path(asset):
+            return True
+        source = self.drive_asset_path(asset)
+        if not source:
+            return False
+        target = os.path.join(input_dir, asset["path"])
+        await asyncio.to_thread(os.makedirs, os.path.dirname(target), exist_ok=True)
+        await asyncio.to_thread(shutil.copyfile, source, target)
+        return True
+
     async def image_dimensions(self, asset: dict) -> tuple[int, int] | None:
         """Width and height of an image asset, or None when Pillow can't read it."""
         try:

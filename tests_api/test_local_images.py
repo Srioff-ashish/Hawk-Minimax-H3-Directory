@@ -203,6 +203,20 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
         _, _, warnings = await self.resolve([], adult_default=False)
         self.assertEqual(len(warnings), 1, "the early return for an empty request must not swallow it")
 
+    async def test_a_shortened_name_does_not_stack_a_second_copy(self):
+        # The duplicate guard compared exact stems while resolution accepted a substring, so a name the
+        # agent shortened looked new to the guard, collected the automatic copy beside it, and then
+        # resolved to that same file: one LoRA twice in the chain, at about double its allowed strength.
+        names, _, _ = await self.resolve([self.FIX], requested=[{"name": "qwen-image-2.1-fix"}])
+        self.assertEqual(names, [self.FIX],
+                         "a shortened name means the same file, so it must not be attached again beside it")
+
+    async def test_a_folder_qualified_name_resolves_to_its_file(self):
+        # Results write LoRA names back with the family folder on the front, so the form the agent is most
+        # likely to copy out of one job has to be usable in the next instead of matching nothing.
+        names, _, _ = await self.resolve([self.FIX], requested=[{"name": f"qwen21/{self.FIX}", "strength": 0.9}])
+        self.assertEqual(names, [self.FIX], "a folder-qualified name should resolve, and only once")
+
 
 class StubComfy:
     """ComfyUI far enough for an edit to be set up. Submitting is an error: these tests are about what

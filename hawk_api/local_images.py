@@ -120,6 +120,28 @@ def _same_lora(file: str, name: str) -> bool:
     return bool(_stem(name)) and _stem(file) == _stem(name)
 
 
+def _match_loras(items: list, name) -> list:
+    """The installed catalogue entries a requested name could mean, exact matches winning outright.
+
+    One matcher, used both to resolve a name into a file and to decide whether an always-on LoRA is
+    already named by the request. Those were two different comparisons: the duplicate guard tested exact
+    stems while resolution accepted a substring, so a shortened name like "qwen-image-2.1-fix" looked new
+    to the guard, got the automatic copy appended beside it, and then resolved to that same file -- one
+    LoRA loaded twice in a chain, at roughly double the strength its catalogue entry allows.
+
+    Matching the stem exactly also accepts the folder-qualified form ("qwen21/<file>.safetensors"), which
+    is how results write LoRA names back, so a name copied out of one job is usable in the next.
+    """
+    key = str(name or "").strip().lower()
+    if not key:
+        return []
+    stem = _stem(key)
+    exact = [i for i in items if i.file.lower() == key or i.file.lower().rsplit(".", 1)[0] == key
+             or _stem(i.file) == stem]
+    return exact or [i for i in items if key in i.file.lower() or key == i.label.lower()
+                     or (stem and stem in _stem(i.file))]
+
+
 def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:
     """The configured file if present, else the best file of the same model family."""
     for name in files:
@@ -640,18 +662,25 @@ class LocalImageEngine:
         # family's adult defaults step aside, and the base LoRAs appended below must not change that answer.
         names_adult = _names_adult(requested, items)
 
+        def resolved_file(name) -> str | None:
+            """The one installed file a name means, or None when it means none or several."""
+            matches = _match_loras(items, name)
+            return matches[0].file if len(matches) == 1 else None
+
         def attach(wanted: list[dict]) -> None:
             """Append defaults the request has not already named, remembering which arrived on their own."""
-            asked = {_stem(spec.get("name")) for spec in requested}
+            # Compared by the file each name resolves to, not by the spelling: "qwen-image-2.1-fix" and
+            # "qwen-image-2.1-fix-1.0-comfy.safetensors" are the same LoRA, and attaching it beside itself
+            # applies it twice at double strength. A name resolving to nothing installed attaches nothing,
+            # so a pod missing one still generates.
+            taken = {file for file in (resolved_file(spec.get("name")) for spec in requested) if file}
             for entry in wanted:
-                stem = _stem(entry.get("name"))
-                # never add one the request already names, or it is applied twice at double strength;
-                # and only what is installed, so a pod missing one still generates
-                if not stem or stem in asked or not any(_same_lora(i.file, entry.get("name")) for i in items):
+                target = resolved_file(entry.get("name"))
+                if target is None or target in taken:
                     continue
-                automatic.add(stem)
+                automatic.add(_stem(target))
                 requested.append(dict(entry))
-                asked.add(stem)
+                taken.add(target)
 
         # Always-on repair LoRAs, attached first and *not* displaced by a request naming its own adult LoRA.
         base = BASE_LORAS.get(family, ())
@@ -672,9 +701,7 @@ class LocalImageEngine:
         used: list[ImageLora] = []
         for spec in requested:
             name = str(spec.get("name") or "").strip()
-            key = name.lower()
-            matches = [i for i in items if i.file.lower() == key or i.file.lower().rsplit(".", 1)[0] == key] or \
-                      [i for i in items if key and (key in i.file.lower() or key == i.label.lower())]
+            matches = _match_loras(items, name)
             if len(matches) != 1:
                 options = ", ".join(i.file for i in items) or "none installed"
                 raise LocalImageError(f"Image LoRA {name!r} matches {len(matches)} installed files. Installed: {options}.", fatal=True)
@@ -711,6 +738,23 @@ class LocalImageEngine:
             return  # the render finished while we waited, so this engine can have the GPU
         if status["busy"]:
             raise LocalImageError(f"ComfyUI is busy ({status['queue']} job(s) running or queued, usually a video render).")
+
+    async def _reference_paths(self, sources: list[dict]) -> list[str]:
+        """Each source's path for the graph, restoring any file a restarted runtime lost.
+
+        Not fatal: the ladder can still try a paid engine, which fetches the bytes over HTTP and does not
+        need the file on this disk at all.
+        """
+        missing = []
+        for asset in sources:
+            if not await self.service.ensure_asset_on_disk(asset):
+                missing.append(asset.get("filename") or asset.get("id", "?"))
+        if missing:
+            raise LocalImageError(
+                "The file is gone from ComfyUI's input folder for " + ", ".join(missing) +
+                ", and no Drive export was found to restore it from. The library still lists the image "
+                "because the database survived the restart; the pixels did not.")
+        return [asset["path"] for asset in sources]
 
     def _with_triggers(self, prompt: str, used: list) -> str:
         text = prompt.strip()
@@ -796,9 +840,10 @@ class LocalImageEngine:
         hint = _sampler_hint(asked or used)
         cache = await self._has_cache_node()
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
+        paths = await self._reference_paths(sources)
         started, images = time.monotonic(), []
         for index in range(max(1, min(4, n))):
-            graph = qwen21_edit_graph(text, images=[a["path"] for a in sources], width=width, height=height,
+            graph = qwen21_edit_graph(text, images=paths, width=width, height=height,
                                       seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
                                       vae=files["vae"],
                                       steps=steps or (hint.steps if hint and hint.steps else QWEN21_STEPS),
@@ -874,7 +919,7 @@ class LocalImageEngine:
                         cfg: float = 1.0) -> list[bytes]:
         files = status["files"]
         graph = krea_edit_graph(
-            text, images=[a["path"] for a in sources], width=width, height=height, seed=seed,
+            text, images=await self._reference_paths(sources), width=width, height=height, seed=seed,
             loras=[(status["edit"]["lora"], 1.0)] + chosen, unet=files["unet"], clip=files["clip"], vae=files["vae"],
             steps=steps or EDIT_STEPS, ref_boost=boost, prefix="hawk_images/krea2_edit", cfg=cfg,
         )
