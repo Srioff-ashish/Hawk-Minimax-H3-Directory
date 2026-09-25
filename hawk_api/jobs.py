@@ -123,13 +123,20 @@ def _star_size(size: str) -> str:
         raise RequestError("z-image/turbo sizes run 512-2048 on each side, e.g. 1024x1536 or 1536x1536.")
     return f"{width}*{height}"
 THUMB_WIDTHS = (160, 320, 640, 1280, 2048)  # 1280 / 2048: the full-screen viewer
-#: models folder -> (file-name family the Director can use, label for errors)
-MODEL_FAMILIES = {"diffusion_models": ("ref2va", "Base model"), "text_encoders": ("qwen3vl", "Text encoder")}
+#: models folder -> (every word a file name must contain to be one the Director can load, label for errors).
+#:
+#: The text encoder needs both words. "qwen3vl" alone was enough while H3 owned that name, but the image
+#: engines moved in beside it -- Krea 2 loads qwen3vl_4b and Qwen Image 2.1 loads qwen3vl_8b, in the same
+#: folder -- and those are narrower models: 4096 wide against the 32B's 5120. Offering one to a render does
+#: not fail in the loader, it fails deep in the first matmul with "mat1 and mat2 shapes cannot be
+#: multiplied", which names no file. This is the same pair hawk_colab's own detection has always required.
+MODEL_FAMILIES = {"diffusion_models": (("ref2va",), "Base model"),
+                  "text_encoders": (("qwen3vl", "minimax"), "Text encoder")}
 
 
 def model_family(folder: str, files: list[str]) -> list[str]:
-    family = MODEL_FAMILIES[folder][0]
-    return [name for name in files if family in os.path.basename(name).lower()]
+    words, _ = MODEL_FAMILIES[folder]
+    return [name for name in files if all(word in os.path.basename(name).lower() for word in words)]
 
 
 def normalize_tags(tags) -> list[str]:

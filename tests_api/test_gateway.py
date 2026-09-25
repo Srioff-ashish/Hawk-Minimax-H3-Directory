@@ -443,6 +443,23 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         encoder = await self.http.post("/v1/videos", json={"script": "A", "settings": {"clip_name": "umt5"}})
         self.assertEqual(encoder.status_code, 422)
         self.assertIn("Text encoder 'umt5'", encoder.json()["error"])
+
+        # The image engines keep their own Qwen3-VL encoders in this folder: Krea 2 loads a 4B and Qwen
+        # Image 2.1 an 8B, both narrower than the 32B a render needs (4096 against 5120). Handing one to a
+        # render does not fail in the loader, it fails in the first matmul with "mat1 and mat2 shapes
+        # cannot be multiplied", which names no file and no reason. They must not be offered or accepted.
+        self.fake.model_files["text_encoders"] += ["qwen3vl_8b_bf16.safetensors", "qwen3vl_4b_fp8_scaled.safetensors"]
+        listed = (await self.http.get("/v1/options")).json()["text_encoders"]
+        self.assertEqual(listed, [CLIP_INT8, CLIP_BF16], "an image engine's encoder is not a video encoder")
+        for name in ("qwen3vl_8b_bf16", "qwen3vl_4b_fp8_scaled"):
+            wrong = await self.http.post("/v1/videos", json={"script": "A", "settings": {"clip_name": name}})
+            self.assertEqual(wrong.status_code, 422, f"{name} should be refused by name, not by matmul")
+        # "bf16" is the trap: with the 8B present it is the shorter match, and on a pod without the 32B
+        # bf16 encoder it is the only one, so the render would silently load the image engine's file.
+        by_precision = await self.http.post("/v1/videos", json={"script": "A", "settings": {"clip_name": "bf16"}})
+        self.assertEqual(by_precision.status_code, 202, by_precision.text)
+        self.assertEqual(by_precision.json()["clip_name"], CLIP_BF16, "bf16 means the H3 encoder, not the 8B")
+        await self.wait(by_precision.json()["id"])
         await self.wait(default["id"])
 
     async def test_music_bed(self):

@@ -25,7 +25,7 @@ from .comfy_client import ComfyError
 from .config import Settings
 from .image_engines import SettingsError
 from .loras import LoraError, default_status, load_config, save_defaults
-from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
+from .jobs import MODEL_FAMILIES, Conflict, HawkService, NotFound, RequestError, Unavailable, model_family
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
@@ -334,6 +334,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             files = await service.available_models(folders[key], refresh=True)
             if not any(f == name or f.rsplit("/", 1)[-1] == name for f in files):
                 raise RequestError(f"{name!r} is not in ComfyUI's {folders[key]} folder on this pod.")
+            # In the folder is not the same as loadable: the image engines keep their own encoders beside
+            # the video one, and a render given a narrower model fails inside the first matmul rather than
+            # at the loader. Refuse it here, where the name is still in hand to say so.
+            if folders[key] in MODEL_FAMILIES and name not in model_family(folders[key], [name]):
+                choices = ", ".join(model_family(folders[key], files)) or "none found"
+                raise RequestError(f"{name!r} is not a MiniMax H3 {MODEL_FAMILIES[folders[key]][1].lower()}; "
+                                   f"it belongs to one of the image engines. Choices: {choices}.")
         try:
             service.render_models.save(values)
         except ValueError as exc:
