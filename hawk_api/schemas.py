@@ -122,25 +122,28 @@ class ImageRequest(BaseModel):
     n: int = Field(1, ge=1, le=4, description="How many images.")
     seed: int | None = Field(None, ge=0)
     engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then Krea 2, then "
-                               "z-image/turbo, then Seedream), or one of qwen21, krea2, zimage, local, turbo, seedream, "
-                               "seedream-lite. 'klein' still resolves, to qwen21.")
+                               "z-image/turbo, then Seedream), or one of qwen21, krea2, zimage, chroma, local, turbo, seedream, "
+                               "seedream-lite. 'chroma' is off the auto ladder and only runs when named. "
+                               "'klein' still resolves, to qwen21.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "
                                      "engine's family (file name or a unique part, optional strength). Qwen Image 2.1 "
                                      "always adds its repair LoRA on top, whatever is named here.")
     steps: int | None = Field(None, ge=1, le=50, description="Steps for the local engine. Omit for its default: "
-                              "Qwen Image 2.1 30, Krea 2 8, or a LoRA's own recommendation.")
+                              "Qwen Image 2.1 30, Krea 2 8, Chroma1-HD 26, or a LoRA's own recommendation.")
     ref_boost: float | None = Field(None, ge=0, le=20, description="Krea 2 edit only, ignored by every other engine: "
                                    "likeness dial, 4 (default) strong likeness, 1 looser and more creative, above 10 "
                                    "breaks removals. On Qwen Image 2.1 say what stays in the prompt instead.")
     negative: str = Field("", max_length=2000, description=
         "What to keep out, for the local engines only (Atlas ignores it). It has no effect while the engine samples "
         "at cfg 1.0 -- Krea 2 Turbo and Z-Image -- because guidance at cfg 1 collapses to the positive prompt. On "
-        "Qwen Image 2.1, which samples at cfg 2.0, it is the place for \"fused bodies, missing limbs, extra arms\".")
+        "Qwen Image 2.1, which samples at cfg 2.0, it is the place for \"fused bodies, missing limbs, extra arms\". "
+        "Chroma1-HD samples at cfg 3.8 and relies on it most; leaving it out there falls back to Chroma's own "
+        "default negative rather than to nothing.")
     cfg: float | None = Field(None, ge=0.0, le=15.0, description=
         "Guidance for the local engines. Omit for the engine's own default. Above 1.0 the negative prompt starts "
         "working; too high posterises (blown greens and blues, banded surfaces). Qwen Image 2.1 defaults to 2.0, "
-        "and drops to 1.0 when its adult LoRA is attached; Krea 2 Turbo and Z-Image are trained for 1.0 and "
-        "should be left there.")
+        "and drops to 1.0 when its adult LoRA is attached; Chroma1-HD defaults to 3.8; Krea 2 Turbo and Z-Image "
+        "are trained for 1.0 and should be left there.")
     max_adult_loras: int = Field(3, ge=1, le=3, description="How many adult LoRAs one image may stack (up to 3; a note "
                                  "warns above a combined strength of 2.0). Lower it to be stricter.")
 
@@ -179,7 +182,7 @@ class DriveExportSettings(BaseModel):
 
 
 class ImageEngineRung(BaseModel):
-    engine: str = Field(description="Engine id from /v1/images/engines, e.g. qwen21, krea2, zimage, turbo, seedream.")
+    engine: str = Field(description="Engine id from /v1/images/engines, e.g. qwen21, krea2, zimage, chroma, turbo, seedream.")
     enabled: bool = Field(True, description="Off keeps its place in the order but is never tried.")
 
 

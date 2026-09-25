@@ -75,6 +75,10 @@ ENGINES: dict[str, ImageEngine] = {
         id="zimage", label="Z-Image Turbo", where="local", generate=True, edit=False, max_refs=0,
         lora_family="zit", checks=True, tag="zimage",
     ),
+    "chroma": ImageEngine(
+        id="chroma", label="Chroma1-HD", where="local", generate=True, edit=False, max_refs=0,
+        lora_family="chroma", checks=True, tag="chroma",
+    ),
     "turbo": ImageEngine(
         id="turbo", label="z-image/turbo (Atlas)", where="atlas", generate=True, edit=False, max_refs=0,
         lora_family="", checks=False, atlas_model=IMAGE_FAST_MODEL, price_key="z-image", tag="z-image",
@@ -104,6 +108,8 @@ ALIASES = {
     # before the swap still resolve; MOVED says so out loud rather than letting it look like Klein ran.
     "klein": "qwen21", "flux": "qwen21", "flux2": "qwen21", "flux-2": "qwen21",
     "z-image": "zimage", "zimage": "zimage", "zit": "zimage", "z-image-local": "zimage",
+    "chroma": "chroma", "chroma1": "chroma", "chroma1-hd": "chroma", "chroma-hd": "chroma",
+    "chroma1hd": "chroma", "chroma1_hd": "chroma",
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
@@ -130,6 +136,9 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "qwen21": ("Qwen Image 2.1", ("qwen21_", "qwen_image_2.1", "qwen-image-2.1", "qwen2.1", "qwen image2.1",
                                   "lenovo_qwen21", "pornmaster_qi2.1", "elusarcas-qwen2-1")),
     "zit": ("Z-Image Turbo", ("zit_",)),
+    # Chroma LoRAs are published under a dozen different names; the "chroma" prefix covers the ones that
+    # carry it and models/loras/chroma covers the rest, the same arrangement Qwen 2.1 needs.
+    "chroma": ("Chroma1-HD", ("chroma",)),
 }
 
 #: Mirrors local_images.DEFAULT_ADULT_LORAS so view() can show what a family falls back to. Kept here as
@@ -149,7 +158,7 @@ BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = {
 }
 
 #: The families that belong to images; everything else is a video LoRA.
-IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
+IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit", "chroma"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
 _TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream"}
@@ -173,6 +182,7 @@ FAMILY_FOLDERS: dict[str, tuple[str, ...]] = {
     # "qwen2.1角色卡-4.safetensors" -- gets classified without being renamed first.
     "qwen21": ("qwen-image-2.1", "qwen_image_2.1", "qwenimage21", "qwen2.1", "qwen"),
     "zit": ("zimage", "z_image", "z-image"),
+    "chroma": ("chroma1", "chroma1-hd", "chroma1_hd", "chroma-hd", "chroma1hd"),
 }
 
 
@@ -264,6 +274,10 @@ DEFAULTS = {
         {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},
+        # Off unless asked for by name. Chroma samples at cfg 3.8 with a real negative prompt and has an
+        # aesthetic of its own, so having "auto" fall onto it would change images nobody asked to change.
+        # Naming it as the engine pins it whatever this says, which is what makes it an option rather than a rung.
+        {"engine": "chroma", "enabled": False},
         # below all three local engines, so it only ever fires when none of them can run -- and then it is
         # a third of Seedream's price for the same job
         {"engine": "turbo", "enabled": True},

@@ -308,10 +308,24 @@ def resolve_models(
         "loras": list_model_files(comfy_dir, "loras"),
     }
     chosen = pick_models(files)
-    if diffusion_model:
-        chosen["unet_name"] = os.path.basename(DIFFUSION_MODELS[diffusion_model][0])
-    if text_encoder:
-        chosen["clip_name"] = os.path.basename(TEXT_ENCODERS[text_encoder][0])
+    # A label picks a file the download cell was *asked* for, which is not the same as a file that is on
+    # disk: change the dropdown without re-running the download, or skip it on a restart, and the API is
+    # handed a name ComfyUI has never heard of. It starts fine and every render then dies at the loader
+    # with "Value not in list". So a label only wins when its file is actually there; otherwise the
+    # detected file wins and the mismatch is printed rather than carried silently into the environment.
+    for key, label, table in (("unet_name", diffusion_model, DIFFUSION_MODELS),
+                              ("clip_name", text_encoder, TEXT_ENCODERS)):
+        if not label:
+            continue
+        wanted = os.path.basename(table[label][0])
+        folder = "diffusion_models" if key == "unet_name" else "text_encoders"
+        if any(os.path.basename(name) == wanted for name in files[folder]):
+            chosen[key] = wanted
+        elif chosen[key]:
+            print(f"Note: {wanted} is not in models/{folder} (run the download cell for {label!r} to get it). "
+                  f"Using {os.path.basename(chosen[key])} instead.")
+        else:
+            chosen[key] = wanted  # nothing to fall back on; the check below reports it properly
     for key, value in (("unet_name", unet_name), ("clip_name", clip_name), ("video_vae", video_vae),
                        ("audio_vae", audio_vae), ("turbo_lora", turbo_lora)):
         if value:

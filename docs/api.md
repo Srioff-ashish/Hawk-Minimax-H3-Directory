@@ -395,6 +395,9 @@ The server always appends a short, non-editable **platform rules** block (no sex
 | `engine` | What runs | Notes |
 |---|---|---|
 | `auto` (default) | Krea 2 → z-image/turbo → Seedream | Local Krea 2 when it's installed and ComfyUI is idle; otherwise z-image/turbo; Seedream if that fails too. The result's `tried` lists what was skipped and why. Change the default with `HAWK_IMAGE_ENGINE`. |
+| `qwen21` | Qwen Image 2.1 on the pod's GPU | Free, the lead local engine, and the only local one that edits with more than two references (up to 16). 30 steps at cfg 2.0, euler / simple; its repair LoRA is attached to every image. `klein`, `flux` and `flux2` still resolve here. |
+| `zimage` | Z-Image Turbo on the pod's GPU | Free, text only. 8 steps at cfg 1. `z-image` means this local engine; the Atlas one is `turbo`. |
+| `chroma` | Chroma1-HD on the pod's GPU | Free, text only, and off the `auto` ladder: it runs only when named, because it has a look of its own and is slower (26 steps at cfg 3.8 on a beta schedule). The one engine whose `negative` does real work; leaving it blank uses Chroma's own tuned default rather than nothing. Files: `HAWK_CHROMA_UNET` / `_CLIP` / `_VAE`. |
 | `local` | Krea 2 Turbo on the pod's GPU | Free and private, with Krea 2 LoRAs. Waits behind a running render instead of falling back. Model `krea` / `local` means the same. |
 | `turbo` | Atlas `z-image/turbo` | Fast, about $0.01 an image; sizes 512–2048 a side (default 1024x1536); `n` runs as parallel requests. `HAWK_IMAGE_MODEL` sets the Atlas text-to-image default. |
 | `seedream` | Atlas `bytedance/seedream-v5.0-pro/text-to-image` | Best quality. Sizes snap to Atlas's nearest preset. Up to 2.36 MP is the 1.5K tier, about $0.036 an image (default 1328x1776; 1024x1024 becomes 1536x1536 at the same price). Larger sizes such as 2048x2048 bill the 2K tier, about $0.072. One image per request, so `n` runs as parallel requests. |

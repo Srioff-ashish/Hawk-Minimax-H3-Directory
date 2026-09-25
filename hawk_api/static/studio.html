@@ -2648,6 +2648,8 @@
       "Put a retro red trenchcoat on her and turn her head to the left."],
     zimage: [[80, 250], "Z-Image Turbo likes the most detail: subject (age, features, clothing, expression) \u2192 place, time and weather \u2192 camera, lens or film stock (e.g. Kodak Portra 400) \u2192 framing. No negative prompts: say what you want. Text in quotes.",
       "A 65-year-old woman with silver hair and gentle wrinkles in a hand-knitted maroon cardigan, reading by a tall window with a contemplative expression. A cosy wood-panelled library, late afternoon, soft natural light falling across the pages. Shot on a Canon 5D with an 85mm lens, Kodak Portra 400 tones, shallow depth of field, framed from the waist up on the left third."],
+    chroma: [[60, 200], "Chroma1-HD: flowing natural language, subject \u2192 setting \u2192 light \u2192 lens and film character. It was trained on a broad uncensored mix, so plain unhyped wording beats tag lists and quality words. The one engine here that really reads a negative prompt \u2014 Studio sends none, so it uses its own tuned default, which is usually what you want. Slower than the others: 26 steps at cfg 3.8. No reference images.",
+      "A weathered fisherman in his sixties mending a net on a wooden jetty at dawn, salt-stiff cable-knit sweater, deep creases around the eyes, hands rough and stained. Low mist over grey-green water, the hull of a blue trawler behind him. Cold overcast light from the left, no sun. Shot on a 50mm lens at f/2, muted palette, fine film grain."],
     turbo: [[80, 250], "Atlas z-image/turbo: the same model as the local Z-Image, so the same guidance -- lots of detail, subject then place then camera then framing. No negative prompts.",
       "A 65-year-old woman with silver hair in a maroon cardigan reading by a tall window, late afternoon light across the pages, Canon 5D, 85mm, Kodak Portra 400 tones, waist-up on the left third."],
     seedream: [[30, 100], "Seedream 5: conversational sentences: subject and action, setting, light with direction (\u201csoft window light from the left\u201d), materials (\u201cbrushed aluminium, matte skin\u201d), lens and mood. Text in double quotes with its placement. No negative prompts or \u201c8K\u201d.",
@@ -2675,7 +2677,7 @@
     const id = plannedEngine(), edit = genAction() === "edit";
     if (id === "qwen21") return edit ? "qwen21Edit" : "qwen21";
     if (id === "krea2") return edit ? "krea2Edit" : "krea2";
-    if (id === "zimage" || id === "turbo") return id;
+    if (id === "zimage" || id === "turbo" || id === "chroma") return id;
     return edit ? "seedreamEdit" : "seedream";
   }
   function paintPromptTip() {
@@ -2724,7 +2726,7 @@
       : "4 keeps the face strongly; lower gives the edit more freedom; above about 8 fights removals.";
     const sizeDefault = $("genSize").querySelector('option[value=""]');
     if (sizeDefault) sizeDefault.textContent = genAction() === "edit" ? "Match the first image (about 1 MP)" : "Default (1024x1536)";
-    $("genSteps").placeholder = krea2Edit ? "10" : id === "qwen21" ? "30" : "8";
+    $("genSteps").placeholder = krea2Edit ? "10" : id === "qwen21" ? "30" : id === "chroma" ? "26" : "8";
 
     // LoRAs belong to whichever local engine will run, and only that engine's family loads cleanly
     const installed = loraSetFor(row && row.where === "local" ? id : "").filter((l) => l.installed);
@@ -2795,7 +2797,7 @@
     if (!prompt) return $("genPrompt").focus();
     const engine = genEngine();
     const refs = gen.refs.map((a) => a.id);
-    const body = { prompt, n: Number($("genCount").value), engine: refs.length && ["turbo", "zimage"].includes(engine) ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
+    const body = { prompt, n: Number($("genCount").value), engine: refs.length && ["turbo", "zimage", "chroma"].includes(engine) ? "seedream" : engine, reference_asset_ids: refs, max_adult_loras: 3 };
     if ($("genSize").value) body.size = $("genSize").value;
     if ($("genSeed").value !== "") body.seed = Number($("genSeed").value);
     if (refs.length && !$("genBoostField").hidden) body.ref_boost = Number($("genBoost").value);
@@ -2812,6 +2814,7 @@
       const result = await post("/v1/images", body);
       const seconds = ((performance.now() - started) / 1000).toFixed(0);
       const names = { "krea2-edit": "Krea 2 edit (local)", krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo",
+        chroma: "Chroma1-HD (local)",
         seedream: result.model?.includes("lite") ? "Seedream Lite" : "Seedream" };
       const box = $("genResult");
       box.hidden = false;

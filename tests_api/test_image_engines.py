@@ -73,6 +73,10 @@ class Resolve(unittest.TestCase):
         # and the change is announced rather than silent
         self.assertIn("local", ie.MOVED["z-image"])
 
+    def test_chroma_answers_to_the_ways_it_is_written(self):
+        for name in ("chroma", "Chroma1", "chroma1-hd", "CHROMA-HD", "chroma1hd"):
+            self.assertEqual(ie.resolve(name), "chroma", name)
+
     def test_auto_and_nonsense_resolve_to_nothing(self):
         self.assertEqual(ie.resolve("auto"), "")
         self.assertEqual(ie.resolve(""), "")
@@ -211,6 +215,16 @@ class Store(unittest.TestCase):
         self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
+    def test_chroma_ships_in_the_order_but_switched_off(self):
+        # It is an option you ask for, not a rung auto falls onto: its look and its 26 steps at cfg 3.8
+        # would change images nobody asked to change. Being in the list is what makes it visible in Studio.
+        rows = {row["engine"]: row["enabled"] for row in self.store.settings()["generate"]}
+        self.assertIn("chroma", rows, "Chroma must be offered, or nobody can switch it on")
+        self.assertFalse(rows["chroma"], "auto must not reach Chroma on its own")
+        self.assertNotIn("chroma", self.store.order("generate"), "and it is not in the tried order")
+        self.assertNotIn("chroma", [r["engine"] for r in self.store.settings()["edit"]],
+                         "Chroma takes no reference images, so it has no place in the edit order")
+
     def test_saving_an_order_survives_a_reload(self):
         self.store.save(generate=[{"engine": "qwen21"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
         self.assertEqual(ie.ImageEngineStore(self.dir).order("generate"), ["qwen21", "krea2", "zimage", "seedream"])
@@ -333,9 +347,12 @@ class FamilyFolders(unittest.TestCase):
         self.assertEqual(ie.family_of("zit/Hands_v2.1.safetensors"), "zit")
         self.assertEqual(ie.family_of("Krea2/Identity_Edit.safetensors"), "krea2")
         self.assertEqual(ie.family_of("h3/Bouncing_REF2VA.safetensors"), "h3")
+        # Without this the file would fall through to "h3" and show up in the video LoRA list
+        self.assertEqual(ie.family_of("chroma/Analog_Film.safetensors"), "chroma")
 
     def test_an_alias_folder_counts_too(self):
         self.assertEqual(ie.family_of("z-image/whatever.safetensors"), "zit")
+        self.assertEqual(ie.family_of("chroma1-hd/Detail_Booster.safetensors"), "chroma")
         self.assertEqual(ie.family_of("qwen-image-2.1/whatever.safetensors"), "qwen21")
 
     def test_the_file_name_still_beats_the_folder(self):

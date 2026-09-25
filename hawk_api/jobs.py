@@ -1056,7 +1056,8 @@ class HawkService:
 
     #: Reported as the result's "model". Deliberately not "z-image/..." -- that prefix means the Atlas engine
     #: to _text_only_image_model, and a local id must never be mistaken for it.
-    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo"}
+    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo",
+                         "chroma": "chroma/1-hd"}
 
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""

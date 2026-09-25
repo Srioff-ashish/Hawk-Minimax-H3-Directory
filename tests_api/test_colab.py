@@ -121,8 +121,16 @@ class Detection(unittest.TestCase):
             chosen = hawk_colab.resolve_models(comfy, clip_name="custom_te.safetensors")
             self.assertEqual((chosen["unet_name"], chosen["clip_name"]),
                              ("minimax_h3_ref2va_pruned_int8_convrot.safetensors", "custom_te.safetensors"))
+            # The dropdown says nvfp4 and the fixture has only int8 on disk, which is what happens whenever
+            # the download cell is skipped or run with a different choice. Pinning the label there configured
+            # the API with a file ComfyUI does not have, and every render died at the loader with
+            # "Value not in list" long after the notebook had reported success.
             labelled = hawk_colab.resolve_models(comfy, text_encoder="nvfp4 (16 GB, recommended on G4)")
-            self.assertEqual(labelled["clip_name"], "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors")
+            self.assertEqual(labelled["clip_name"], "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                             "a label that was never downloaded must give way to the file that is there")
+            # and the label still wins when its file really is on disk
+            present = hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB)")
+            self.assertEqual(present["clip_name"], "qwen3vl_32b_minimax_h3_int8_convrot.safetensors")
         with tempfile.TemporaryDirectory() as empty:
             with self.assertRaisesRegex(RuntimeError, "unet_name, clip_name, video_vae, audio_vae"):
                 hawk_colab.resolve_models(empty)

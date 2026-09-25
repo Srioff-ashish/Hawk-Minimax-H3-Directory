@@ -112,6 +112,12 @@ class Settings:
     zimage_unet: str = "z_image_turbo_nvfp4.safetensors"
     zimage_clip: str = "qwen_3_4b_fp4_mixed.safetensors"
     zimage_vae: str = "z_image_ae.safetensors"
+    chroma_unet: str = "chroma1_hd_fp8_scaled.safetensors"
+    #: Chroma's encoder is a T5-XXL, not a Qwen one. Any T5-XXL build works -- plain, flan-tuned, fp8 or
+    #: fp16 -- so a pod that has a different one is found by the pattern rather than needing this set.
+    chroma_clip: str = "t5xxl_fp8_e4m3fn.safetensors"
+    #: Flux's autoencoder, which Chroma shares. Often published as the bare "ae.safetensors".
+    chroma_vae: str = "chroma_vae.safetensors"
     #: Local Krea 2 text-to-image attaches the go-to adult pair (SNOFS + Mystic XXX) unless the request names its
     #: own adult LoRA. HAWK_KREA_ADULT_DEFAULT=0 turns it off; edits of uploaded photos never get them.
     krea_adult_default: bool = True
@@ -174,6 +180,9 @@ class Settings:
             zimage_unet=_env("HAWK_ZIMAGE_UNET", cls.zimage_unet),
             zimage_clip=_env("HAWK_ZIMAGE_CLIP", cls.zimage_clip),
             zimage_vae=_env("HAWK_ZIMAGE_VAE", cls.zimage_vae),
+            chroma_unet=_env("HAWK_CHROMA_UNET", cls.chroma_unet),
+            chroma_clip=_env("HAWK_CHROMA_CLIP", cls.chroma_clip),
+            chroma_vae=_env("HAWK_CHROMA_VAE", cls.chroma_vae),
             krea_adult_default=_env("HAWK_KREA_ADULT_DEFAULT", "1") not in ("0", "false", "no", "off"),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),

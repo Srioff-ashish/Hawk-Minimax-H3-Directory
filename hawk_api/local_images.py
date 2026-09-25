@@ -1,6 +1,6 @@
 """Local image generation and editing on the pod's own ComfyUI.
 
-Three engines, each with its own graph and its own LoRA family, because a file or an encoder
+Four engines, each with its own graph and its own LoRA family, because a file or an encoder
 type from one produces nonsense in another rather than an error:
 
 * **Qwen Image 2.1** -- the lead engine. 30 steps at cfg 2.0 on euler / simple, encoder type
@@ -8,6 +8,9 @@ type from one produces nonsense in another rather than an error:
 * **Krea 2 Turbo** -- 8 steps at cfg 1, encoder type "krea2". Edits through Krea 2 Identity
   Edit, which needs the comfyui-krea2edit node pack and takes at most two references.
 * **Z-Image Turbo** -- 8 steps, encoder type "lumina2", through ModelSamplingAuraFlow. No edits.
+* **Chroma1-HD** -- 26 steps at cfg 3.8 on euler, encoder type "chroma" over a T5-XXL, sampled
+  through SamplerCustomAdvanced on a beta schedule. The only engine here that takes a real
+  negative prompt, because it is the only one that samples above cfg 1. No edits.
 
 All three share the GPU and the queue with video renders, so ``busy()`` tells callers to use a
 cloud engine instead of waiting behind a long render.
@@ -33,7 +36,7 @@ WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
 #: Local engines whose ComfyUI graphs exist.
-WIRED_ENGINES = ("krea2", "qwen21", "zimage")
+WIRED_ENGINES = ("krea2", "qwen21", "zimage", "chroma")
 # Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
 # else the first match, higher precision first.
 MODEL_FAMILIES = {
@@ -65,6 +68,17 @@ LOCAL_MODELS: dict[str, dict] = {
                   "vae": ("vae", re.compile(r"z[-_ ]?image.*ae|^ae\.safetensors$", re.IGNORECASE))},
         "configured": {"unet": "zimage_unet", "clip": "zimage_clip", "vae": "zimage_vae"},
     },
+    "chroma": {
+        # Chroma is the one engine here with a T5 text encoder rather than a Qwen one, which is what keeps
+        # its clip pattern clear of the other three. "um" is excluded because umt5_xxl is Wan's video
+        # encoder and shares the folder. The VAE is Flux's, so "ae.safetensors" is a legitimate name for
+        # it -- Z-Image's pattern accepts that name too, and both pointing at one file is correct, not a
+        # clash: nothing here claims a file exclusively.
+        "files": {"unet": ("diffusion_models", re.compile(r"chroma", re.IGNORECASE)),
+                  "clip": ("text_encoders", re.compile(r"flan|(?<!um)t5[-_ ]?xxl", re.IGNORECASE)),
+                  "vae": ("vae", re.compile(r"chroma.*ae|flux.*ae|^ae\.safetensors$", re.IGNORECASE))},
+        "configured": {"unet": "chroma_unet", "clip": "chroma_clip", "vae": "chroma_vae"},
+    },
 }
 #: Qwen Image 2.1's own defaults, from the reference ComfyUI workflows. A LoRA in the catalogue may override
 #: any of them -- the NSFW one wants 25 steps at cfg 1 on er_sde/beta, which is why ImageLora carries a cfg.
@@ -75,6 +89,25 @@ QWEN21_MAX_REFS = 16  # TextEncodeQwenImage21 has image_1 .. image_16 and no mor
 QWEN21_EDIT_NODE = "TextEncodeQwenImage21"  # core, ComfyUI 0.36.0+; edits cannot be built without it
 QWEN21_CACHE_NODE = "QwenImage21Cache"  # core, 0.36.0+; a speed-up, so its absence is not an error
 ZIMAGE_STEPS = 8
+#: Chroma1-HD's defaults, from the reference ComfyUI workflow. Chroma is the odd one out here: it samples
+#: at real guidance rather than at cfg 1, so it needs a negative prompt to be any good, and it takes its
+#: sigmas from BetaSamplingScheduler rather than from a KSampler schedule name -- the alpha/beta pair below
+#: is not the one ComfyUI's built-in "beta" scheduler uses.
+CHROMA_STEPS, CHROMA_CFG = 26, 3.8
+CHROMA_SAMPLER = "euler"
+CHROMA_BETA_ALPHA, CHROMA_BETA_BETA = 0.45, 0.45
+CHROMA_SHIFT = 1.0  # ModelSamplingAuraFlow; 1.0 is the value the model's author intended, and it sharpens detail
+CHROMA_T5_MIN_PADDING = 0  # the workflow's value; the official recipe is 1 and both work, varying by T5 build
+#: Every other engine here runs at cfg 1, where the guider collapses to the positive term and a negative
+#: prompt does nothing. Chroma runs at 3.8, where an empty negative visibly costs quality, so it starts from
+#: the reference workflow's own negative unless the caller writes one.
+CHROMA_NEGATIVE = (
+    "This greyscale unfinished sketch has bad proportions, is featureless and disfigured. It is a blurry ugly "
+    "mess and with excessive gaussian blur. It is riddled with watermarks and signatures. Everything is smudged "
+    "with leaking colors and nonsensical orientation of objects. Messy and abstract image filled with artifacts "
+    "disrupt the coherency of the overall composition. The image has extreme chromatic abberations and "
+    "inconsistent lighting. Dull, monochrome colors and countless artistic errors."
+)
 _PRECISION = ("bf16", "fp16", "fp8", "")
 
 # Krea 2 Identity Edit (conradlocke/krea2-identity-edit): a LoRA plus the comfyui-krea2edit node pack,
@@ -350,7 +383,9 @@ def _negative_node(text: str, positive: list, clip_node: str = "2") -> dict:
 
     Empty means ConditioningZeroOut, which is what every graph did before there was a field for this. Note that
     at cfg 1.0 the guider collapses to the positive term, so a negative prompt is inert on Krea 2 Turbo and
-    Z-Image, and only does anything on an engine that samples above cfg 1 -- Qwen Image 2.1, at cfg 2.0.
+    Z-Image, and only does anything on an engine that samples above cfg 1 -- Qwen Image 2.1 at cfg 2.0 and
+    Chroma1-HD at cfg 3.8. Chroma does not use this node: it needs a negative badly enough to have a default
+    one, so its graph always encodes real text.
     """
     if not text.strip():
         return {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": positive}}
@@ -450,6 +485,50 @@ def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lor
             "steps": steps, "cfg": cfg, "sampler_name": sampler, "scheduler": scheduler, "denoise": 1.0}},
         "9": {"class_type": "VAEDecode", "inputs": {"samples": ["8", 0], "vae": ["3", 0]}},
         "10": {"class_type": "SaveImage", "inputs": {"images": ["9", 0], "filename_prefix": prefix}},
+    })
+    return graph
+
+
+def chroma_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
+                 unet: str, clip: str, vae: str, steps: int, cfg: float, sampler: str, prefix: str,
+                 negative: str = "", alpha: float = CHROMA_BETA_ALPHA, beta: float = CHROMA_BETA_BETA,
+                 shift: float = CHROMA_SHIFT, min_padding: int = CHROMA_T5_MIN_PADDING) -> dict:
+    """Chroma1-HD text to image, from the reference ComfyUI workflow.
+
+    Three things here are unlike the other engines and all three fail quietly rather than loudly:
+
+    * the CLIP type is "chroma" over a T5-XXL, not a Qwen type;
+    * the sigmas come from BetaSamplingScheduler with the model\'s own alpha/beta, so the sampler is
+      SamplerCustomAdvanced with a CFGGuider rather than a KSampler with a named schedule;
+    * guidance is real (cfg 3.8), so the negative prompt is live. An empty one costs visible quality, which
+      is why a blank falls back to the workflow\'s own negative instead of to ConditioningZeroOut.
+    """
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "chroma", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        # T5 padding: the workflow ships 0 and the official recipe is 1. Both work and which is better
+        # depends on the T5 build, so it is a parameter rather than a constant baked into the graph.
+        "tok": {"class_type": "T5TokenizerOptions", "inputs": {"clip": ["2", 0], "min_padding": min_padding, "min_length": 0}},
+    }
+    model = ["1", 0]
+    for index, (name, strength) in enumerate(loras):
+        node = f"l{index}"
+        graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
+        model = [node, 0]
+    graph.update({
+        "4": {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": model, "shift": shift}},
+        "5": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["tok", 0], "text": prompt}},
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["tok", 0], "text": negative.strip() or CHROMA_NEGATIVE}},
+        "7": {"class_type": "CFGGuider", "inputs": {"model": ["4", 0], "positive": ["5", 0], "negative": ["6", 0], "cfg": cfg}},
+        "8": {"class_type": "BetaSamplingScheduler", "inputs": {"model": ["4", 0], "steps": steps, "alpha": alpha, "beta": beta}},
+        "9": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": sampler}},
+        "10": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed}},
+        "11": {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
+        "12": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["10", 0], "guider": ["7", 0], "sampler": ["9", 0], "sigmas": ["8", 0], "latent_image": ["11", 0]}},
+        "13": {"class_type": "VAEDecode", "inputs": {"samples": ["12", 0], "vae": ["3", 0]}},
+        "14": {"class_type": "SaveImage", "inputs": {"images": ["13", 0], "filename_prefix": prefix}},
     })
     return graph
 
@@ -828,6 +907,13 @@ class LocalImageEngine:
                                  scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
                                  prefix="hawk_images/zimage", negative=negative,
                                  cfg=cfg if cfg is not None else 1.0)
+        elif engine == "chroma":
+            graph = chroma_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+                                 unet=files["unet"], clip=files["clip"], vae=files["vae"],
+                                 steps=steps or (hint.steps if hint and hint.steps else CHROMA_STEPS),
+                                 cfg=cfg if cfg is not None else (hint.cfg if hint and hint.cfg is not None else CHROMA_CFG),
+                                 sampler=(hint.sampler if hint and hint.sampler else CHROMA_SAMPLER),
+                                 prefix="hawk_images/chroma", negative=negative)
         else:
             graph = krea_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                unet=files["unet"], clip=files["clip"], vae=files["vae"],
