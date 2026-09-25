@@ -120,8 +120,19 @@ def _same_lora(file: str, name: str) -> bool:
     return bool(_stem(name)) and _stem(file) == _stem(name)
 
 
+def _norm(value) -> str:
+    """A name with its separators levelled: spaces, underscores and hyphens all read the same.
+
+    The catalogue mixes all three -- "NSFW Qwen Lora.safetensors", "Krea2_HMNSFW_AIO.safetensors",
+    "qwen-image-2.1-fix-1.0-comfy.safetensors" -- so an agent writing a name from memory picks whichever
+    it happens to have seen. Without this, "NSFW_Qwen_Lora" matches nothing while "NSFW Qwen Lora"
+    resolves, and the error says the LoRA is not installed when it is.
+    """
+    return re.sub(r"[\s_-]+", " ", str(value or "").strip().lower())
+
+
 def _match_loras(items: list, name) -> list:
-    """The installed catalogue entries a requested name could mean, exact matches winning outright.
+    """The installed catalogue entries a requested name could mean, in three tiers, nearest first.
 
     One matcher, used both to resolve a name into a file and to decide whether an always-on LoRA is
     already named by the request. Those were two different comparisons: the duplicate guard tested exact
@@ -129,17 +140,28 @@ def _match_loras(items: list, name) -> list:
     to the guard, got the automatic copy appended beside it, and then resolved to that same file -- one
     LoRA loaded twice in a chain, at roughly double the strength its catalogue entry allows.
 
-    Matching the stem exactly also accepts the folder-qualified form ("qwen21/<file>.safetensors"), which
-    is how results write LoRA names back, so a name copied out of one job is usable in the next.
+    The tiers, each tried only when the one before it found nothing: the whole name, with or without its
+    folder and suffix; the name as a substring, or the label exactly; and finally every word of the name
+    appearing somewhere in the file or the label, which is what lets "nsfw lora" reach "NSFW Qwen Lora".
+    A name that reaches several entries is still refused by the caller, so a loose tier widens what can
+    be said rather than what can be guessed at.
     """
-    key = str(name or "").strip().lower()
+    key = _norm(name)
     if not key:
         return []
-    stem = _stem(key)
-    exact = [i for i in items if i.file.lower() == key or i.file.lower().rsplit(".", 1)[0] == key
-             or _stem(i.file) == stem]
-    return exact or [i for i in items if key in i.file.lower() or key == i.label.lower()
-                     or (stem and stem in _stem(i.file))]
+    stem = _norm(_stem(name))
+    files = [(i, _norm(i.file), _norm(_stem(i.file)), _norm(i.label)) for i in items]
+    exact = [i for i, file, istem, _ in files
+             if file == key or file.rsplit(".", 1)[0] == key or istem == stem]
+    if exact:
+        return exact
+    loose = [i for i, file, istem, label in files
+             if key in file or key == label or (stem and stem in istem)]
+    if loose:
+        return loose
+    words = key.split()
+    return [i for i, file, _, label in files
+            if words and all(word in file or word in label for word in words)]
 
 
 def pick_model(configured: str, files: list[str], family: re.Pattern) -> str | None:

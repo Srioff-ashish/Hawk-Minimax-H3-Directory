@@ -212,6 +212,21 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(names, [self.FIX],
                          "a shortened name means the same file, so it must not be attached again beside it")
 
+    async def test_separators_do_not_decide_whether_a_lora_is_found(self):
+        # The catalogue mixes all three -- "NSFW Qwen Lora.safetensors" beside "lenovo_qwen21" and
+        # "qwen-image-2.1-fix-1.0-comfy" -- so an agent writing a name from memory picks whichever it saw.
+        # Refusing the underscored spelling reports an installed LoRA as missing.
+        for spelling in ("NSFW_Qwen_Lora", "nsfw-qwen-lora", "nsfw qwen lora"):
+            with self.subTest(spelling=spelling):
+                names, _, _ = await self.resolve([self.FIX, self.NSFW], requested=[{"name": spelling}])
+                self.assertIn(self.NSFW, names, f"{spelling!r} names an installed LoRA and must reach it")
+
+    async def test_a_name_missing_a_middle_word_still_reaches_one_file(self):
+        # "nsfw lora" is neither the file nor a substring of it, but every word of it is in the name, and
+        # exactly one installed LoRA answers to that. A name reaching several is still refused upstream.
+        names, _, _ = await self.resolve([self.FIX, self.NSFW], requested=[{"name": "nsfw lora"}])
+        self.assertIn(self.NSFW, names, "every word matched one installed file, so it should resolve")
+
     async def test_a_folder_qualified_name_resolves_to_its_file(self):
         # Results write LoRA names back with the family folder on the front, so the form the agent is most
         # likely to copy out of one job has to be usable in the next instead of matching nothing.
