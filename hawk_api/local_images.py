@@ -748,6 +748,25 @@ class LocalImageEngine:
         files = await self.service.available_models("loras")
         return names | {f.rsplit("/", 1)[-1].lower() for f in files if EDIT_LORA.search(f.rsplit("/", 1)[-1])}
 
+    async def families_for_loras(self, names: list[str]) -> set[str]:
+        """The LoRA families whose installed files cover every one of these names.
+
+        A LoRA belongs to exactly one engine's family, and an engine handed a name it does not have refuses
+        the whole request rather than stepping aside -- right when the name is a typo, wrong when the name
+        simply belongs to the engine one rung further down the ladder. This is what lets the walk skip the
+        rungs that could never serve. The test is the same one resolve_loras applies: exactly one match,
+        since an ambiguous name is refused there too.
+        """
+        wanted = [str(name).strip() for name in names if str(name or "").strip()]
+        if not wanted:
+            return set(image_engines.IMAGE_FAMILIES)
+        found = set()
+        for family in image_engines.IMAGE_FAMILIES:
+            items = [item for item in await self.catalogue(family) if item.installed]
+            if all(len(_match_loras(items, name)) == 1 for name in wanted):
+                found.add(family)
+        return found
+
     async def resolve_loras(self, requested: list[dict] | None, max_adult: int = MAX_ADULT_LORAS,
                             adult_default: bool = False, family: str = "krea2",
                             ) -> tuple[list[tuple[str, float]], list[ImageLora], list[str]]:

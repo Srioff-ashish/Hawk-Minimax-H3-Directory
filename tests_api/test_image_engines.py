@@ -209,21 +209,23 @@ class Store(unittest.TestCase):
         self.store = ie.ImageEngineStore(self.dir)
 
     def test_an_unconfigured_pod_puts_the_local_engines_first(self):
-        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
-        self.assertEqual(self.store.order("edit"), ["qwen21", "krea2", "seedream"], "zimage and turbo cannot edit")
+        self.assertEqual(self.store.order("generate"), ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("edit"), ["qwen21", "krea2", "seedream"],
+                         "zimage, chroma and turbo cannot edit")
         order = self.store.order("generate")
         self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
-    def test_chroma_ships_in_the_order_but_switched_off(self):
-        # It is an option you ask for, not a rung auto falls onto: its look and its 26 steps at cfg 3.8
-        # would change images nobody asked to change. Being in the list is what makes it visible in Studio.
-        rows = {row["engine"]: row["enabled"] for row in self.store.settings()["generate"]}
-        self.assertIn("chroma", rows, "Chroma must be offered, or nobody can switch it on")
-        self.assertFalse(rows["chroma"], "auto must not reach Chroma on its own")
-        self.assertNotIn("chroma", self.store.order("generate"), "and it is not in the tried order")
+    def test_chroma_leads_the_generate_order_and_stays_out_of_the_edit_one(self):
+        self.assertEqual(self.store.order("generate")[0], "chroma",
+                         "the shipped preference is Chroma first; Studio can reorder it")
         self.assertNotIn("chroma", [r["engine"] for r in self.store.settings()["edit"]],
                          "Chroma takes no reference images, so it has no place in the edit order")
+
+    def test_putting_chroma_in_the_edit_order_is_refused_by_name(self):
+        with self.assertRaises(ie.SettingsError) as caught:
+            self.store.save(edit=[{"engine": "qwen21"}, {"engine": "chroma"}])
+        self.assertIn("Chroma1-HD", str(caught.exception), "say which one, do not silently drop it")
 
     def test_saving_an_order_survives_a_reload(self):
         self.store.save(generate=[{"engine": "qwen21"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
@@ -293,7 +295,7 @@ class Store(unittest.TestCase):
     def test_a_corrupt_file_falls_back_to_the_defaults(self):
         with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
             handle.write("{ not json")
-        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
 
     def test_a_family_with_no_stored_defaults_falls_back_to_the_shipped_pair(self):
         self.assertIsNone(self.store.defaults("qwen21"), "never set is not the same as empty")

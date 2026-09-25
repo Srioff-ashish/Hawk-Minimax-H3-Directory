@@ -282,20 +282,46 @@ class AgentStore:
             self._db.commit()
         return {"id": cursor.lastrowid, "role": role, "content": content, "created_at": created}
 
-    def messages(self, session_id: str, after: int = 0, include_hidden: bool = False) -> list[dict]:
-        """The chat's messages. Forgotten ones (excluded) are left out unless include_hidden: every caller that
-        builds a model prompt uses the default, so a forgotten message is never sent to a model again."""
+    def messages(self, session_id: str, after: int = 0, include_hidden: bool = False,
+                 before: int = 0, limit: int = 0) -> list[dict]:
+        """The chat's messages, always oldest first. Forgotten ones (excluded) are left out unless
+        include_hidden: every caller that builds a model prompt uses the default, so a forgotten message is
+        never sent to a model again.
+
+        ``limit`` returns the *newest* that many of whatever matched, because a chat is read from its end:
+        opening a year-old conversation should not mean building a thousand messages the reader will scroll
+        straight past. ``before`` then pages backwards from the oldest one already held. Callers that want
+        everything -- every prompt builder, and the poll for new messages -- pass neither and are unaffected.
+        """
+        clauses, args = ["session_id = ?", "id > ?"], [session_id, after]
+        if before:
+            clauses.append("id < ?")
+            args.append(before)
+        if not include_hidden:
+            clauses.append("excluded = 0")
+        order = " ORDER BY id DESC LIMIT ?" if limit else " ORDER BY id"
+        if limit:
+            args.append(limit)
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, role, content, created_at, excluded FROM agent_messages WHERE session_id = ? AND id > ?"
-                + ("" if include_hidden else " AND excluded = 0") + " ORDER BY id",
-                (session_id, after),
+                "SELECT id, role, content, created_at, excluded FROM agent_messages WHERE "
+                + " AND ".join(clauses) + order, args,
             ).fetchall()
+        if limit:
+            rows = rows[::-1]  # the newest N, handed back in reading order
         messages = [{"id": row[0], "role": row[1], "content": json.loads(row[2]), "created_at": row[3]} for row in rows]
         if include_hidden:
             for message, row in zip(messages, rows):
                 message["excluded"] = bool(row[4])
         return messages
+
+    def has_messages_before(self, session_id: str, message_id: int) -> bool:
+        """Whether anything older than this is still in the chat, so a reader can be offered it."""
+        with self._lock:
+            return self._db.execute(
+                "SELECT 1 FROM agent_messages WHERE session_id = ? AND id < ? LIMIT 1",
+                (session_id, message_id),
+            ).fetchone() is not None
 
     def get_message(self, session_id: str, message_id: int) -> dict | None:
         with self._lock:
@@ -693,15 +719,19 @@ class AgentService:
             raise NotFound("There is no reply to forget in this chat yet.")
         return self.forget_message(session_id, last["id"], "hide")
 
-    def view(self, session_id: str, after: int = 0) -> dict:
+    def view(self, session_id: str, after: int = 0, before: int = 0, limit: int = 0) -> dict:
+        """The chat as Studio draws it. ``limit`` opens on the last page rather than the whole transcript and
+        ``before`` walks back from there; ``has_older`` says whether there is another page to walk to."""
         session = self.get_session(session_id)
-        messages = self.store.messages(session_id, after, include_hidden=True)
+        messages = self.store.messages(session_id, after, include_hidden=True, before=before, limit=limit)
         for message in messages:  # fresh signed thumbnails for attached files
             for attachment in message["content"].get("attachments") or [] if message["role"] == "user" else []:
                 asset = self.service.store.get_asset(attachment.get("asset_id", ""))
                 if asset:
                     attachment.update({k: v for k, v in self.service.asset_view(asset).items() if k in ("thumb_url", "file_url")})
-        return {"session": self.public(session), "messages": messages}
+        # Only meaningful for a paged read: an unpaged one already holds everything after "after".
+        older = bool(messages) and (before or limit) and self.store.has_messages_before(session_id, messages[0]["id"])
+        return {"session": self.public(session), "messages": messages, "has_older": bool(older)}
 
     # ------------------------------------------------------------ runs
 
@@ -1316,6 +1346,15 @@ class AgentService:
         ladder = await self.service.ready_image_engines("edit" if args.get("reference_asset_ids") else "generate")
         if args.get("loras"):  # LoRAs (adult ones included) only run on the local engines, so stay among those
             ladder = [engine for engine in ladder if image_engines.get(engine).lora_family]
+            # ... and only those that hold these particular files: stepping up onto an engine of another
+            # family refuses the retake outright rather than making a better picture.
+            try:
+                families = await self.service.local_images.families_for_loras(
+                    [(spec or {}).get("name") if isinstance(spec, dict) else spec for spec in args["loras"]])
+            except Exception:
+                families = None
+            if families is not None:
+                ladder = [engine for engine in ladder if image_engines.get(engine).lora_family in families]
         if not ladder:
             return None
         # an id this ladder doesn't hold (an older chat, or an engine since switched off) is ignored, not a crash

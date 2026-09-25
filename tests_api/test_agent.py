@@ -224,6 +224,22 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
         later = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"after": messages[-2]["id"]})).json()
         self.assertEqual(len(later["messages"]), 1)
+        self.assertFalse(later["has_older"], "a forward poll is not a page, so there is nothing to page back to")
+
+        # Studio opens a chat on its last page and walks backwards as the reader scrolls up, rather than
+        # building the whole transcript at once. Paging must hand back the same messages in the same order.
+        last = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"limit": 2})).json()
+        self.assertEqual([m["id"] for m in last["messages"]], [m["id"] for m in messages[-2:]],
+                         "limit gives the newest, still oldest-first")
+        self.assertTrue(last["has_older"], "and says there is more above it")
+        older = (await self.http.get(f"/v1/agent/sessions/{chat}",
+                                     params={"before": last["messages"][0]["id"], "limit": 2})).json()
+        self.assertEqual([m["id"] for m in older["messages"]], [m["id"] for m in messages[-4:-2]],
+                         "the page above it, with nothing skipped and nothing repeated")
+        whole = (await self.http.get(f"/v1/agent/sessions/{chat}",
+                                     params={"limit": len(messages) + 10})).json()
+        self.assertEqual([m["id"] for m in whole["messages"]], [m["id"] for m in messages])
+        self.assertFalse(whole["has_older"], "asking for more than exists reaches the start of the chat")
 
     async def test_agent_sees_loras_with_a_large_model_catalogue(self):
         # Atlas lists 100+ models with pricing; the LoRA list must still reach the agent.
@@ -613,7 +629,8 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
 
     async def test_the_engine_order_is_a_setting(self):
         view = (await self.http.get("/v1/images/engines")).json()
-        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]], ["qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]],
+                         ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["qwen21", "krea2", "seedream"])
         self.assertEqual(view["busy"]["mode"], "fall_through", "unchanged until the user says otherwise")
 
@@ -625,7 +642,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         ready = [r["engine"] for r in options["generate_ladder"] if r["ready"] and r["enabled"]]
         self.assertEqual(ready, ["turbo", "seedream"], "the disabled lite engine is ready but not in play")
         self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]],
-                         ["qwen21", "krea2", "zimage", "turbo", "seedream"])
+                         ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
 
         # put Seedream first and the next image goes straight there, with no local attempt to skip past
@@ -1095,6 +1112,16 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(clip["inputs"]["type"], "lumina2", "not a Qwen type, whatever the file name suggests")
         sampler = next(n for n in graph.values() if n["class_type"] == "KSampler")
         self.assertEqual(sampler["inputs"]["sampler_name"], "res_multistep")
+
+        # Naming a LoRA names the engine. Krea 2 leads this ladder and does not have zit_mystic_xxx, and
+        # an engine handed a LoRA it lacks refuses the whole request rather than stepping aside -- so with
+        # engine "auto" the walk has to skip past it to the engine that actually holds the file. Before
+        # Z-Image's weights arrived, a few lines above, the same call was a 422, which is still right:
+        # narrowing onto an engine that is not installed would only move the failure.
+        routed = await self.http.post("/v1/images", json={"prompt": "A lamp", "loras": [{"name": "zit_mystic_xxx"}]})
+        self.assertEqual(routed.status_code, 201, routed.text)
+        self.assertEqual(routed.json()["engine"], "zimage", "the LoRA picked the engine that has it")
+        self.assertIn("Krea 2", routed.json()["note"], "and it says which engine it walked past, and why")
 
         for name in ("diffusion_models", "text_encoders", "vae"):
             files[name].pop()

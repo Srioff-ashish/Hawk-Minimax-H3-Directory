@@ -271,13 +271,13 @@ def full_order(stored: list[dict] | None, action: str = "generate") -> list[dict
 #: skipped by the walk, so listing all three local engines here costs a pod that lacks one nothing.
 DEFAULTS = {
     "generate": [
+        # Chroma leads: it is slower than Qwen (26 steps at cfg 3.8) and has an aesthetic of its own, and
+        # that aesthetic is the reason it is here. Reordering this in Studio is a two-second job, so the
+        # shipped order is a starting preference rather than a claim about which engine is better.
+        {"engine": "chroma", "enabled": True},
         {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},
-        # Off unless asked for by name. Chroma samples at cfg 3.8 with a real negative prompt and has an
-        # aesthetic of its own, so having "auto" fall onto it would change images nobody asked to change.
-        # Naming it as the engine pins it whatever this says, which is what makes it an option rather than a rung.
-        {"engine": "chroma", "enabled": False},
         # below all three local engines, so it only ever fires when none of them can run -- and then it is
         # a third of Seedream's price for the same job
         {"engine": "turbo", "enabled": True},

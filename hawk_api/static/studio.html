@@ -3389,7 +3389,10 @@
 
   // ---------------------------------------------------------------- agent
 
-  const agent = { drafts: new Map(), draftFor: undefined, sessions: [], current: null, lastId: 0, models: [], modelsLoaded: false, attachments: [], timer: null, jobCards: new Map(), rendered: new Set() };
+  const agent = { drafts: new Map(), draftFor: undefined, sessions: [], current: null, lastId: 0, models: [], modelsLoaded: false, attachments: [], timer: null, jobCards: new Map(), rendered: new Set(), firstId: 0, hasOlder: false, loadingOlder: false, insertBefore: null };
+  //: A chat opens on its last page and walks backwards as you scroll up. Building a thousand messages at
+  //: once stalls the open, and then leaves a DOM big enough to slow every later append down with it.
+  const AGENT_PAGE = 40;
   const PERSONAS = [
     "Bollywood music-video director: bold colours, dance energy, quick cuts, playful Hinglish lines",
     "Luxury fashion film director: slow elegant camera, soft light, minimal dialogue, one music bed",
@@ -3496,7 +3499,7 @@
       if (next) { history.replaceState(null, "", `#agent/${next.id}`); await openAgentSession(next.id); }
       else {  // no chats left: the same empty state showAgentPage falls back to
         history.replaceState(null, "", "#agent");
-        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); resetAgentPaging(); $("agentThread").innerHTML = "";
         renderAgentEmpty();
         $("agentTitle").value = ""; $("agentStatus").hidden = true; $("agentUsage").textContent = "";
         $("agentForgetLast").disabled = $("agentDelete").disabled = $("agentCompact").disabled = true;
@@ -3564,6 +3567,7 @@
     agent.lastUserId = 0;
     agent.rendered.clear();
     agent.jobCards.clear();
+    resetAgentPaging();
     $("agentThread").innerHTML = "";
     storage.set("hawkH3AgentChat", id);
     renderAgentSessions();
@@ -3634,14 +3638,65 @@
     else if (restore) forgetAgentMessage(restore.dataset.restore, "restore");
   });
 
-  async function reloadAgentThread() {  // the ?after= poll never revisits older messages, so redraw from the start
+  function resetAgentPaging() {
+    agent.firstId = 0;
+    agent.hasOlder = false;
+    agent.loadingOlder = false;
+    agent.insertBefore = null;
+  }
+
+  async function reloadAgentThread() {  // the ?after= poll never revisits older messages, so redraw them
+    // Redraw as much as was on screen, not only the last page: Forget and Restore are usually aimed at an
+    // old message, and dropping the reader back to the end of the chat afterwards loses their place.
+    const held = agent.rendered.size;
     agent.lastId = 0;
     agent.lastUserId = 0;
     agent.rendered.clear();
     agent.jobCards.clear();
+    resetAgentPaging();
     $("agentThread").innerHTML = "";
-    await pollAgent();
+    await pollAgent(false, Math.max(AGENT_PAGE, held));
   }
+
+  function markAnsweredChoices() {
+    $("agentThread").querySelectorAll(".choose").forEach((card) => {  // answered, or superseded by a newer one
+      if (Number(card.dataset.choice) < (agent.lastUserId || 0)) card.classList.add("done");
+    });
+  }
+
+  async function loadOlderAgent() {
+    if (agent.loadingOlder || !agent.hasOlder || !agent.current || !agent.firstId) return;
+    agent.loadingOlder = true;
+    const id = agent.current;
+    const thread = $("agentThread");
+    // Measured from the bottom, which is the edge that does not move while content is added above it.
+    const fromBottom = thread.scrollHeight - thread.scrollTop;
+    thread.insertAdjacentHTML("afterbegin", `<div class="note-line older-loading">Loading earlier messages\u2026</div>`);
+    try {
+      const view = await api(`/v1/agent/sessions/${id}?before=${agent.firstId}&limit=${AGENT_PAGE}`);
+      if (agent.current !== id) return;
+      thread.querySelector(".older-loading")?.remove();
+      // Every chunk goes immediately above this node, so a page rendered oldest-first keeps its order
+      // and lands as one block on top of what was already there.
+      agent.insertBefore = thread.firstElementChild;
+      for (const message of view.messages) {
+        renderAgentMessage(message);
+        agent.firstId = Math.min(agent.firstId, message.id);
+      }
+      agent.insertBefore = null;
+      agent.hasOlder = !!view.has_older;
+      markAnsweredChoices();
+      thread.scrollTop = thread.scrollHeight - fromBottom;
+    } catch (error) {
+      thread.querySelector(".older-loading")?.remove();
+    } finally {
+      agent.loadingOlder = false;
+    }
+  }
+
+  $("agentThread").addEventListener("scroll", () => {
+    if ($("agentThread").scrollTop < 300) loadOlderAgent();
+  }, { passive: true });
 
   async function forgetAgentMessage(messageId, mode) {
     const id = agent.current;
@@ -3766,7 +3821,8 @@
     const add = (html) => {
       const marked = html.replace(/<div class="(msg-meta|bubble|note-line|choose)/g, `<div${tag} class="$1`)
                          .replace(/<details class="tool-card"/g, `<details${tag} class="tool-card"`);
-      if (typing) typing.insertAdjacentHTML("beforebegin", marked); else thread.insertAdjacentHTML("beforeend", marked);
+      const anchor = agent.insertBefore || typing;  // an older page is built above the first node held
+      if (anchor) anchor.insertAdjacentHTML("beforebegin", marked); else thread.insertAdjacentHTML("beforeend", marked);
     };
     const c = message.content || {};
     const time = new Date(message.created_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -3824,12 +3880,15 @@
     }
   }
 
-  async function pollAgent(scroll = false) {
+  async function pollAgent(scroll = false, page = AGENT_PAGE) {
     clearTimeout(agent.timer);
     if (!agent.current) return;
     const id = agent.current;
     try {
-      const view = await api(`/v1/agent/sessions/${id}?after=${agent.lastId}`);
+      // First read of a chat: ask for the last page only. Every read after it polls forward from the
+      // newest message held, exactly as before, so nothing already drawn is fetched or built twice.
+      const first = !agent.lastId;
+      const view = await api(`/v1/agent/sessions/${id}?` + (first ? `limit=${page}` : `after=${agent.lastId}`));
       if (agent.current !== id) return;
       const thread = $("agentThread");
       const nearBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 120;
@@ -3839,9 +3898,11 @@
         agent.lastId = Math.max(agent.lastId, message.id);
         if (message.role === "user") agent.lastUserId = Math.max(agent.lastUserId || 0, message.id);
       }
-      thread.querySelectorAll(".choose").forEach((card) => {  // answered, or superseded by a newer one
-        if (Number(card.dataset.choice) < (agent.lastUserId || 0)) card.classList.add("done");
-      });
+      if (first && view.messages.length) {
+        agent.firstId = view.messages[0].id;
+        agent.hasOlder = !!view.has_older;
+      }
+      markAnsweredChoices();
       updateAgentHeader(view.session);
       if (view.messages.some((m) => m.role === "tool" && m.content?.job_id)) refreshJobs();
       if (scroll || (nearBottom && view.messages.length)) thread.scrollTop = thread.scrollHeight;
@@ -4061,7 +4122,7 @@
         agent.draftFor = session.id;
         clearAgentDraft(null);
         history.replaceState(null, "", `#agent/${session.id}`);
-        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); $("agentThread").innerHTML = "";
+        agent.lastId = 0; agent.lastUserId = 0; agent.rendered.clear(); resetAgentPaging(); $("agentThread").innerHTML = "";
       } catch (error) { return toast("Could not start a chat", error.message, "bad"); }
     }
     $("agentSend").disabled = true;

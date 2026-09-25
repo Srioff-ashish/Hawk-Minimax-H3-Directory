@@ -954,6 +954,9 @@ class HawkService:
                 notes.append(f"{only.label} can't use reference images, so Seedream edit made this one.")
                 ladder, atlas_override = ["seedream"], IMAGE_EDIT_MODEL
 
+        if raw == "auto" and loras:
+            ladder = await self._lora_ladder(ladder, action, loras, notes)
+
         references: list[str] = []
 
         async def atlas_references() -> list[str]:
@@ -1026,6 +1029,33 @@ class HawkService:
         raise RequestError("No image engine could make this image. " + (
             "Tried: " + "; ".join(f"{t['engine']}: {t.get('skipped') or t.get('error')}" for t in tried)
             if tried else "No engine is enabled for this in Studio, under Images."))
+
+    async def _lora_ladder(self, ladder: list[str], action: str, loras: list[dict], notes: list) -> list[str]:
+        """With LoRAs named, "auto" walks only the local engines that could load them.
+
+        Naming a LoRA names the engine in all but words: an engine that does not have the file refuses the
+        request outright instead of stepping aside, which is right for a typo and wrong when the file
+        belongs to the rung below. The lead engine having no LoRAs of its own at all -- Chroma, today --
+        would otherwise turn every LoRA request into a refusal.
+
+        Narrowed only when an engine that qualifies is also installed. Otherwise the ladder is left exactly
+        as it was, so the walk still reaches an engine that can explain itself -- the alternative is a
+        request for a LoRA quietly answered by a paid engine that ignores LoRAs entirely.
+        """
+        try:
+            families = await self.local_images.families_for_loras([(spec or {}).get("name") for spec in loras])
+            able = [e for e in ladder
+                    if image_engines.get(e).local and image_engines.get(e).lora_family in families]
+            if not able or not set(able) & set(await self.ready_image_engines(action)):
+                return ladder
+        except Exception:  # ComfyUI down; the walk is about to fail on something louder than this
+            return ladder
+        kept = [e for e in ladder if e in able or not image_engines.get(e).local]
+        skipped = [image_engines.get(e).label for e in ladder if e not in kept]
+        if skipped:
+            notes.append(f"{', '.join(skipped)} {'do' if len(skipped) > 1 else 'does'} not have the LoRAs "
+                         f"asked for, so {'they were' if len(skipped) > 1 else 'it was'} skipped.")
+        return kept
 
     async def ready_image_engines(self, action: str = "generate") -> list[str]:
         """Enabled engines for this action that could actually run right now, best first.

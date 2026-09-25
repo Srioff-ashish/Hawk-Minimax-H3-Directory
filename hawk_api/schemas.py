@@ -121,9 +121,9 @@ class ImageRequest(BaseModel):
                       "stays in Pro's cheaper 1.5K tier (e.g. 1328x1776); larger, like 2048x2048, bills the 2K tier at twice the price. Omit for the default.")
     n: int = Field(1, ge=1, le=4, description="How many images.")
     seed: int | None = Field(None, ge=0)
-    engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then Krea 2, then "
-                               "z-image/turbo, then Seedream), or one of qwen21, krea2, zimage, chroma, local, turbo, seedream, "
-                               "seedream-lite. 'chroma' is off the auto ladder and only runs when named. "
+    engine: str | None = Field(None, description="auto (default: local Chroma1-HD when idle, then Qwen Image 2.1, then "
+                               "Krea 2, then z-image/turbo, then Seedream; with references it starts at Qwen Image 2.1), "
+                               "or one of qwen21, krea2, zimage, chroma, local, turbo, seedream, seedream-lite. "
                                "'klein' still resolves, to qwen21.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "
                                      "engine's family (file name or a unique part, optional strength). Qwen Image 2.1 "

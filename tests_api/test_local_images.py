@@ -463,6 +463,39 @@ class EditGuardrails(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([i.kind for i in used], ["detail"], "only the repair LoRA, which is not adult")
 
 
+class WhichEngineCanLoadTheseLoras(unittest.IsolatedAsyncioTestCase):
+    """Naming a LoRA names the engine, so the ladder has to be able to ask which engines qualify."""
+
+    FILES = ["qwen21/NSFW Qwen Lora.safetensors", "qwen21/qwen-image-2.1-fix-1.0-comfy.safetensors",
+             "krea2/snofs_krea2.safetensors", "krea2/krea2_mystic_xxx_v3.safetensors"]
+
+    async def asyncSetUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, True)
+        shutil.copyfile(li.EXAMPLE_LORAS, os.path.join(self.dir, "image_loras.json"))
+        self.images = li.LocalImageEngine(StubService(self.dir, self.FILES))
+
+    async def test_a_name_narrows_to_the_family_that_holds_it(self):
+        self.assertEqual(await self.images.families_for_loras(["NSFW Qwen Lora"]), {"qwen21"})
+        self.assertEqual(await self.images.families_for_loras(["snofs"]), {"krea2"})
+
+    async def test_an_engine_with_nothing_installed_never_qualifies(self):
+        # Chroma leads the generate ladder and has no catalogue on this pod. Without this the walk would
+        # hand it every LoRA request and every one of them would be refused outright.
+        self.assertNotIn("chroma", await self.images.families_for_loras(["snofs"]))
+
+    async def test_names_from_two_families_leave_no_engine_able(self):
+        # Nothing can load both, so the ladder is left alone and the request fails with its own reason.
+        self.assertEqual(await self.images.families_for_loras(["snofs", "NSFW Qwen Lora"]), set())
+
+    async def test_a_name_nothing_installed_matches_narrows_to_nothing(self):
+        self.assertEqual(await self.images.families_for_loras(["no such lora"]), set())
+
+    async def test_naming_none_leaves_every_family_in_play(self):
+        self.assertEqual(await self.images.families_for_loras([]), set(ie.IMAGE_FAMILIES))
+        self.assertEqual(await self.images.families_for_loras(["", "  ", None]), set(ie.IMAGE_FAMILIES))
+
+
 class MirroredConstants(unittest.TestCase):
     def test_the_base_loras_table_is_the_same_on_both_sides(self):
         # local_images mirrors image_engines because image_engines cannot import it back

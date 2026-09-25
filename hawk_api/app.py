@@ -492,8 +492,10 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         return {"sessions": [agent.public(session) for session in agent.list_sessions()]}
 
     @app.get("/v1/agent/sessions/{session_id}", tags=["agent"])
-    async def agent_get(session_id: str, after: int = 0):
-        return agent.view(session_id, after)
+    async def agent_get(session_id: str, after: int = 0, before: int = 0, limit: int = 0):
+        """The chat. after=<id> polls for what is new; limit=<n> opens on the last n messages and
+        before=<id> pages backwards from there, so a long chat does not have to be built all at once."""
+        return agent.view(session_id, after, before, max(0, min(500, limit)))
 
     @app.patch("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_update(session_id: str, body: AgentSessionIn):
