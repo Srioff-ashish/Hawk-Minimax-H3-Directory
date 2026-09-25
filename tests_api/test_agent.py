@@ -1286,7 +1286,15 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertIn("always use 9:16", system)
         self.assertIn("- render_film:", system)
         self.assertNotIn("HOW YOU WORK", system)
-        self.assertTrue(system.rstrip().endswith("including from their photos."))
+        # Tied to the constant rather than to its closing words: the rules gained a paragraph explaining
+        # that the two bans are the whole list, and a literal ending silently went stale instead of
+        # reporting that the block had changed. What matters is that the whole block is still appended.
+        from hawk_api.prompts import PLATFORM_RULES
+
+        self.assertTrue(
+            system.rstrip().endswith(PLATFORM_RULES.rstrip()),
+            "a custom agent prompt must still carry the platform rules, whole and last",
+        )
 
         without_tools = (await self.http.put("/v1/prompts/agent", json={"text": "Minimal. {{PERSONA}}"})).json()
         self.assertTrue(any("{{TOOLS}}" in w for w in without_tools["warnings"]))
