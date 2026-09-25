@@ -154,6 +154,13 @@ class AssetUpdate(BaseModel):
     add_tags: list[str] = Field(default_factory=list)
     remove_tags: list[str] = Field(default_factory=list)
     filename: str | None = Field(None, description="Rename the display name.")
+    generated_from: str | None = Field(None, description=
+        "Correct the provenance of a file that is a copy of an image made here: the asset id it was copied "
+        "from. Use it when a client downloaded a generated image and uploaded it back, which loses the "
+        "history and puts a picture this pod drew from a prompt under the rules meant for photographs of "
+        "real people. The origin must itself be generated and not descend from an upload. The previous "
+        "source is kept on the asset as corrected_from and the change is logged; \"\" undoes it. This "
+        "overrides a content guardrail, so use it only on a file you have compared against its origin.")
 
 
 class AssetBulk(BaseModel):

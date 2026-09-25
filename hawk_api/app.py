@@ -206,7 +206,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.patch("/v1/assets/{asset_id}", tags=["assets"])
     async def update_asset(asset_id: str, body: AssetUpdate):
         return service.asset_view(service.update_asset(asset_id, collection=body.collection, tags=body.tags,
-                                                       add_tags=body.add_tags, remove_tags=body.remove_tags, filename=body.filename))
+                                                       add_tags=body.add_tags, remove_tags=body.remove_tags,
+                                                       filename=body.filename, generated_from=body.generated_from))
 
     @app.delete("/v1/assets/{asset_id}", tags=["assets"])
     async def delete_asset(asset_id: str):

@@ -634,10 +634,12 @@ class HawkService:
         return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
 
     def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None,
-                     owner=None, of=None) -> dict:
+                     owner=None, of=None, generated_from=None) -> dict:
         asset = self.store.get_asset(asset_id)
         if asset is None:
             raise NotFound(f"No asset {asset_id!r}.")
+        if generated_from is not None:
+            self._correct_provenance(asset, generated_from)
         if owner:  # the character who made it, in a group chat: {"name", "member", "session"}
             asset["by"] = {k: str(owner.get(k) or "")[:80] for k in ("name", "member", "session")}
             # A group shot's photographer is drawn at random from the people in it, so it is a real answer
@@ -661,6 +663,60 @@ class HawkService:
             asset["filename"] = os.path.basename(filename.strip())
         self.store.add_asset(asset)
         return asset
+
+    def _correct_provenance(self, asset: dict, source_id: str) -> None:
+        """Record that this file is a copy of an asset made here, not something brought in from outside.
+
+        A client that could not reach a generated image on disk used to download it and upload it back. The
+        copy arrives with no history, so the upload rules -- which exist because an uploaded photo may show a
+        real person -- then apply to an image this pod drew from a prompt. Restoring lost files from the Drive
+        export is what stops that happening; this is for the copies made before it did.
+
+        It is an override of a content guardrail, so it leaves a trail rather than quietly rewriting history:
+        the previous source is kept under "corrected_from", the change is stamped, and the server logs it.
+        Passing "" puts the asset back the way it was.
+        """
+        previous = asset.get("source") or {}
+        if not str(source_id or "").strip():  # undo
+            restored = previous.get("corrected_from")
+            if restored is None:
+                raise RequestError(f"{asset['id']} has no corrected provenance to undo.")
+            asset["source"] = restored
+            log.warning("hawk_api: provenance correction on %s undone", asset["id"])
+            return
+        origin = self.store.get_asset(str(source_id).strip())
+        if origin is None:
+            raise RequestError(f"Unknown generated_from {source_id!r}; it must be an asset in this library.")
+        if origin["id"] == asset["id"]:
+            raise RequestError("An asset cannot be a copy of itself.")
+        if local_images.from_upload(origin, self.store.get_asset):
+            # Otherwise the correction launders the very thing it is meant to undo: pointing at an asset that
+            # is itself an upload, or descends from one, only moves the upload one step further away.
+            raise RequestError(
+                f"{origin['id']} is an upload or was made from one, so it cannot be the origin of a "
+                "generated image. Name the image this file was copied from.")
+        if self._descends_from(origin, asset["id"]):
+            raise RequestError(f"{origin['id']} was made from {asset['id']}, so it cannot also be its origin.")
+        asset["source"] = {"type": "generated",
+                           "engine": (origin.get("source") or {}).get("engine", ""),
+                           "generator": (origin.get("source") or {}).get("generator", ""),
+                           "references": [origin["id"]],
+                           "corrected_at": time.time(),
+                           "corrected_from": previous}
+        log.warning("hawk_api: provenance of %s corrected to a copy of %s (was %r) -- upload rules no longer "
+                    "apply to it or to anything made from it", asset["id"], origin["id"], previous.get("type"))
+
+    def _descends_from(self, asset: dict, ancestor_id: str, depth: int = 0) -> bool:
+        """Whether this asset was made from that one, however far back. Guards against a cycle in the chain."""
+        if depth > 20:
+            return True
+        for ref_id in (asset.get("source") or {}).get("references") or []:
+            if str(ref_id) == ancestor_id:
+                return True
+            ref = self.store.get_asset(str(ref_id))
+            if ref is not None and self._descends_from(ref, ancestor_id, depth + 1):
+                return True
+        return False
 
     def set_job_owner(self, job_id: str, owner: dict) -> None:
         """Whose video this is, in a group chat. Missing jobs are ignored: ownership is never worth an error."""

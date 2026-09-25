@@ -496,6 +496,94 @@ class WhichEngineCanLoadTheseLoras(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.images.families_for_loras(["", "  ", None]), set(ie.IMAGE_FAMILIES))
 
 
+class CorrectingWhereAFileCameFrom(unittest.IsolatedAsyncioTestCase):
+    """Re-pointing a re-uploaded copy at the image it was copied from.
+
+    A client that could not reach a generated image on disk downloaded it and uploaded it back. The copy
+    arrived with no history, so the upload rules -- there because an uploaded photo may show a real person
+    -- applied to a picture this pod drew from a prompt, and to everything later made from it.
+    """
+
+    def setUp(self):
+        from hawk_api.jobs import HawkService
+
+        self.assets = {
+            "root": {"id": "root", "kind": "image", "source": {"type": "generated", "engine": "qwen21"}},
+            "made": {"id": "made", "kind": "image",
+                     "source": {"type": "generated", "engine": "krea2", "references": ["root"]}},
+            "copy": {"id": "copy", "kind": "image", "filename": "lib_made_re.png", "source": {"type": "upload"}},
+            "photo": {"id": "photo", "kind": "image", "source": {"type": "upload"}},
+            "of_photo": {"id": "of_photo", "kind": "image",
+                         "source": {"type": "generated", "engine": "krea2", "references": ["photo"]}},
+        }
+        service = type("Service", (), {
+            "update_asset": HawkService.update_asset,
+            "_correct_provenance": HawkService._correct_provenance,
+            "_descends_from": HawkService._descends_from,
+        })()
+        service.store = type("Store", (), {
+            "get_asset": staticmethod(lambda i: self.assets.get(i)),
+            "add_asset": staticmethod(lambda a: self.assets.__setitem__(a["id"], a)),
+        })()
+        self.service = service
+
+    def lookup(self, asset_id):
+        return self.assets.get(asset_id)
+
+    def test_a_corrected_copy_stops_counting_as_an_upload(self):
+        self.assertTrue(li.from_upload(self.assets["copy"], self.lookup), "it arrives as an upload")
+        self.service.update_asset("copy", generated_from="made")
+        self.assertFalse(li.from_upload(self.assets["copy"], self.lookup),
+                         "once it points at the image it was copied from, the chain is clean")
+
+    def test_the_old_source_is_kept_and_the_change_can_be_undone(self):
+        # The override of a content guardrail has to stay visible on the asset, not quietly rewrite history.
+        self.service.update_asset("copy", generated_from="made")
+        self.assertEqual(self.assets["copy"]["source"]["corrected_from"], {"type": "upload"})
+        self.assertIn("corrected_at", self.assets["copy"]["source"])
+        self.service.update_asset("copy", generated_from="")
+        self.assertEqual(self.assets["copy"]["source"], {"type": "upload"}, "undone, exactly as it was")
+        self.assertTrue(li.from_upload(self.assets["copy"], self.lookup))
+
+    def test_an_origin_that_is_itself_an_upload_is_refused(self):
+        from hawk_api.jobs import RequestError
+
+        # Otherwise the correction launders what it exists to undo: naming an upload, or anything made from
+        # one, as the origin only puts the photograph one more step away from the check.
+        for origin in ("photo", "of_photo"):
+            with self.subTest(origin=origin), self.assertRaises(RequestError):
+                self.service.update_asset("copy", generated_from=origin)
+        self.assertTrue(li.from_upload(self.assets["copy"], self.lookup), "and the copy is left alone")
+
+    def test_an_origin_made_from_the_asset_itself_is_refused(self):
+        from hawk_api.jobs import RequestError
+
+        # Corrected first, so the chain through "later" is clean and the upload check has nothing to say:
+        # what has to refuse this is the cycle guard, which is the only thing standing between a typo and
+        # an asset that is its own ancestor.
+        self.service.update_asset("copy", generated_from="made")
+        self.assets["later"] = {"id": "later", "kind": "image",
+                                "source": {"type": "generated", "references": ["copy"]}}
+        self.assertFalse(li.from_upload(self.assets["later"], self.lookup))
+        with self.assertRaises(RequestError) as caught:
+            self.service.update_asset("copy", generated_from="later")
+        self.assertIn("cannot also be its origin", str(caught.exception))
+        self.assertEqual(self.assets["copy"]["source"]["references"], ["made"], "and the copy is untouched")
+
+    def test_an_unknown_origin_and_an_asset_pointing_at_itself_are_refused(self):
+        from hawk_api.jobs import RequestError
+
+        for origin in ("nope", "copy"):
+            with self.subTest(origin=origin), self.assertRaises(RequestError):
+                self.service.update_asset("copy", generated_from=origin)
+
+    def test_undoing_a_correction_that_was_never_made_is_refused(self):
+        from hawk_api.jobs import RequestError
+
+        with self.assertRaises(RequestError):
+            self.service.update_asset("made", generated_from="")
+
+
 class MirroredConstants(unittest.TestCase):
     def test_the_base_loras_table_is_the_same_on_both_sides(self):
         # local_images mirrors image_engines because image_engines cannot import it back
