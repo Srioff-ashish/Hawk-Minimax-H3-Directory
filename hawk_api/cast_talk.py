@@ -83,6 +83,28 @@ def visible_to(message: dict, member_id: str | None) -> bool:
     return not private or member_id is None or private == member_id
 
 
+def reference_key(request: str, faces: list[tuple[str, str]], without: list[str]) -> str:
+    """The picture's description with its references identified by name.
+
+    Several references reach the engine as an ordered list and nothing labels them, so a prompt that says
+    "the three of us on the terrace" leaves the model to guess which face belongs to which person -- and it
+    guesses wrong, which is what a group shot of the wrong faces is. Naming them is the whole fix.
+
+    A character with no avatar is named as having no reference rather than left out silently: the model can
+    still draw her from the description, and the line says why that one likeness is not held.
+    """
+    lines = [request.strip()]
+    if len(faces) > 1:
+        lines.append(" ".join(f"<image{i}> is {name}." for i, (name, _) in enumerate(faces, 1))
+                     + " Keep each face exactly as in her own reference.")
+    elif faces:
+        lines.append(f"Keep {faces[0][0]}'s face exactly as in the reference image.")
+    if without:
+        lines.append(f"There is no reference for {', '.join(without)}; draw "
+                     + ("her" if len(without) == 1 else "them") + " from the description.")
+    return "\n\n".join(line for line in lines if line)
+
+
 def mentioned_all(text: str, names: list[str], exclude: int | None = None) -> list[int]:
     """Every character named in text (full name, a first name only they have, or @Name), in the order named.
 

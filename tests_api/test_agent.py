@@ -117,6 +117,48 @@ def assistant_turns(body: dict) -> int:
     return sum(1 for message in body["messages"] if message["role"] == "assistant")
 
 
+class AGroupShotsReferences(unittest.TestCase):
+    """Which faces a group shot actually carries, and how the engine is told whose is whose."""
+
+    def setUp(self):
+        from hawk_api import cast_talk
+
+        self.cast_talk = cast_talk
+
+    def test_each_reference_is_named_so_the_faces_are_not_guessed(self):
+        # Several references arrive as an ordered list with nothing labelling them, so "the three of us on
+        # the terrace" leaves the model to guess whose face is whose -- and a group shot of the wrong faces
+        # is exactly the complaint.
+        text = self.cast_talk.reference_key(
+            "The three of us on the terrace at sunset.",
+            [("Tiya", "a1"), ("Riya", "b2"), ("Piya", "c3")], [])
+        self.assertIn("<image1> is Tiya.", text)
+        self.assertIn("<image2> is Riya.", text)
+        self.assertIn("<image3> is Piya.", text)
+        self.assertIn("The three of us on the terrace at sunset.", text, "the character's own words survive")
+
+    def test_a_single_reference_is_not_tagged(self):
+        # One image needs no numbering, and Qwen's own rewriter refers to a lone reference in words.
+        text = self.cast_talk.reference_key("A selfie on the balcony.", [("Riti", "a1")], [])
+        self.assertNotIn("<image1>", text)
+        self.assertIn("Keep Riti's face exactly as in the reference image.", text)
+
+    def test_a_character_with_no_avatar_is_named_rather_than_dropped(self):
+        # She used to vanish from the call with nothing said: two subjects, one reference, one invented face.
+        text = self.cast_talk.reference_key("Us two on the terrace.", [("Riti", "a1")], ["Nikki"])
+        self.assertIn("no reference for Nikki", text)
+        self.assertIn("draw her from the description", text)
+
+    def test_several_missing_avatars_read_as_a_group(self):
+        text = self.cast_talk.reference_key("All of us.", [("Riti", "a1")], ["Nikki", "Roks"])
+        self.assertIn("no reference for Nikki, Roks", text)
+        self.assertIn("draw them from the description", text)
+
+    def test_with_no_references_at_all_the_description_stands_alone(self):
+        text = self.cast_talk.reference_key("A street at night.", [], [])
+        self.assertEqual(text, "A street at night.", "nothing to say about references there is none of")
+
+
 class AgentApi(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "MAX_STEPS")}

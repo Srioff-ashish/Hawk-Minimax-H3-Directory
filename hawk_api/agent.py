@@ -1189,17 +1189,25 @@ class AgentService:
         return found[:cast_talk.MAX_SUBJECTS]
 
     def _avatars_for(self, session: dict, names: list[str]) -> list[str]:
-        """The avatar asset id of each named character, in order, skipping any who have none."""
+        """(name, avatar asset id) for each named character that has one, and the names of those that do not.
+
+        Both halves are returned because a character without an avatar used to be dropped in silence: a group
+        shot of two would go to the engine with one reference, come back with one likeness and the other face
+        invented, and nothing anywhere said why. The caller names the ones it holds and says which it does not.
+        """
         cast = cast_of(session)
-        found = []
+        found: list[tuple[str, str]] = []
+        without: list[str] = []
         for name in names:
             index = find_member(cast, name)
             if index is None:
                 continue
             avatar = str(cast[index].get("avatar_asset_id") or "")
-            if avatar and avatar not in found:
-                found.append(avatar)
-        return found[:cast_talk.MAX_SUBJECTS]
+            if not avatar:
+                without.append(name)
+            elif not any(avatar == held for _, held in found):
+                found.append((name, avatar))
+        return found[:cast_talk.MAX_SUBJECTS], without[:cast_talk.MAX_SUBJECTS]
 
     async def _snap_for(self, session_id: str, speaker: str, request: str, act: str, of: tuple[str, ...]) -> None:
         """A character took a picture: make it straight away, without waking the director.
@@ -1211,7 +1219,14 @@ class AgentService:
         no session state at all -- only messages, which are append-only.
         """
         session = self.get_session(session_id)
-        refs = self._avatars_for(session, list(of))
+        faces, without = self._avatars_for(session, list(of))
+        refs = [asset_id for _, asset_id in faces]
+        # Nothing labels a reference for the engine, so the prompt has to: see cast_talk.reference_key.
+        request = cast_talk.reference_key(request, faces, without)
+        if without:
+            self._note(session_id, f"No avatar for {', '.join(without)}, so "
+                       + ("her face was" if len(without) == 1 else "their faces were")
+                       + " drawn from the description rather than kept. Set one with set_avatar.", "warn")
         action = {"tool": "generate_image", "args": {"prompt": request, "reference_asset_ids": refs},
                   "by": speaker, "of": list(of)}
         try:
