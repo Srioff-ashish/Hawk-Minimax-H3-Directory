@@ -1226,14 +1226,33 @@ class HawkService:
             result.update(extra)
         return result
 
-    def _refs(self, references: list[ReferenceIn]) -> list[graphs.Ref]:
-        refs = []
+    async def _refs(self, references: list[ReferenceIn]) -> list[graphs.Ref]:
+        """The references as the graph wants them, restoring any file a restarted runtime has lost.
+
+        ComfyUI loads a reference by its recorded path, and after a Colab restore the database is back
+        while ComfyUI's input folder is empty -- so an asset the library still lists reaches the loader as
+        "Invalid image file", which says nothing about why. Restoring from the Drive export first turns the
+        common case into a working render, and names the files when it cannot.
+        """
+        refs, missing = [], []
         for reference in references:
             asset = self.store.get_asset(reference.asset_id)
             if asset is None:
                 raise RequestError(f"Unknown asset_id {reference.asset_id!r}. Upload the file first.")
+            if not await self.ensure_asset_on_disk(asset):
+                missing.append(asset.get("filename") or asset["id"])
             refs.append(graphs.Ref(asset["id"], asset["kind"], asset["path"], reference.role, reference.label, reference.for_video))
+        if missing:
+            raise RequestError(self._lost_files_message(missing))
         return refs
+
+    @staticmethod
+    def _lost_files_message(names: list[str]) -> str:
+        """Why a file the library lists is not on disk. ComfyUI would say "Invalid image file" and stop there."""
+        return ("The file is gone from ComfyUI's input folder for " + ", ".join(names) +
+                ", and no Drive export was found to restore it from. The library still lists it because the "
+                "database survived the restart; the pixels did not. Re-upload the file, or use an asset made "
+                "since the restart.")
 
     # ------------------------------------------------------------ jobs
 
@@ -1294,7 +1313,7 @@ class HawkService:
         return job
 
     async def create_plan(self, request: PlanRequest) -> dict:
-        refs = self._refs(request.references)
+        refs = await self._refs(request.references)
         seed = request.seed if request.seed is not None else random.randrange(1, 2**31)
         try:
             built, wiring = graphs.plan_graph(refs, self._planner_args(request, seed))
@@ -1330,7 +1349,7 @@ class HawkService:
         elif request.script is not None:
             script_text = request.script if isinstance(request.script, str) else json.dumps(request.script)
 
-        refs = self._refs(references)
+        refs = await self._refs(references)
         loras, warnings = await self.resolve_loras(settings)
         steps, steps_reason = choose_steps(loras, settings.steps)
         seed = settings.seed if settings.seed is not None else random.randrange(1, 2**48)
@@ -1342,6 +1361,8 @@ class HawkService:
                 raise RequestError(f"Unknown music_asset_id {settings.music_asset_id!r}. Upload the track first.")
             if music["kind"] != "audio":
                 raise RequestError(f"music_asset_id must be an audio file (mp3, wav, m4a...); {music['filename']} is {music['kind']}.")
+            if not await self.ensure_asset_on_disk(music):  # loaded from the same folder, lost the same way
+                raise RequestError(self._lost_files_message([music.get("filename") or music["id"]]))
             music_path = music["path"]
         params = graphs.RenderParams(
             run_name=f"api_{job_id.replace('-', '')[:16]}",

@@ -629,6 +629,29 @@ class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
                          "nothing was exported, so this must report the file as unrecoverable")
         self.assertFalse(os.path.exists(self.on_disk()))
 
+    async def test_a_render_reference_is_restored_too_and_not_only_an_edit(self):
+        # A video render loads its references through the same input folder and lost them the same way,
+        # but reached the graph by a different route -- ComfyUI answered "Invalid image file", which says
+        # nothing about why. _refs restores first and names the file when it cannot.
+        from hawk_api.jobs import HawkService, RequestError
+
+        self.service.store = type("Store", (), {"get_asset": staticmethod(lambda _id: self.asset)})()
+        self.service._refs = HawkService._refs.__get__(self.service)
+        self.service._lost_files_message = HawkService._lost_files_message
+        reference = type("Ref", (), {"asset_id": self.asset["id"], "role": "picture",
+                                     "label": "her", "for_video": True})()
+
+        with self.assertRaises(RequestError) as caught:
+            await self.service._refs([reference])
+        self.assertIn("shot.png", str(caught.exception), "say which file, not just that something is wrong")
+        self.assertIn("the pixels did not", str(caught.exception))
+
+        self.export()
+        refs = await self.service._refs([reference])
+        self.assertEqual(open(self.on_disk(), "rb").read(), b"exported pixels",
+                         "with an export to hand, the render should just work")
+        self.assertEqual(refs[0].path, self.asset["path"], "and still load by the recorded path")
+
     async def test_an_export_from_the_day_either_side_still_counts(self):
         # A restore can land either side of midnight from the export that made the file.
         self.asset["created_at"] = time.time() - 86400
