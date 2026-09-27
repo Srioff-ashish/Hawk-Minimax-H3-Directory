@@ -641,6 +641,8 @@ def start(
     attention: str = "sol scheduled",
     token: str | None = None,
     atlas_api_key: str | None = None,
+    openrouter_api_key: str | None = None,
+    llm_routing: str = "balanced",
     log_dir: str = "/content/hawk_logs",
 ) -> Session:
     """Start ComfyUI (or reuse it), the tunnel and the API. Model names left out are
@@ -653,8 +655,9 @@ def start(
     print("Models:")
     for key, value in models.items():
         print(f"  {key:11} {value or '(none)'}")
-    if not atlas_api_key:
-        print("Note: no ATLAS_API_KEY secret, so planning (plan_film / story) will fail. Scripts still render.")
+    if not atlas_api_key and not openrouter_api_key:
+        print("Note: no ATLAS_API_KEY or OPENROUTER_API_KEY secret, so planning (plan_film / story) will fail. "
+              "Scripts still render.")
     if not token:
         token = secrets.token_hex(24)
         print("No HAWK_API_TOKEN secret; generated a token for this session (shown below).")
@@ -682,6 +685,14 @@ def start(
     })
     if atlas_api_key:
         env["ATLAS_API_KEY"] = atlas_api_key
+    # The API settings file lives on this runtime's disk and the Drive snapshot copies only the database,
+    # so a key typed into Studio is gone after a restart. Passed here, a Colab secret survives one.
+    if openrouter_api_key:
+        env["OPENROUTER_API_KEY"] = openrouter_api_key
+        env["OPENROUTER_ROUTING"] = llm_routing
+        if not atlas_api_key:
+            env["HAWK_LLM_PROVIDER"] = "openrouter"
+            print(f"Planning and chats go to OpenRouter ({llm_routing} routing).")
 
     session = Session(comfy_dir, pack_dir, token, env, log_dir)
     _start_comfyui(session)
