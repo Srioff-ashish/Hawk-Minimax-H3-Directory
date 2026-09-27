@@ -106,3 +106,82 @@ class WhichServiceAnswers(unittest.IsolatedAsyncioTestCase):
     def test_the_same_settings_reuse_one_client(self):
         service = self.service(atlas_api_key="atlas-key")
         self.assertIs(service.atlas, service.atlas, "a client per call would drop every cache each time")
+
+
+class TheModelListFromEitherProvider(unittest.IsolatedAsyncioTestCase):
+    """list_models reads one shape for Atlas and another for OpenRouter, and must not lose either."""
+
+    #: OpenRouter's /models, trimmed to the fields that are read. Its modalities live under "architecture"
+    #: and its prices are strings of USD per token.
+    OPENROUTER = {"data": [
+        {"id": "anthracite-org/magnum-v4-72b", "name": "Magnum v4 72B", "context_length": 32768,
+         "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+         "pricing": {"prompt": "0.0000019", "completion": "0.0000022"}},
+        {"id": "google/gemini-pro-1.5", "name": "Gemini Pro 1.5", "context_length": 2000000,
+         "architecture": {"input_modalities": ["text", "image"], "output_modalities": ["text"]},
+         "pricing": {"prompt": "0.00000125", "completion": "0.000005", "input_cache_read": "0.0000003"}},
+        {"id": "some/thing-draws-pictures", "name": "Image only", "context_length": 4096,
+         "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]},
+         "pricing": {"prompt": "0.00001", "completion": "0"}},
+    ]}
+    #: Atlas's /models: the same information, one level up.
+    ATLAS = {"data": [
+        {"id": "xai/grok-4.6", "name": "Grok 4.6", "context_length": 256000,
+         "input_modalities": ["text", "image"], "output_modalities": ["text"],
+         "pricing": {"prompt": "0.000003", "completion": "0.000015"}},
+    ]}
+
+    async def models(self, payload):
+        import httpx
+
+        from hawk_api.atlas import AtlasClient
+
+        client = AtlasClient("https://openrouter.ai/api/v1", "sk-or-test")
+
+        class Response:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return payload
+
+        class Http:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return Response()
+
+        original = httpx.AsyncClient
+        httpx.AsyncClient = lambda *a, **k: Http()
+        try:
+            return await client.list_models()
+        finally:
+            httpx.AsyncClient = original
+
+    async def test_an_openrouter_vision_model_is_not_reported_blind(self):
+        # The one that mattered: inspect_image only offers a model it believes can see, and every
+        # OpenRouter model looked blind because the modalities are nested a level down.
+        found = {m["id"]: m for m in await self.models(self.OPENROUTER)}
+        self.assertTrue(found["google/gemini-pro-1.5"]["vision"], "its inputs include image")
+        self.assertFalse(found["anthracite-org/magnum-v4-72b"]["vision"], "and this one's do not")
+
+    async def test_a_model_that_does_not_answer_in_text_is_left_out(self):
+        found = {m["id"] for m in await self.models(self.OPENROUTER)}
+        self.assertNotIn("some/thing-draws-pictures", found, "a chat model has to reply in text")
+
+    async def test_prices_come_through_as_dollars_per_token(self):
+        found = {m["id"]: m for m in await self.models(self.OPENROUTER)}
+        gemini = found["google/gemini-pro-1.5"]
+        self.assertEqual((gemini["price_in"], gemini["price_out"]), (0.00000125, 0.000005))
+        self.assertEqual(gemini["price_cache"], 0.0000003, "a cached prefix bills lower")
+        self.assertEqual(found["anthracite-org/magnum-v4-72b"]["price_cache"], 0.0000019,
+                         "no cache price means cached tokens bill in full")
+
+    async def test_the_atlas_shape_still_reads(self):
+        found = {m["id"]: m for m in await self.models(self.ATLAS)}
+        self.assertTrue(found["xai/grok-4.6"]["vision"], "top-level modalities must keep working")
+        self.assertEqual(found["xai/grok-4.6"]["context"], 256000)

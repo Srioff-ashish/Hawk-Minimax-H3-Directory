@@ -513,7 +513,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             models = await service.atlas.list_models()
         except Exception as exc:  # AtlasError or network
             raise Unavailable(str(exc)) from None
-        return {"models": models, "default_agent_model": settings.agent_model, "default_planner_model": settings.planner_model,
+        # The effective defaults, not the pod's own: an agent or planner model set in the LLM panel is what
+        # a new chat actually opens on, so the dropdown has to mark that one rather than the one it replaced.
+        llm = service.llm()
+        return {"models": models,
+                "default_agent_model": llm.agent_model_override or settings.agent_model,
+                "default_planner_model": service.planner_model(),
+                "provider": llm.llm_provider,
                 "configured": service.atlas.configured}
 
     @app.post("/v1/agent/sessions", tags=["agent"], status_code=201)

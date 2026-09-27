@@ -83,14 +83,19 @@ class AtlasClient:
         models = []
         for item in items or []:
             model_id = str(item.get("id") or "")
-            outputs = item.get("output_modalities") or ["text"]
+            # Atlas puts the modalities at the top level; OpenRouter nests them under "architecture". Read
+            # both, because falling back to "text" for the outputs and nothing for the inputs marked every
+            # OpenRouter model as blind, and inspect_image only ever offers a model it believes can see.
+            shape = item.get("architecture") if isinstance(item.get("architecture"), dict) else {}
+            outputs = item.get("output_modalities") or shape.get("output_modalities") or ["text"]
+            inputs_ = item.get("input_modalities") or shape.get("input_modalities") or []
             if not model_id or "text" not in outputs or _EXCLUDE.search(model_id):
                 continue
             pricing = item.get("pricing") or {}
             models.append({
                 "id": model_id,
                 "name": item.get("name") or model_id,
-                "vision": "image" in (item.get("input_modalities") or []),
+                "vision": "image" in inputs_,
                 "context": item.get("context_length"),
                 "price_in": _price(pricing.get("prompt")),
                 "price_out": _price(pricing.get("completion")),

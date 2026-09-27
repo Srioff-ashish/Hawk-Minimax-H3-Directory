@@ -3583,10 +3583,23 @@
     fillAgentModels();
   }
 
+  const MODEL_GROUP_FROM = 40;  // below this a flat list is easier to scan than grouped one
   function modelOptions(models, selected, fallback) {
     const list = models.slice();
     if (fallback && !list.some((m) => m.id === fallback)) list.unshift({ id: fallback, name: fallback });
-    return list.map((m) => `<option value="${esc(m.id)}" ${m.id === selected ? "selected" : ""}>${esc(m.name || m.id)}${m.vision === false ? " · text only" : ""}</option>`).join("");
+    const option = (m) => `<option value="${esc(m.id)}" ${m.id === selected ? "selected" : ""}>${esc(m.name || m.id)}${m.vision === false ? " · text only" : ""}</option>`;
+    if (list.length < MODEL_GROUP_FROM) return list.map(option).join("");
+    // OpenRouter lists hundreds, so they go under their vendor. The server has already sorted the list
+    // with its favourites first; groups keep that order by appearing where their first model did, and each
+    // group keeps the server's order inside it, so nothing is silently re-ranked here.
+    const groups = new Map();
+    for (const m of list) {
+      const vendor = String(m.id || "").includes("/") ? m.id.split("/")[0] : "other";
+      if (!groups.has(vendor)) groups.set(vendor, []);
+      groups.get(vendor).push(m);
+    }
+    return [...groups].map(([vendor, items]) =>
+      `<optgroup label="${esc(vendor)}">${items.map(option).join("")}</optgroup>`).join("");
   }
   function fillAgentModels() {
     const session = currentSession();
