@@ -79,6 +79,55 @@ class ModelStore:
 
 
 @dataclass(frozen=True)
+class LLMSettings:
+    llm_provider: str = "atlas"
+    atlas_api_key_override: str = ""
+    openrouter_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = ""
+    planner_model_override: str = ""
+    agent_model_override: str = ""
+    agent_summary_model_override: str = ""
+
+
+class LLMSettingsStore:
+    FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key", "planner_model_override", "agent_model_override", "agent_summary_model_override")
+
+    def __init__(self, data_dir: str):
+        self.path = os.path.join(data_dir, "llm_settings.json")
+        self._lock = threading.Lock()
+
+    def _load(self) -> dict:
+        try:
+            with open(self.path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def stored(self) -> dict:
+        data = self._load()
+        return {key: str(data[key]) for key in self.FIELDS if isinstance(data.get(key), str)}
+
+    def resolve(self, defaults: "LLMSettings") -> "LLMSettings":
+        stored = self.stored()
+        return dataclasses.replace(defaults, **stored) if stored else defaults
+
+    def save(self, values: dict) -> dict:
+        with self._lock:
+            data = self._load()
+            for key, value in values.items():
+                if key not in self.FIELDS:
+                    raise ValueError(f"No LLM setting {key!r}; use one of: {', '.join(self.FIELDS)}.")
+                if value is None:
+                    continue
+                data[key] = str(value).strip()
+            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+            tmp = f"{self.path}.tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, indent=2)
+            os.replace(tmp, self.path)
+        return self.stored()
+@dataclass(frozen=True)
 class Settings:
     token: str
     comfy_url: str = "http://127.0.0.1:8188"
@@ -129,6 +178,7 @@ class Settings:
     drive_root: str = "/content/drive/MyDrive"
     max_import_files: int = 2000
     models: ModelSettings = field(default_factory=ModelSettings)
+    llm_overrides: LLMSettings = field(default_factory=LLMSettings)
 
     @property
     def db_path(self) -> str:

@@ -31,7 +31,7 @@ from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
-    UrlAssetRequest, VideoRequest,
+    UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -346,6 +346,28 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         except ValueError as exc:
             raise RequestError(str(exc)) from None
         return await render_model_defaults()
+
+    @app.get("/v1/settings/llm", tags=["system"])
+    async def get_llm_settings():
+        stored = service.llm_settings.stored()
+        for key in ("atlas_api_key_override", "openrouter_api_key"):
+            if stored.get(key):
+                stored[key] = f"{stored[key][:3]}****{stored[key][-3:]}" if len(stored[key]) > 8 else "****"
+        return stored
+
+    @app.put("/v1/settings/llm", tags=["system"])
+    async def update_llm_settings(body: LLMSettingsUpdate):
+        values = body.model_dump(exclude_unset=True)
+        # Prevent masked keys from overriding real keys if they are submitted unchanged
+        for key in ("atlas_api_key_override", "openrouter_api_key"):
+            if key in values and isinstance(values[key], str) and values[key].endswith("****"):
+                values.pop(key)
+        try:
+            service.llm_settings.save(values)
+        except ValueError as exc:
+            raise RequestError(str(exc)) from None
+        return await get_llm_settings()
+
 
     @app.get("/v1/loras/defaults", tags=["renders"])
     async def video_lora_defaults():

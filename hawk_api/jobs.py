@@ -32,7 +32,7 @@ from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
-from .config import ModelSettings, ModelStore, Settings
+from .config import ModelSettings, ModelStore, Settings, LLMSettingsStore
 from . import local_images
 from .local_images import LocalImageEngine, LocalImageError
 from .loras import (
@@ -380,7 +380,7 @@ class HawkService:
         self.settings = settings
         self.store = store or Store(settings.db_path)
         self.comfy = comfy or ComfyClient(settings.comfy_url)
-        self.atlas = AtlasClient(settings.atlas_url, settings.atlas_api_key)
+        self.llm_settings = LLMSettingsStore(settings.data_dir)
         self.prompts = PromptStore(settings.data_dir)
         self.image_engines = image_engines.ImageEngineStore(settings.data_dir)
         self.render_models = ModelStore(settings.data_dir)
@@ -389,6 +389,27 @@ class HawkService:
         self.local_images = LocalImageEngine(self)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._tasks: list[asyncio.Task] = []
+
+    # ------------------------------------------------------------ properties
+
+    @property
+    def atlas(self) -> AtlasClient:
+        llm = self.llm_settings.resolve(self.settings.llm_overrides)
+        if llm.llm_provider == "openrouter":
+            key = llm.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
+            if not getattr(self, "_openrouter_client", None):
+                self._openrouter_client = AtlasClient(llm.openrouter_url, key)
+            else:
+                self._openrouter_client.base_url = llm.openrouter_url.rstrip("/")
+                self._openrouter_client.api_key = key
+            return self._openrouter_client
+        else:
+            key = llm.atlas_api_key_override or self.settings.atlas_api_key
+            if not getattr(self, "_atlas_client", None):
+                self._atlas_client = AtlasClient(self.settings.atlas_url, key)
+            else:
+                self._atlas_client.api_key = key
+            return self._atlas_client
 
     # ------------------------------------------------------------ lifecycle
 
@@ -534,8 +555,8 @@ class HawkService:
             planner_models = []
         return {
             "planner_models": planner_models,
-            "default_planner_model": self.settings.planner_model,
-            "default_agent_model": self.settings.agent_model,
+            "default_planner_model": self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model,
+            "default_agent_model": self.llm_settings.resolve(self.settings.llm_overrides).agent_model_override or self.settings.agent_model,
             "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
             "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
             "default_unet": self.render_models.resolve(self.settings.models).unet_name,
@@ -549,7 +570,7 @@ class HawkService:
             "continuity_modes": _combo_options(director, "continuity"),
             "reference_roles": list(graphs.ROLES),
             "defaults": {"models": dataclasses.asdict(self.render_models.resolve(self.settings.models)),
-                         "planner_model": self.settings.planner_model},
+                         "planner_model": self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model},
         }
 
     # ---------------------------------------------------------- assets
@@ -1358,7 +1379,7 @@ class HawkService:
             "segment_count": options.segment_count,
             "segment_seconds": options.segment_seconds,
             "aspect_ratio": options.aspect_ratio,
-            "model": options.model or self.settings.planner_model,
+            "model": options.model or self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model,
             "seed": seed,
             "temperature": options.temperature,
             # Blank keeps the node's built-in guide; an edited planner prompt gets the platform rules appended.

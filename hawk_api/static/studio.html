@@ -987,6 +987,50 @@
           </div>
         </section>
         <section class="card">
+          <div class="card-head"><h2>LLM Routing</h2></div>
+          <div class="card-body" style="display:grid;gap:14px">
+            <span class="hint">Configure the LLM provider for planning and agent chats.</span>
+            <div class="field"><label class="label" for="llmProvider">Provider</label>
+              <select class="select" id="llmProvider"><option value="atlas">Atlas (Default)</option><option value="openrouter">OpenRouter / Custom</option></select>
+            </div>
+            <div class="field"><label class="label" for="llmAtlasKey">Atlas API Key</label>
+              <input class="input mono" id="llmAtlasKey" type="password" placeholder="Leave empty for default">
+            </div>
+            <div class="field"><label class="label" for="llmOpenrouterUrl">OpenRouter URL</label>
+              <input class="input mono" id="llmOpenrouterUrl" placeholder="https://openrouter.ai/api/v1">
+            </div>
+            <datalist id="llmModelList">
+              <option value="anthracite-org/magnum-v4-72b">
+              <option value="moonshotai/kimi-k2.6">
+              <option value="xiaomi/mimo-v2.6-pro">
+              <option value="deepseek/deepseek-v4.1-flash">
+              <option value="deepseek/deepseek-v4-pro">
+              <option value="deepseek/deepseek-r1">
+              <option value="deepseek/deepseek-chat">
+              <option value="nvidia/nemotron-3.5-lightning">
+              <option value="nvidia/nemotron-3-ultra-550b-a55b">
+              <option value="nvidia/nemotron-3-super-120b-a12b">
+              <option value="openai/gpt-4o">
+              <option value="anthropic/claude-3.5-sonnet">
+              <option value="google/gemini-pro-1.5">
+              <option value="meta-llama/llama-3-8b-instruct:free">
+            </datalist>
+            <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
+              <input class="input mono" id="llmOpenrouterKey" type="password" placeholder="sk-or-v1-...">
+            </div>
+            <div class="field"><label class="label" for="llmPlannerModel">Planner Model</label>
+              <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">
+            </div>
+            <div class="field"><label class="label" for="llmAgentModel">Agent Model</label>
+              <input class="input mono" id="llmAgentModel" list="llmModelList" placeholder="Leave empty for default">
+            </div>
+            <div class="field"><label class="label" for="llmSummaryModel">Summary Model</label>
+              <input class="input mono" id="llmSummaryModel" list="llmModelList" placeholder="Leave empty for default">
+            </div>
+            <div class="row"><button class="btn btn-sm btn-primary" id="llmSave" type="button">Save</button><span class="hint" id="llmHint"></span></div>
+          </div>
+        </section>
+        <section class="card">
           <div class="card-head"><h2>Render models</h2><span class="chip" id="renderModelChip">Checking…</span></div>
           <div class="card-body" style="display:grid;gap:14px">
             <span class="hint">The MiniMax H3 files every video render loads, from ComfyUI's model folders. The text encoder also encodes your reference images, so its precision decides how well a face carries across shots.</span>
@@ -3199,7 +3243,7 @@
     $("notifyBtn").disabled = permission !== "default";
     $("notifyBtn").textContent = { granted: "Enabled", denied: "Blocked", unsupported: "Unsupported", default: "Enable" }[permission];
     $("playbackSource").value = playbackSource();
-    if (PREFIX || token) { loadDriveExport(); loadImageEngines(); loadRenderModels(); }
+    if (PREFIX || token) { loadDriveExport(); loadImageEngines(); loadRenderModels(); loadLLMSettings(); }
   }
   const engineState = { generate: [], edit: [], engines: {}, defaults: {}, familyLoras: {}, video: [],
                         busy: { mode: "fall_through", max_wait_seconds: 120 } };
@@ -3304,6 +3348,36 @@
       paintRenderModels(await api("/v1/models/defaults", { method: "PUT",
         headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
       toast("Render models saved", "Takes effect on the next render");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  };
+
+  function paintLLMSettings(data) {
+    $("llmProvider").value = data.llm_provider || "atlas";
+    $("llmAtlasKey").value = data.atlas_api_key_override || "";
+    $("llmOpenrouterUrl").value = data.openrouter_url || "https://openrouter.ai/api/v1";
+    $("llmOpenrouterKey").value = data.openrouter_api_key || "";
+    $("llmPlannerModel").value = data.planner_model_override || "";
+    $("llmAgentModel").value = data.agent_model_override || "";
+    $("llmSummaryModel").value = data.agent_summary_model_override || "";
+  }
+  async function loadLLMSettings() {
+    try { paintLLMSettings(await api("/v1/settings/llm")); }
+    catch (error) { console.error("Could not load LLM settings:", error); }
+  }
+  $("llmSave").onclick = async () => {
+    const body = {
+      llm_provider: $("llmProvider").value,
+      atlas_api_key_override: $("llmAtlasKey").value,
+      openrouter_url: $("llmOpenrouterUrl").value,
+      openrouter_api_key: $("llmOpenrouterKey").value,
+      planner_model_override: $("llmPlannerModel").value,
+      agent_model_override: $("llmAgentModel").value,
+      agent_summary_model_override: $("llmSummaryModel").value
+    };
+    try {
+      paintLLMSettings(await api("/v1/settings/llm", { method: "PUT",
+        headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+      toast("LLM settings saved", "Takes effect on the next request");
     } catch (error) { toast("Could not save", error.message, "bad"); }
   };
   function paintVideoDefaults(rows) {

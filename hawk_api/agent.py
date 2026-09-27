@@ -493,7 +493,7 @@ class AgentService:
     def __init__(self, service: HawkService, mcp, atlas: AtlasClient | None = None, store: AgentStore | None = None):
         self.service = service
         self.mcp = mcp
-        self.atlas = atlas or service.atlas
+        self._atlas = atlas
         self.store = store or AgentStore(service.settings.db_path)
         self._tasks: dict[str, asyncio.Task] = {}
         self._stop: set[str] = set()
@@ -503,9 +503,18 @@ class AgentService:
         self._makes: dict[str, set[asyncio.Task]] = {}  # per chat: pictures still rendering beside the talk
         self._final: dict[str, str] = {}  # per running chat: the status it ends with
         settings = service.settings
-        self.summary_model = settings.agent_summary_model
         self.compact_tokens = settings.agent_compact_tokens  # summarise older messages above this (estimated tokens)
         self.keep_messages = settings.agent_keep_messages
+
+    @property
+    def summary_model(self) -> str:
+        llm = self.service.llm_settings.resolve(self.service.settings.llm_overrides)
+        return llm.agent_summary_model_override or self.service.settings.agent_summary_model
+
+    @property
+    def atlas(self) -> AtlasClient:
+        return self._atlas or self.service.atlas
+
 
     # ------------------------------------------------------------ lifecycle
 
@@ -525,13 +534,15 @@ class AgentService:
 
     def create_session(self, title: str | None = None, persona: str | None = None, model: str | None = None) -> dict:
         now = _now()
+        llm = self.service.llm_settings.resolve(self.service.settings.llm_overrides)
+        default_model = llm.agent_model_override or self.service.settings.agent_model
         session = {
             "id": str(uuid.uuid4()),
             "title": (title or "").strip() or "New chat",
             "persona": (persona or "").strip(),
             "name": "",
             "avatar_asset_id": "",
-            "model": (model or "").strip() or self.service.settings.agent_model,
+            "model": (model or "").strip() or default_model,
             "adaptive": False,
             "whispers": False,
             "status": "idle",

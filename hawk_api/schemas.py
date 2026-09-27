@@ -266,3 +266,12 @@ class AgentMessageIn(BaseModel):
 class UrlAssetRequest(BaseModel):
     url: str = Field(description="A direct http(s) link to an image, audio or video file.")
     filename: str | None = Field(None, description="Override the file name (its extension decides the kind).")
+
+
+class LLMSettingsUpdate(BaseModel):
+    llm_provider: str | None = Field(None, description="'atlas' or 'openrouter'")
+    atlas_api_key_override: str | None = None
+    openrouter_url: str | None = None
+    openrouter_api_key: str | None = None
+    planner_model_override: str | None = None
+    agent_model_override: str | None = None
