@@ -506,15 +506,21 @@ class AgentService:
         self.compact_tokens = settings.agent_compact_tokens  # summarise older messages above this (estimated tokens)
         self.keep_messages = settings.agent_keep_messages
 
+    def _llm(self):
+        """The LLM settings in force. Read through the service when it keeps a store, else straight off the
+        pod's own settings: AgentService is built against a stand-in in places, and opening a chat should not
+        fail because the thing it was handed has no store."""
+        store = getattr(self.service, "llm_settings", None)
+        overrides = self.service.settings.llm_overrides
+        return store.resolve(overrides) if store is not None else overrides
+
     @property
     def summary_model(self) -> str:
-        llm = self.service.llm_settings.resolve(self.service.settings.llm_overrides)
-        return llm.agent_summary_model_override or self.service.settings.agent_summary_model
+        return self._llm().agent_summary_model_override or self.service.settings.agent_summary_model
 
     @property
     def atlas(self) -> AtlasClient:
         return self._atlas or self.service.atlas
-
 
     # ------------------------------------------------------------ lifecycle
 
@@ -534,8 +540,7 @@ class AgentService:
 
     def create_session(self, title: str | None = None, persona: str | None = None, model: str | None = None) -> dict:
         now = _now()
-        llm = self.service.llm_settings.resolve(self.service.settings.llm_overrides)
-        default_model = llm.agent_model_override or self.service.settings.agent_model
+        default_model = self._llm().agent_model_override or self.service.settings.agent_model
         session = {
             "id": str(uuid.uuid4()),
             "title": (title or "").strip() or "New chat",

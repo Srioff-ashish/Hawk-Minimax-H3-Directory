@@ -20,7 +20,13 @@ DEFAULT_URL = "https://api.atlascloud.ai/v1"
 RETRY_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 USER_AGENT = "HawkH3Director/0.1 (hawk_api)"
 #: Shown first, in this order, when present.
-FAVOURITES = ["xai/grok-4.6", "xai/grok-4.5", "xai/grok-4.3"]
+FAVOURITES = [
+    "xai/grok-4.6", "xai/grok-4.5", "xai/grok-4.3",
+    "deepseek/deepseek-chat", "deepseek/deepseek-reasoner", "deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-pro",
+    "moonshotai/kimi-k2.6",
+    "anthracite-org/magnum-v4-72b", "qwen/qwen-2.5-72b-instruct",
+    "nvidia/nemotron-4-340b-instruct", "nvidia/nemotron-3-ultra-550b-a55b", "nvidia/nemotron-3.5-lightning",
+]
 #: Not chat models a planner or agent can use.
 _EXCLUDE = re.compile(r"(image|ocr|embed|whisper|tts|-coding$|-ccmax$|codex|grok-build)", re.IGNORECASE)
 MODEL_CACHE_SECONDS = 600.0

@@ -80,6 +80,13 @@ class ModelStore:
 
 @dataclass(frozen=True)
 class LLMSettings:
+    """Which service answers a planning or chat call, and as whom.
+
+    The environment sets what a pod starts with and Studio changes it afterwards, the same arrangement as
+    ModelSettings. An empty value everywhere means "use the one below it", so a blank field in Studio is a
+    request to fall back rather than a value in its own right.
+    """
+
     llm_provider: str = "atlas"
     atlas_api_key_override: str = ""
     openrouter_url: str = "https://openrouter.ai/api/v1"
@@ -90,7 +97,20 @@ class LLMSettings:
 
 
 class LLMSettingsStore:
-    FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key", "planner_model_override", "agent_model_override", "agent_summary_model_override")
+    """``DATA_DIR/llm_settings.json``: the provider, its key and any model overrides.
+
+    Read on every call, so a change in Studio applies to the next request without a restart.
+
+    **Not carried across a restart.** The Drive snapshot copies the database and nothing else, and this file
+    lives on the runtime's own disk, so a restored pod is back on whatever the environment says. That is why
+    the environment is a first-class source here rather than a one-time default: putting the key in a Colab
+    secret survives, typing it into Studio does not.
+    """
+
+    FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key",
+              "planner_model_override", "agent_model_override", "agent_summary_model_override")
+    #: Written but never read back out: a key is set or replaced, not displayed or round-tripped.
+    SECRETS = ("atlas_api_key_override", "openrouter_api_key")
 
     def __init__(self, data_dir: str):
         self.path = os.path.join(data_dir, "llm_settings.json")
@@ -105,14 +125,28 @@ class LLMSettingsStore:
             return {}
 
     def stored(self) -> dict:
+        """The settings that have a value. A blank one is left out, so it cannot replace the default it
+        was meant to defer to -- an empty openrouter_url reaching AtlasClient becomes Atlas's own URL,
+        which is how "OpenRouter" ends up talking to Atlas with an OpenRouter key."""
         data = self._load()
-        return {key: str(data[key]) for key in self.FIELDS if isinstance(data.get(key), str)}
+        return {key: str(data[key]).strip() for key in self.FIELDS
+                if isinstance(data.get(key), str) and data[key].strip()}
 
     def resolve(self, defaults: "LLMSettings") -> "LLMSettings":
         stored = self.stored()
         return dataclasses.replace(defaults, **stored) if stored else defaults
 
+    def hints(self) -> dict:
+        """Enough of each stored key to recognise it, for a panel that must not be able to echo one back."""
+        data = self._load()
+        found = {}
+        for key in self.SECRETS:
+            value = str(data.get(key) or "").strip()
+            found[f"{key}_hint"] = (f"{value[:3]}\u2026{value[-3:]}" if len(value) > 8 else "\u2026") if value else ""
+        return found
+
     def save(self, values: dict) -> dict:
+        """Store the values given. "" clears one back to the environment's choice, as in ModelStore."""
         with self._lock:
             data = self._load()
             for key, value in values.items():
@@ -120,13 +154,18 @@ class LLMSettingsStore:
                     raise ValueError(f"No LLM setting {key!r}; use one of: {', '.join(self.FIELDS)}.")
                 if value is None:
                     continue
-                data[key] = str(value).strip()
+                if str(value).strip():
+                    data[key] = str(value).strip()
+                else:
+                    data.pop(key, None)
             os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
             tmp = f"{self.path}.tmp"
             with open(tmp, "w", encoding="utf-8") as handle:
                 json.dump(data, handle, indent=2)
             os.replace(tmp, self.path)
         return self.stored()
+
+
 @dataclass(frozen=True)
 class Settings:
     token: str
@@ -141,6 +180,7 @@ class Settings:
     planner_model: str = "xai/grok-4.3"
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
+    openrouter_api_key: str = ""
     agent_model: str = "xai/grok-4.6"
     #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense.
     agent_summary_model: str = "deepseek-ai/deepseek-v4.1-flash"
@@ -215,6 +255,7 @@ class Settings:
             planner_model=_env("HAWK_PLANNER_MODEL", cls.planner_model),
             atlas_url=_env("ATLAS_API_URL", cls.atlas_url).rstrip("/"),
             atlas_api_key=_env("ATLAS_API_KEY"),
+            openrouter_api_key=_env("OPENROUTER_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             agent_summary_model=_env("HAWK_AGENT_SUMMARY_MODEL", cls.agent_summary_model),
             agent_compact_tokens=int(_env("HAWK_AGENT_COMPACT_TOKENS", str(cls.agent_compact_tokens))),
@@ -238,4 +279,15 @@ class Settings:
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),
             drive_root=_env("HAWK_DRIVE_ROOT", cls.drive_root),
             models=models,
+            # A pod restored from a snapshot has its database back and llm_settings.json gone, so the
+            # environment is the only place a provider choice survives a restart.
+            llm_overrides=LLMSettings(
+                llm_provider=_env("HAWK_LLM_PROVIDER", LLMSettings.llm_provider),
+                openrouter_url=_env("OPENROUTER_URL", LLMSettings.openrouter_url),
+                # The key is not read here: Settings.openrouter_api_key already holds OPENROUTER_API_KEY,
+                # and the atlas property falls back to it. Two readers of one variable is one too many.
+                planner_model_override=_env("HAWK_PLANNER_MODEL_OVERRIDE"),
+                agent_model_override=_env("HAWK_AGENT_MODEL_OVERRIDE"),
+                agent_summary_model_override=_env("HAWK_AGENT_SUMMARY_MODEL_OVERRIDE"),
+            ),
         )

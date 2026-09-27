@@ -349,25 +349,27 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.get("/v1/settings/llm", tags=["system"])
     async def get_llm_settings():
-        stored = service.llm_settings.stored()
-        for key in ("atlas_api_key_override", "openrouter_api_key"):
-            if stored.get(key):
-                stored[key] = f"{stored[key][:3]}****{stored[key][-3:]}" if len(stored[key]) > 8 else "****"
-        return stored
+        """The provider and any model overrides, plus whether each key is set and a few of its characters.
+
+        The keys themselves are never returned. Masking them and returning them anyway is what let a panel
+        paint the mask into its own input and send it back as the key: the mask of a long key ends in that
+        key's last characters, so a guard looking for a trailing "****" did not recognise it, and the real
+        key was overwritten by its own disguise on the next save.
+        """
+        store = service.llm_settings
+        stored = {key: value for key, value in store.stored().items() if key not in store.SECRETS}
+        set_flags = {f"{key}_set": bool(store.stored().get(key)) for key in store.SECRETS}
+        return {**stored, **set_flags, **store.hints()}
 
     @app.put("/v1/settings/llm", tags=["system"])
     async def update_llm_settings(body: LLMSettingsUpdate):
         values = body.model_dump(exclude_unset=True)
-        # Prevent masked keys from overriding real keys if they are submitted unchanged
-        for key in ("atlas_api_key_override", "openrouter_api_key"):
-            if key in values and isinstance(values[key], str) and values[key].endswith("****"):
-                values.pop(key)
         try:
             service.llm_settings.save(values)
         except ValueError as exc:
             raise RequestError(str(exc)) from None
+        service.forget_llm_clients()
         return await get_llm_settings()
-
 
     @app.get("/v1/loras/defaults", tags=["renders"])
     async def video_lora_defaults():

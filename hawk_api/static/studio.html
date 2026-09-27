@@ -994,7 +994,8 @@
               <select class="select" id="llmProvider"><option value="atlas">Atlas (Default)</option><option value="openrouter">OpenRouter / Custom</option></select>
             </div>
             <div class="field"><label class="label" for="llmAtlasKey">Atlas API Key</label>
-              <input class="input mono" id="llmAtlasKey" type="password" placeholder="Leave empty for default">
+              <div class="row"><input class="input mono" id="llmAtlasKey" type="password" placeholder="not set">
+                <button class="btn btn-sm" type="button" id="llmAtlasKeyForget" hidden>Forget</button></div>
             </div>
             <div class="field"><label class="label" for="llmOpenrouterUrl">OpenRouter URL</label>
               <input class="input mono" id="llmOpenrouterUrl" placeholder="https://openrouter.ai/api/v1">
@@ -1016,7 +1017,8 @@
               <option value="meta-llama/llama-3-8b-instruct:free">
             </datalist>
             <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
-              <input class="input mono" id="llmOpenrouterKey" type="password" placeholder="sk-or-v1-...">
+              <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set">
+                <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
             </div>
             <div class="field"><label class="label" for="llmPlannerModel">Planner Model</label>
               <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">
@@ -3353,32 +3355,54 @@
 
   function paintLLMSettings(data) {
     $("llmProvider").value = data.llm_provider || "atlas";
-    $("llmAtlasKey").value = data.atlas_api_key_override || "";
     $("llmOpenrouterUrl").value = data.openrouter_url || "https://openrouter.ai/api/v1";
-    $("llmOpenrouterKey").value = data.openrouter_api_key || "";
     $("llmPlannerModel").value = data.planner_model_override || "";
     $("llmAgentModel").value = data.agent_model_override || "";
     $("llmSummaryModel").value = data.agent_summary_model_override || "";
+    // A key is never painted into its own box. It used to be, masked, and the next save sent the mask back
+    // as the key: the box says whether one is stored, and typing replaces it.
+    for (const [field, flag, hint] of [["llmAtlasKey", "atlas_api_key_override_set", "atlas_api_key_override_hint"],
+                                       ["llmOpenrouterKey", "openrouter_api_key_set", "openrouter_api_key_hint"]]) {
+      $(field).value = "";
+      $(field).placeholder = data[flag] ? `saved (${data[hint]}) \u2014 type to replace` : "not set";
+      $(`${field}Forget`).hidden = !data[flag];
+    }
+    $("llmHint").textContent = "Keys live on the runtime's disk, which a restart wipes. Put one in a Colab "
+      + "secret (OPENROUTER_API_KEY) to keep it across restarts.";
   }
   async function loadLLMSettings() {
     try { paintLLMSettings(await api("/v1/settings/llm")); }
     catch (error) { console.error("Could not load LLM settings:", error); }
   }
-  $("llmSave").onclick = async () => {
-    const body = {
-      llm_provider: $("llmProvider").value,
-      atlas_api_key_override: $("llmAtlasKey").value,
-      openrouter_url: $("llmOpenrouterUrl").value,
-      openrouter_api_key: $("llmOpenrouterKey").value,
-      planner_model_override: $("llmPlannerModel").value,
-      agent_model_override: $("llmAgentModel").value,
-      agent_summary_model_override: $("llmSummaryModel").value
-    };
+  async function saveLLMSettings(body) {
     try {
       paintLLMSettings(await api("/v1/settings/llm", { method: "PUT",
         headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
       toast("LLM settings saved", "Takes effect on the next request");
+      agent.modelsLoaded = false;
+      loadAgentModels();
+      loadOptions();
     } catch (error) { toast("Could not save", error.message, "bad"); }
+  }
+  for (const [field, key] of [["llmAtlasKey", "atlas_api_key_override"], ["llmOpenrouterKey", "openrouter_api_key"]]) {
+    $(`${field}Forget`).onclick = async () => {
+      if (!(await confirmAction("Forget this key?", "The pod goes back to the key in its own environment, "
+        + "if it has one. Nothing else changes.", "Forget"))) return;
+      await saveLLMSettings({ [key]: "" });
+    };
+  }
+  $("llmSave").onclick = async () => {
+    const body = {
+      llm_provider: $("llmProvider").value,
+      openrouter_url: $("llmOpenrouterUrl").value,
+      planner_model_override: $("llmPlannerModel").value,
+      agent_model_override: $("llmAgentModel").value,
+      agent_summary_model_override: $("llmSummaryModel").value
+    };
+    // An empty key box means "leave the stored one alone", so it is left out rather than sent as blank.
+    if ($("llmAtlasKey").value.trim()) body.atlas_api_key_override = $("llmAtlasKey").value.trim();
+    if ($("llmOpenrouterKey").value.trim()) body.openrouter_api_key = $("llmOpenrouterKey").value.trim();
+    await saveLLMSettings(body);
   };
   function paintVideoDefaults(rows) {
     const host = $("videoDefaults");

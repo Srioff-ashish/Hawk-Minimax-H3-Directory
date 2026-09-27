@@ -32,7 +32,7 @@ from .atlas import AtlasClient, AtlasError
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
-from .config import ModelSettings, ModelStore, Settings, LLMSettingsStore
+from .config import LLMSettings, LLMSettingsStore, ModelSettings, ModelStore, Settings
 from . import local_images
 from .local_images import LocalImageEngine, LocalImageError
 from .loras import (
@@ -388,28 +388,48 @@ class HawkService:
         self.render_done_hooks: list = []
         self.local_images = LocalImageEngine(self)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
+        self._llm_clients: dict[tuple[str, str], AtlasClient] = {}  # one per (url, key); see the atlas property
         self._tasks: list[asyncio.Task] = []
 
     # ------------------------------------------------------------ properties
 
+    def llm(self) -> LLMSettings:
+        """The provider and models in force right now: the stored choice over the pod's own."""
+        return self.llm_settings.resolve(self.settings.llm_overrides)
+
+    def planner_model(self) -> str:
+        """The model plan_film uses when a request does not name one."""
+        return self.llm().planner_model_override or self.settings.planner_model
+
+    def forget_llm_clients(self) -> None:
+        """Drop the cached clients so the next call is built from the settings just saved."""
+        self._llm_clients.clear()
+
     @property
     def atlas(self) -> AtlasClient:
-        llm = self.llm_settings.resolve(self.settings.llm_overrides)
-        if llm.llm_provider == "openrouter":
-            key = llm.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY", "")
-            if not getattr(self, "_openrouter_client", None):
-                self._openrouter_client = AtlasClient(llm.openrouter_url, key)
-            else:
-                self._openrouter_client.base_url = llm.openrouter_url.rstrip("/")
-                self._openrouter_client.api_key = key
-            return self._openrouter_client
+        """The chat service for planning and agent turns, built from the settings as they stand.
+
+        Resolved on every access rather than once at startup, so a change in Studio reaches the next request
+        without a restart -- the same arrangement as ModelStore and ImageEngineStore.
+
+        One client is kept per (url, key) pair rather than one per provider with its fields rewritten: a
+        client carries a cached model list, so mutating the key on a live one went on serving the previous
+        account's models until that cache expired.
+        """
+        llm = self.llm()
+        openrouter_key = llm.openrouter_api_key or self.settings.openrouter_api_key
+        atlas_key = llm.atlas_api_key_override or self.settings.atlas_api_key
+        # OpenRouter when it is chosen, and also when it is the only key the pod has: a runtime given an
+        # OPENROUTER_API_KEY and no ATLAS_API_KEY would otherwise call Atlas unauthenticated and report
+        # itself as having no key at all.
+        if llm.llm_provider == "openrouter" or (openrouter_key and not atlas_key):
+            url, key = llm.openrouter_url, openrouter_key
         else:
-            key = llm.atlas_api_key_override or self.settings.atlas_api_key
-            if not getattr(self, "_atlas_client", None):
-                self._atlas_client = AtlasClient(self.settings.atlas_url, key)
-            else:
-                self._atlas_client.api_key = key
-            return self._atlas_client
+            url, key = self.settings.atlas_url, atlas_key
+        found = self._llm_clients.get((url, key))
+        if found is None:
+            found = self._llm_clients[(url, key)] = AtlasClient(url, key)
+        return found
 
     # ------------------------------------------------------------ lifecycle
 
@@ -555,8 +575,8 @@ class HawkService:
             planner_models = []
         return {
             "planner_models": planner_models,
-            "default_planner_model": self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model,
-            "default_agent_model": self.llm_settings.resolve(self.settings.llm_overrides).agent_model_override or self.settings.agent_model,
+            "default_planner_model": self.planner_model(),
+            "default_agent_model": self.llm().agent_model_override or self.settings.agent_model,
             "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
             "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
             "default_unet": self.render_models.resolve(self.settings.models).unet_name,
@@ -570,7 +590,7 @@ class HawkService:
             "continuity_modes": _combo_options(director, "continuity"),
             "reference_roles": list(graphs.ROLES),
             "defaults": {"models": dataclasses.asdict(self.render_models.resolve(self.settings.models)),
-                         "planner_model": self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model},
+                         "planner_model": self.planner_model()},
         }
 
     # ---------------------------------------------------------- assets
@@ -1379,7 +1399,7 @@ class HawkService:
             "segment_count": options.segment_count,
             "segment_seconds": options.segment_seconds,
             "aspect_ratio": options.aspect_ratio,
-            "model": options.model or self.llm_settings.resolve(self.settings.llm_overrides).planner_model_override or self.settings.planner_model,
+            "model": options.model or self.planner_model(),
             "seed": seed,
             "temperature": options.temperature,
             # Blank keeps the node's built-in guide; an edited planner prompt gets the platform rules appended.

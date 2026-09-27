@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 AspectRatio = Literal["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21", "match first picture"]
 Role = Literal["picture", "pose", "video", "audio", "video_soundtrack"]
@@ -269,9 +269,17 @@ class UrlAssetRequest(BaseModel):
 
 
 class LLMSettingsUpdate(BaseModel):
-    llm_provider: str | None = Field(None, description="'atlas' or 'openrouter'")
-    atlas_api_key_override: str | None = None
-    openrouter_url: str | None = None
-    openrouter_api_key: str | None = None
-    planner_model_override: str | None = None
-    agent_model_override: str | None = None
+    """Which service answers planning and chat calls. Only the fields sent are changed; "" clears one back
+    to the pod's own setting. A key is write-only: it is never returned, so it can never be sent back."""
+
+    # Refused rather than dropped: agent_summary_model_override was missing from this model while Studio
+    # sent it, so the panel reported a save that pydantic had discarded on the way in.
+    model_config = ConfigDict(extra="forbid")
+
+    llm_provider: Literal["atlas", "openrouter"] | None = Field(None, description="Which service to call.")
+    atlas_api_key_override: str | None = Field(None, description="Replaces ATLAS_API_KEY. Write-only.")
+    openrouter_url: str | None = Field(None, description="OpenRouter's OpenAI-compatible base URL.")
+    openrouter_api_key: str | None = Field(None, description="OpenRouter key. Write-only.")
+    planner_model_override: str | None = Field(None, description="Model id for plan_film.")
+    agent_model_override: str | None = Field(None, description="Model id for new agent chats.")
+    agent_summary_model_override: str | None = Field(None, description="Model id for chat summaries.")
