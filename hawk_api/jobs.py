@@ -28,7 +28,7 @@ from hawk_h3.script import ScriptError, build_jobs, parse_script
 
 from . import graph as graphs
 from . import image_engines
-from .atlas import AtlasClient, AtlasError
+from .atlas import AtlasClient, AtlasError, routing_block as atlas_routing
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
@@ -388,7 +388,7 @@ class HawkService:
         self.render_done_hooks: list = []
         self.local_images = LocalImageEngine(self)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
-        self._llm_clients: dict[tuple[str, str], AtlasClient] = {}  # one per (url, key); see the atlas property
+        self._llm_clients: dict[tuple[str, str, str], AtlasClient] = {}  # per url+key+routing; see the atlas property
         self._tasks: list[asyncio.Task] = []
 
     # ------------------------------------------------------------ properties
@@ -423,12 +423,16 @@ class HawkService:
         # OPENROUTER_API_KEY and no ATLAS_API_KEY would otherwise call Atlas unauthenticated and report
         # itself as having no key at all.
         if llm.llm_provider == "openrouter" or (openrouter_key and not atlas_key):
-            url, key = llm.openrouter_url, openrouter_key
+            # Atlas serves its own models, so only OpenRouter gets a routing block: there, one model id is
+            # served by many services at different prices and different weights, and left unfiltered the
+            # same call can come back at a different quality each time.
+            url, key, routing = llm.openrouter_url, openrouter_key, atlas_routing(llm.openrouter_routing)
         else:
-            url, key = self.settings.atlas_url, atlas_key
-        found = self._llm_clients.get((url, key))
+            url, key, routing = self.settings.atlas_url, atlas_key, None
+        cache_key = (url, key, llm.openrouter_routing if routing else "")
+        found = self._llm_clients.get(cache_key)
         if found is None:
-            found = self._llm_clients[(url, key)] = AtlasClient(url, key)
+            found = self._llm_clients[cache_key] = AtlasClient(url, key, routing=routing)
         return found
 
     # ------------------------------------------------------------ lifecycle

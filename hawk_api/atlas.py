@@ -30,8 +30,43 @@ FAVOURITES = [
 #: Not chat models a planner or agent can use.
 _EXCLUDE = re.compile(r"(image|ocr|embed|whisper|tts|-coding$|-ccmax$|codex|grok-build)", re.IGNORECASE)
 MODEL_CACHE_SECONDS = 600.0
+
+#: How OpenRouter chooses between the several services that each serve one model id.
+#:
+#: Naming a model is only half the choice there. The same id is served by a dozen providers at different
+#: prices, and -- the part that actually shows in the output -- at different weights: an int4 copy of a
+#: model is a visibly worse model than its bf16 copy for the same id. Left alone, a request goes wherever
+#: OpenRouter's own balance of price and uptime sends it, so two identical calls can come back at two
+#: different qualities and nothing in the reply says which was used.
+#:
+#: Each preset is sent as the request's "provider" block. "quantizations" is the quality floor and "sort"
+#: decides among whatever clears it, which is the order that gets a cheap call without a cheap model.
+#: "require_parameters" keeps out providers that would silently drop the JSON-mode and temperature settings
+#: we send; a provider that ignores response_format answers in prose, which reads here as a model that
+#: cannot follow the format rather than a provider that was never asked to.
+ROUTING: dict[str, dict] = {
+    "balanced": {"sort": "price", "quantizations": ["bf16", "fp16", "fp8"],
+                 "require_parameters": True, "data_collection": "deny", "allow_fallbacks": True},
+    "quality": {"quantizations": ["bf16", "fp16"],
+                "require_parameters": True, "data_collection": "deny", "allow_fallbacks": True},
+    "cheapest": {"sort": "price", "allow_fallbacks": True},
+    "fastest": {"sort": "throughput", "quantizations": ["bf16", "fp16", "fp8"], "allow_fallbacks": True},
+    "default": {},  # whatever OpenRouter would do on its own
+}
+#: A refusal that means the filters matched no provider, rather than anything being wrong with the request.
+_NO_PROVIDER = re.compile(r"no (?:allowed |eligible )?provider|provider.*(?:not found|no match)", re.IGNORECASE)
 IMAGE_OK = frozenset({"completed", "succeeded", "success"})
 IMAGE_FAILED = frozenset({"failed", "error", "canceled", "cancelled"})
+
+
+def routing_block(name: str) -> dict | None:
+    """The provider block for a preset name, or None when there is nothing to send.
+
+    An unknown name falls back to the balanced preset rather than to no filtering: a typo in a setting
+    should not quietly re-open the cheap heavily-quantised services this exists to keep out.
+    """
+    block = ROUTING.get(str(name or "").strip().lower(), ROUTING["balanced"])
+    return dict(block) if block else None
 
 
 class AtlasError(RuntimeError):
@@ -46,10 +81,14 @@ def _price(value) -> float:
 
 
 class AtlasClient:
-    def __init__(self, base_url: str = DEFAULT_URL, api_key: str = "", *, timeout: float = 240.0):
+    def __init__(self, base_url: str = DEFAULT_URL, api_key: str = "", *, timeout: float = 240.0,
+                 routing: dict | None = None):
         self.base_url = (base_url or DEFAULT_URL).rstrip("/")
         self.api_key = api_key or ""
         self.timeout = timeout
+        #: An OpenRouter "provider" block, or None for a service that has no such thing. Atlas serves each
+        #: model itself, so sending it one would be an unknown field on a request it cannot act on.
+        self.routing = routing or None
         self._models: tuple[float, list[dict]] = (0.0, [])
 
     @property
@@ -198,6 +237,8 @@ class AtlasClient:
         payload: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": False}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        if self.routing:
+            payload["provider"] = self.routing
         url = f"{self.base_url}/chat/completions"
         last_error = ""
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=30.0)) as http:
@@ -215,6 +256,12 @@ class AtlasClient:
                     body = response.text
                     if response.status_code == 400 and "response_format" in payload and "response_format" in body:
                         payload.pop("response_format")  # this model rejects JSON mode; the prompt still asks for JSON
+                        continue
+                    if "provider" in payload and (response.status_code == 404 or _NO_PROVIDER.search(body)):
+                        # No service serving this model clears the quality filters. Running the call
+                        # unfiltered beats stopping the chat, and it is dropped for this request only, so
+                        # the next model is filtered again. A genuine unknown model simply 404s twice.
+                        payload.pop("provider")
                         continue
                     if response.status_code not in RETRY_STATUSES or attempt >= max_retries:
                         raise AtlasError(f"Atlas error {response.status_code} for {model}: {body[:600] or '(empty body)'}")

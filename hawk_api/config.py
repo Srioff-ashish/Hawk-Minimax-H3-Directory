@@ -91,6 +91,9 @@ class LLMSettings:
     atlas_api_key_override: str = ""
     openrouter_url: str = "https://openrouter.ai/api/v1"
     openrouter_api_key: str = ""
+    #: Which of atlas.ROUTING decides between the services serving one OpenRouter model id. Ignored on
+    #: Atlas, which serves its own models and has nothing to choose between.
+    openrouter_routing: str = "balanced"
     planner_model_override: str = ""
     agent_model_override: str = ""
     agent_summary_model_override: str = ""
@@ -108,7 +111,8 @@ class LLMSettingsStore:
     """
 
     FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key",
-              "planner_model_override", "agent_model_override", "agent_summary_model_override")
+              "openrouter_routing", "planner_model_override", "agent_model_override",
+              "agent_summary_model_override")
     #: Written but never read back out: a key is set or replaced, not displayed or round-tripped.
     SECRETS = ("atlas_api_key_override", "openrouter_api_key")
 
@@ -284,6 +288,7 @@ class Settings:
             llm_overrides=LLMSettings(
                 llm_provider=_env("HAWK_LLM_PROVIDER", LLMSettings.llm_provider),
                 openrouter_url=_env("OPENROUTER_URL", LLMSettings.openrouter_url),
+                openrouter_routing=_env("OPENROUTER_ROUTING", LLMSettings.openrouter_routing),
                 # The key is not read here: Settings.openrouter_api_key already holds OPENROUTER_API_KEY,
                 # and the atlas property falls back to it. Two readers of one variable is one too many.
                 planner_model_override=_env("HAWK_PLANNER_MODEL_OVERRIDE"),

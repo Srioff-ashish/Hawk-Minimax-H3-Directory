@@ -5,6 +5,7 @@ python -m unittest discover -s tests_api -p 'test_llm_settings.py'
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -185,3 +186,87 @@ class TheModelListFromEitherProvider(unittest.IsolatedAsyncioTestCase):
         found = {m["id"]: m for m in await self.models(self.ATLAS)}
         self.assertTrue(found["xai/grok-4.6"]["vision"], "top-level modalities must keep working")
         self.assertEqual(found["xai/grok-4.6"]["context"], 256000)
+
+
+class WhichServiceServesTheModel(unittest.IsolatedAsyncioTestCase):
+    """OpenRouter's provider routing: naming a model there does not say who runs it, or at what weights."""
+
+    def setUp(self):
+        from hawk_api import atlas
+
+        self.atlas = atlas
+
+    def test_the_default_preset_buys_quality_first_then_price(self):
+        # The order matters: sorting by price across every weight is how a call lands on an int4 copy.
+        # The quantisation filter is the floor, and "sort" only chooses among what already cleared it.
+        block = self.atlas.routing_block("balanced")
+        self.assertEqual(block["sort"], "price")
+        self.assertEqual(block["quantizations"], ["bf16", "fp16", "fp8"])
+        self.assertNotIn("int4", block["quantizations"])
+        self.assertTrue(block["require_parameters"], "a service that drops response_format answers in prose")
+        self.assertTrue(block["allow_fallbacks"], "one service being down must not fail the call")
+
+    def test_a_typo_falls_back_to_filtering_rather_than_to_none(self):
+        self.assertEqual(self.atlas.routing_block("chepest"), self.atlas.routing_block("balanced"),
+                         "a mistyped setting must not quietly re-open the cheapest weights")
+
+    def test_asking_for_openrouters_own_choice_sends_nothing(self):
+        self.assertIsNone(self.atlas.routing_block("default"), "no block means no provider field at all")
+
+    async def test_atlas_is_never_sent_a_routing_block(self):
+        # Atlas serves its own models, so there is nothing to choose between and the field would be noise
+        # on a request it cannot act on.
+        service = WhichServiceAnswers.service(self, atlas_api_key="atlas-key")
+        self.assertIsNone(service.atlas.routing)
+
+    async def test_openrouter_is(self):
+        service = WhichServiceAnswers.service(self, atlas_api_key="atlas-key")
+        service.llm_settings.save({"llm_provider": "openrouter", "openrouter_api_key": "sk-or-1"})
+        self.assertEqual(service.atlas.routing, self.atlas.routing_block("balanced"))
+
+    async def test_changing_the_routing_is_a_different_client(self):
+        # The routing travels in the request, not the connection, but a client caches a model list and the
+        # cache key has to tell two settings apart or a change would not take.
+        service = WhichServiceAnswers.service(self, atlas_api_key="atlas-key")
+        service.llm_settings.save({"llm_provider": "openrouter", "openrouter_api_key": "sk-or-1"})
+        balanced = service.atlas
+        service.llm_settings.save({"openrouter_routing": "quality"})
+        service.forget_llm_clients()
+        self.assertEqual(service.atlas.routing["quantizations"], ["bf16", "fp16"])
+        self.assertIsNot(service.atlas, balanced)
+
+    async def test_the_block_rides_on_the_request_and_is_dropped_when_it_matches_nothing(self):
+        import httpx
+
+        sent, replies = [], [(404, '{"error":{"message":"No allowed providers are available"}}'),
+                             (200, '{"choices":[{"message":{"content":"{}"}}],"usage":{}}')]
+
+        class Response:
+            def __init__(self, status, text):
+                self.status_code, self.text = status, text
+
+            def json(self):
+                return json.loads(self.text)
+
+        class Http:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_):
+                return False
+
+            async def post(self, _url, headers=None, json=None):
+                sent.append(dict(json))
+                return Response(*replies.pop(0))
+
+        client = self.atlas.AtlasClient("https://openrouter.ai/api/v1", "sk-or-test",
+                                        routing=self.atlas.routing_block("quality"))
+        original = httpx.AsyncClient
+        httpx.AsyncClient = lambda *a, **k: Http()
+        try:
+            await client.chat("some/model", [{"role": "user", "content": "hi"}])
+        finally:
+            httpx.AsyncClient = original
+        self.assertEqual(sent[0]["provider"]["quantizations"], ["bf16", "fp16"], "filtered on the first try")
+        self.assertNotIn("provider", sent[1],
+                         "nothing cleared the filter, so the retry runs unfiltered rather than failing")

@@ -1016,6 +1016,18 @@
               <option value="google/gemini-pro-1.5">
               <option value="meta-llama/llama-3-8b-instruct:free">
             </datalist>
+            <div class="field"><label class="label" for="llmRouting">OpenRouter routing</label>
+              <select class="select" id="llmRouting">
+                <option value="balanced">Balanced \u2014 cheapest of the bf16/fp16/fp8 services</option>
+                <option value="quality">Quality \u2014 bf16/fp16 only</option>
+                <option value="cheapest">Cheapest \u2014 any weight, including int4</option>
+                <option value="fastest">Fastest \u2014 highest throughput, bf16/fp16/fp8</option>
+                <option value="default">OpenRouter default \u2014 no filtering</option>
+              </select>
+              <span class="hint">One model id on OpenRouter is served by many companies at different prices and
+                different weights. An int4 copy is a visibly worse model than the bf16 copy of the same id, so
+                without this two identical calls can come back at two qualities. Ignored on Atlas.</span>
+            </div>
             <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
               <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set">
                 <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
@@ -3356,6 +3368,7 @@
   function paintLLMSettings(data) {
     $("llmProvider").value = data.llm_provider || "atlas";
     $("llmOpenrouterUrl").value = data.openrouter_url || "https://openrouter.ai/api/v1";
+    $("llmRouting").value = data.openrouter_routing || "balanced";
     $("llmPlannerModel").value = data.planner_model_override || "";
     $("llmAgentModel").value = data.agent_model_override || "";
     $("llmSummaryModel").value = data.agent_summary_model_override || "";
@@ -3395,6 +3408,7 @@
     const body = {
       llm_provider: $("llmProvider").value,
       openrouter_url: $("llmOpenrouterUrl").value,
+      openrouter_routing: $("llmRouting").value,
       planner_model_override: $("llmPlannerModel").value,
       agent_model_override: $("llmAgentModel").value,
       agent_summary_model_override: $("llmSummaryModel").value

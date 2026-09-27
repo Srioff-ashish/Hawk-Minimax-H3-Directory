@@ -279,6 +279,12 @@ class LLMSettingsUpdate(BaseModel):
     llm_provider: Literal["atlas", "openrouter"] | None = Field(None, description="Which service to call.")
     atlas_api_key_override: str | None = Field(None, description="Replaces ATLAS_API_KEY. Write-only.")
     openrouter_url: str | None = Field(None, description="OpenRouter's OpenAI-compatible base URL.")
+    openrouter_routing: Literal["balanced", "quality", "cheapest", "fastest", "default"] | None = Field(
+        None, description="Which service OpenRouter picks among the many serving one model id. One id is "
+        "served at different prices and different weights, so this is a quality setting as much as a price "
+        "one: 'balanced' takes the cheapest of the bf16/fp16/fp8 services, 'quality' stays on bf16/fp16, "
+        "'cheapest' takes the cheapest at any weight, 'fastest' sorts by throughput, 'default' lets "
+        "OpenRouter decide. Ignored on Atlas.")
     openrouter_api_key: str | None = Field(None, description="OpenRouter key. Write-only.")
     planner_model_override: str | None = Field(None, description="Model id for plan_film.")
     agent_model_override: str | None = Field(None, description="Model id for new agent chats.")
