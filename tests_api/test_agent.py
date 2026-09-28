@@ -557,7 +557,6 @@ class AgentApi(AgentHarness):
         speakers = []
 
         def reply(body):
-            system = body["messages"][0]["content"]
             who = speaking_character(body)
             speakers.append(who)
             expected, say = next(script)
