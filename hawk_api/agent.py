@@ -76,16 +76,30 @@ SUMMARY_MAX_TOKENS = 6000  # room for reasoning models to think before writing t
 # Tools whose argument schema is large are listed by description only until the chat uses them (describe_tool shows it).
 BIG_SCHEMA_TOKENS = 250
 
-#: relation -> the family it supersedes within. A closed vocabulary, named verbatim in the extraction prompt:
-#: an open one produces "feels_toward", "feels", "has_feelings_about" for the same thing and nothing ever
-#: contradicts anything. The family is how a new fact knows what it replaces, with no model call.
+#: relation -> (the family it supersedes within, what it means, the node kinds its object may have).
+#:
+#: Deliberately four, not nine. The first cut had located_in, status_of, knows_about, wants and agreed as well,
+#: and on the pod the model put nearly everything in them: "located_in :: Asset c7eab94fc3ea, portrait.png",
+#: "wants :: User asked Riya for tomorrow's plan". The sentences were fine; the relation was usually wrong,
+#: which matters because the relation picks the family and the family is what makes a new fact supersede an old
+#: one. Wrong families mean contradictions silently never resolve.
+#:
+#: What survived is what a graph is uniquely good at: who someone is to someone else, how they feel, and who
+#: made or owns what. The situational facts those five were catching -- plans, wants, what is still open --
+#: are what the prose summary already carries, in order, which a set of triples cannot do anyway.
 RELATIONS = {
-    "feels_toward": "feeling", "relation_to": "relation", "located_in": "place", "status_of": "status",
-    "wants": "want", "owns": "owns", "made": "made", "agreed": "agreed", "knows_about": "knows",
+    "relation_to": ("relation", "who someone is to someone else", ("person",)),
+    "feels_toward": ("feeling", "how someone feels about someone", ("person",)),
+    "owns": ("owns", "what belongs to someone", ("asset", "thing")),
+    "made": ("made", "what someone created", ("asset", "thing")),
 }
 #: Facts taken from one compaction. A cheap summary model will invent them given room, so the cap is in the
 #: prompt and here.
 MAX_FACTS = 20
+#: Live facts kept per chat. Nothing pruned them before, and a three-message chat on the pod produced 32, which
+#: extrapolates badly over a year. The lowest-scoring live edges are marked stale rather than deleted, so the
+#: panel can still show what was dropped and a revival is one update.
+MAX_LIVE_FACTS = 400
 #: A node's identity shapes: how many characters an asset id has, and the kinds a fact may name.
 NODE_KINDS = ("person", "place", "thing", "event", "asset", "topic")
 ALWAYS_FULL_TOOLS = frozenset({"generate_image"})
@@ -162,17 +176,30 @@ SUMMARY_PROMPT = (
 #: graph costs no extra request -- which was the requirement, not an optimisation.
 FACTS_TAIL = (
     "\n\nReply with ONE JSON object and nothing else:\n"
-    '{{"summary": "<the summary above, as plain text>", "facts": [{{"s": "<who or what>", '
-    '"r": "<one of: {relations}>", "o": "<who or what>", "v": <-1..1>, "f": "<one short sentence>"}}]}}\n'
-    "The facts are the lasting ones a later reader would need: who someone is to someone else, how they feel "
-    "(v is how positive, -1 to 1), where something is, what someone wants, owns or made, what was agreed. Name "
-    'people and things exactly as the conversation does, and use "user" for the user. Skip anything passing or '
-    "already obvious. At most {limit} facts, and an empty list is a perfectly good answer."
+    '{{"summary": "<the summary above, as plain text>", "facts": [{{"s": "<who>", "r": "<a relation below>", '
+    '"o": "<who or what>", "v": <-1..1>, "f": "<one short sentence>"}}]}}\n'
+    "Use ONLY these relations, for what they say and nothing else:\n{relations}\n"
+    "These are for lasting things about people: who they are to each other, how they feel, what they made or "
+    "own. They are NOT for what happened, what was decided, what someone wants next or where the shoot is -- "
+    "all of that belongs in the summary above, where the order it happened in can be kept. If a fact does not "
+    "fit one of the relations exactly, leave it out rather than forcing it into the nearest one. Name people "
+    'exactly as the conversation does and use "user" for the user. At most {limit} facts, and an empty list is '
+    "a perfectly good answer -- most compactions should produce only a few."
 )
+#: One example each, because the names alone were being read as "the nearest verb".
+RELATION_EXAMPLES = {
+    "relation_to": '{"s": "Riya", "r": "relation_to", "o": "Tiya", "f": "Riya is Tiya\'s older sister."}',
+    "feels_toward": '{"s": "Riya", "r": "feels_toward", "o": "user", "v": -0.6, "f": "Riya finds the user\'s '
+                    'last-minute changes exhausting."}',
+    "owns": '{"s": "Tiya", "r": "owns", "o": "a1b2c3d4e5f6", "f": "Asset a1b2c3d4e5f6 is Tiya\'s avatar."}',
+    "made": '{"s": "Riya", "r": "made", "o": "a1b2c3d4e5f6", "f": "Riya made the rooftop portrait a1b2c3d4e5f6."}',
+}
 
 
 def facts_tail() -> str:
-    return FACTS_TAIL.format(relations=" | ".join(RELATIONS), limit=MAX_FACTS)
+    lines = [f"- {name}: {meaning}\n    e.g. {RELATION_EXAMPLES[name]}"
+             for name, (_, meaning, _) in RELATIONS.items()]
+    return FACTS_TAIL.format(relations="\n".join(lines), limit=MAX_FACTS)
 
 
 def read_summary_and_facts(text: str) -> tuple[str, list[dict]]:
@@ -190,7 +217,7 @@ def read_summary_and_facts(text: str) -> tuple[str, list[dict]]:
     facts = []
     for item in data.get("facts") if isinstance(data.get("facts"), list) else []:
         if isinstance(item, dict) and str(item.get("r") or "").strip().lower() in RELATIONS:
-            facts.append(item)
+            facts.append(item)  # the relation is real; whether the object suits it is checked in _write_fact
     return data["summary"].strip(), facts[:MAX_FACTS]
 
 MERGE_GROWTH_PROMPT = (
@@ -515,6 +542,27 @@ class AgentStore:
             cursor = self._db.execute("DELETE FROM agent_edges WHERE session_id = ? AND id = ?", (session_id, edge_id))
             self._db.commit()
         return cursor.rowcount > 0
+
+    def trim_facts(self, session_id: str, keep: int) -> int:
+        """Keep a chat's live facts under a cap, oldest and least-mentioned first.
+
+        Nothing pruned before, and a three-message chat on the pod produced 32 facts. Dropped rows go to
+        'stale' rather than being deleted, so the panel still shows them and reviving one is an update: the
+        same treatment a superseded fact gets, for the same reason.
+        """
+        with self._lock:
+            live = self._db.execute(
+                "SELECT COUNT(*) FROM agent_edges WHERE session_id = ? AND state = 'live'", (session_id,)).fetchone()[0]
+            if live <= keep:
+                return 0
+            cursor = self._db.execute(
+                "UPDATE agent_edges SET state = 'stale' WHERE id IN ("
+                "  SELECT e.id FROM agent_edges e JOIN agent_nodes s ON s.id = e.src"
+                "  WHERE e.session_id = ? AND e.state = 'live'"
+                "  ORDER BY e.since_message ASC, s.mentions ASC, e.updated_at ASC LIMIT ?)",
+                (session_id, live - keep))
+            self._db.commit()
+        return cursor.rowcount
 
     def drop_facts_since(self, session_id: str, since_message: int) -> int:
         """Forget the facts a compaction produced, and revive whatever they superseded.
@@ -1131,16 +1179,24 @@ class AgentService:
         rel = str(rel or "").strip().lower()
         if rel not in RELATIONS or not str(fact or "").strip():
             return False
+        family, _, kinds = RELATIONS[rel]
         src = self._node_for(session, owner, subject)
         dst = self._node_for(session, owner, obj)
         if not src or not dst or src == dst:
+            return False
+        # The object has to be the kind the relation is about. This is what catches a model that reached for the
+        # nearest verb: "located_in" an asset, "relation_to" a plan. No model call, and it refuses rather than
+        # files the fact in a family where it will never be contradicted.
+        _, kind, _ = self._node_key(session, obj)
+        if kind and kind not in kinds:
             return False
         try:
             weight = max(-1.0, min(1.0, float(weight)))
         except (TypeError, ValueError):
             weight = 1.0
-        self.store.put_edge(session["id"], owner, src, dst, rel, RELATIONS[rel],
+        self.store.put_edge(session["id"], owner, src, dst, rel, family,
                             " ".join(str(fact).split())[:240], weight, since_message)
+        self.store.trim_facts(session["id"], MAX_LIVE_FACTS)
         return True
 
     def _seed_graph(self, session: dict) -> None:
@@ -1740,16 +1796,21 @@ class AgentService:
         older = self._transcript(session, member_id, names, upto=older_upto)
         name = names[cast.index(member)]
         previous = f"Your earlier memory:\n{member['memory']}\n\n" if member.get("memory") else ""
-        request = [{"role": "system", "content": cast_talk.MEMORY_PROMPT.format(name=name) + facts_tail()},
+        # No facts asked for here, on purpose. This ran once per character and owned everything it extracted
+        # privately, so one line said aloud became three rows: the shared one and a private copy for each
+        # character who heard it. On the pod a three-message chat produced 32 facts where 6 were the content.
+        # The private view worth keeping -- how one character feels about another -- is already written for
+        # free by _grow, correctly owned, with no model call at all.
+        request = [{"role": "system", "content": cast_talk.MEMORY_PROMPT.format(name=name)},
                    {"role": "user", "content": f"{previous}What you heard since:\n{older}"}]
         for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
             except AtlasError as exc:
                 log.warning("character memory with %s failed: %s", model, exc)
                 continue
             await self._add_usage(session["id"], model, usage)
-            memory, facts = read_summary_and_facts(text)
+            memory = (text or "").strip()
             fresh = self.get_session(session["id"])
             cast = [dict(m) for m in cast_of(fresh)]
             for entry in cast:
@@ -1757,12 +1818,6 @@ class AgentService:
                     entry["memory"], entry["memory_upto"] = memory, older_upto
             fresh["cast"] = cast
             self.store.save_session(fresh)
-            # owner = this character: the transcript was already filtered through visible_to, so by construction
-            # these facts are only what this one heard. A whisper to someone else cannot leak in here.
-            self._seed_graph(fresh)
-            for fact in facts:
-                self._write_fact(fresh, member_id, fact.get("s"), fact.get("r"), fact.get("o"),
-                                 fact.get("f"), fact.get("v", 1.0), older_upto)
             return True
         return False
 
@@ -2260,10 +2315,11 @@ class AgentService:
             # Owned by the character it belongs to, never by "" (said aloud). _grow keeps these in that
             # character's own feelings and growth, and the other characters' prompts do not show them: writing
             # them as public facts would hand Riya's private view of Tiya straight to Tiya through recall.
+            # Only a feeling about someone else becomes a fact. A note about who a character is becoming has
+            # nobody on the other end of it, so there is no relation for it to be -- and it is already carried,
+            # in full, by that character's own growth notes in the prompt.
             if about:
                 self._write_fact(updated, member_id, speaker, "feels_toward", about, f"{speaker} on {about}: {note}")
-            else:
-                self._write_fact(updated, member_id, speaker, "status_of", speaker, f"{speaker}: {note}")
         for _, speaker, note, about in added:
             content = {"text": note, "kind": "grow", "speaker": speaker}
             if about:

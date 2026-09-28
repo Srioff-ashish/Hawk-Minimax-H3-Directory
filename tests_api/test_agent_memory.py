@@ -139,17 +139,48 @@ class FactsFromCompaction(AgentHarness):
         chat = await self.busy_chat(json.dumps({
             "summary": "A summary.",
             "facts": [{"s": "Riya", "r": "vibes_with", "o": "Tiya", "f": "Riya vibes with Tiya."},
-                      {"s": "Riya", "r": "knows_about", "o": "the rooftop", "f": "Riya scouted the rooftop."}]}))
+                      {"s": "Riya", "r": "relation_to", "o": "Tiya", "f": "Riya is Tiya's older sister."}]}))
         facts = [f["fact"] for f in (await self.http.get(f"/v1/agent/sessions/{chat}/graph")).json()["facts"]]
         self.assertNotIn("Riya vibes with Tiya.", facts, "the vocabulary is closed, so nothing contradicts nothing")
-        self.assertIn("Riya scouted the rooftop.", facts)
+        self.assertIn("Riya is Tiya's older sister.", facts)
+
+    async def test_a_fact_whose_object_is_the_wrong_kind_is_refused(self):
+        # The fix for what the pod actually produced: "located_in :: Asset c7eab94fc3ea, portrait.png" and
+        # "relation_to :: The plan has talent walking the parapet". The sentence reads fine and the relation is
+        # real, so only the object's kind can catch it -- and the relation picks the family, which is what makes
+        # a later fact supersede this one, so filing it wrong means it is never contradicted.
+        chat = await self.busy_chat(json.dumps({
+            "summary": "A summary.",
+            "facts": [{"s": "Riya", "r": "relation_to", "o": "the rooftop parapet plan",
+                       "f": "Riya is to the rooftop parapet plan."},
+                      {"s": "Riya", "r": "made", "o": "c7eab94fc3ea", "f": "Riya made asset c7eab94fc3ea."}]}))
+        facts = [f["fact"] for f in (await self.http.get(f"/v1/agent/sessions/{chat}/graph")).json()["facts"]]
+        self.assertNotIn("Riya is to the rooftop parapet plan.", facts,
+                         "relation_to is between people; a plan is not one, so the fact is refused not refiled")
+        self.assertIn("Riya made asset c7eab94fc3ea.", facts, "and made does take an asset")
+
+    async def test_a_characters_own_memory_does_not_write_a_private_copy_of_what_everyone_heard(self):
+        # Measured on the pod: a three-message chat produced 32 facts, of which 20 were per-character copies of
+        # the 12 that were said aloud. A character privately knowing what was said in front of everyone is not
+        # private knowledge, it is just the conversation.
+        chat = await self.busy_chat(json.dumps({
+            "summary": "A summary.",
+            "facts": [{"s": "Riya", "r": "relation_to", "o": "Tiya", "f": "Riya is Tiya's older sister."}]}))
+        facts = (await self.http.get(f"/v1/agent/sessions/{chat}/graph")).json()["facts"]
+        same = [f for f in facts if f["fact"] == "Riya is Tiya's older sister."]
+        self.assertEqual(len(same), 1, "one fact said aloud should be stored once, not once per listener")
+        self.assertEqual(same[0]["private_to"], "", "and it belongs to the room, not to one character")
+        memory_calls = [r for r in self.atlas.requests
+                        if "Write your own memory of the conversation" in str(r["messages"][0]["content"])]
+        for call in memory_calls:
+            self.assertNotIn('"facts"', str(call["messages"][0]["content"]),
+                             "a character's own memory is prose again; it asks for no facts at all")
 
     async def test_the_fact_cap_holds_even_when_the_model_ignores_it(self):
-        many = [{"s": "Riya", "r": "knows_about", "o": f"thing {n}", "f": f"Riya knows about thing {n}."}
-                for n in range(60)]
+        many = [{"s": "Riya", "r": "made", "o": "%012x" % n, "f": f"Riya made asset {n}."} for n in range(60)]
         chat = await self.busy_chat(json.dumps({"summary": "A summary.", "facts": many}))
         facts = (await self.http.get(f"/v1/agent/sessions/{chat}/graph")).json()["facts"]
-        self.assertLessEqual(len([f for f in facts if "knows about thing" in f["fact"]]), 20,
+        self.assertLessEqual(len([f for f in facts if "Riya made asset" in f["fact"]]), 20,
                              "a cheap model will invent facts given room, so the cap is enforced here too")
 
     async def test_a_wrong_fact_can_be_deleted_by_hand(self):
@@ -223,15 +254,15 @@ class RecalledFactsInThePrompt(AgentHarness):
         session = self.agent.get_session(chat)
         self.agent._seed_graph(session)
         session = self.agent.get_session(chat)
-        self.agent._write_fact(session, "", "Riya", "knows_about", "the rooftop", "Riya scouted the rooftop.", 1.0, 1)
-        self.agent._write_fact(session, "", "Tiya", "knows_about", "the lehenga", "Tiya picked the lehenga.", 1.0, 1)
+        self.agent._write_fact(session, "", "Riya", "made", "a1b2c3d4e5f6", "Riya made the rooftop portrait.", 1.0, 1)
+        self.agent._write_fact(session, "", "Tiya", "made", "f6e5d4c3b2a1", "Tiya made the lehenga still.", 1.0, 1)
 
         self.atlas.reply = lambda body: json.dumps({"lines": [{"speaker": "Riya", "say": "ok"}], "actions": [], "done": True})
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Riya, rooftop ready?"})
         await self.settle(chat)
         systems = "\n".join(m["content"] for m in self.atlas.requests[-1]["messages"] if m["role"] == "system")
-        self.assertIn("Riya scouted the rooftop.", systems, "a fact about who the turn names is recalled")
-        self.assertNotIn("Tiya picked the lehenga.", systems,
+        self.assertIn("Riya made the rooftop portrait.", systems, "a fact about who the turn names is recalled")
+        self.assertNotIn("Tiya made the lehenga still.", systems,
                          "and one about someone the turn never mentions is not, or recall costs more than it saves")
 
     async def test_recall_stays_inside_its_token_budget(self):
@@ -241,8 +272,8 @@ class RecalledFactsInThePrompt(AgentHarness):
         self.agent._seed_graph(session)
         session = self.agent.get_session(chat)
         for n in range(80):
-            self.agent._write_fact(session, "", "Riya", "knows_about", f"place {n}",
-                                   f"Riya knows place {n} very well indeed, in some detail." , 1.0, n)
+            self.agent._write_fact(session, "", "Riya", "made", "%012x" % n,
+                                   f"Riya made asset {n}, a long-ish sentence about it for the budget.", 1.0, n)
         setting(self, "agent_recall_tokens", 120)
         text = self.agent._recall_text(self.agent.get_session(chat), "", "Riya")
         self.assertTrue(text, "there is plenty to recall")
@@ -253,7 +284,7 @@ class RecalledFactsInThePrompt(AgentHarness):
         session = self.agent.get_session(chat)
         self.agent._seed_graph(session)
         session = self.agent.get_session(chat)
-        self.agent._write_fact(session, "", "Maya", "knows_about", "the rooftop", "Maya scouted the rooftop.", 1.0, 1)
+        self.agent._write_fact(session, "", "Maya", "made", "a1b2c3d4e5f6", "Maya made the rooftop portrait.", 1.0, 1)
         setting(self, "agent_graph_recall", False)
         self.assertEqual(self.agent._recall_text(self.agent.get_session(chat), "", "Maya rooftop"), "",
                          "the kill switch stops injection")

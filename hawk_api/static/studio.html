@@ -4257,8 +4257,11 @@
   }
   //: What the chat has worked out, as facts. Read-only apart from deleting one: a cheap summary model will
   //: occasionally invent a fact, and being able to see and remove it is what makes recall safe to leave on.
-  const REL_WORDS = { feels_toward: "feels about", relation_to: "is to", located_in: "is in", status_of: "is",
-                      wants: "wants", owns: "owns", made: "made", agreed: "agreed with", knows_about: "knows about" };
+  //: Facts written before the vocabulary was cut to four still exist and are still shown, so the older
+  //: relations stay here purely so their rows read as words rather than as a bare relation name.
+  const REL_WORDS = { relation_to: "is to", feels_toward: "feels about", owns: "owns", made: "made",
+                      located_in: "is in", status_of: "is", wants: "wants", agreed: "agreed with",
+                      knows_about: "knows about" };
   async function loadAgentKnows() {
     const box = $("agentKnows");
     if (!agent.current) { box.hidden = true; return; }

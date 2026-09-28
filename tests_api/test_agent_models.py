@@ -207,14 +207,14 @@ class ACacheablePrefix(AgentHarness):
         session = self.agent.get_session(chat)
         self.agent._seed_graph(session)
         session = self.agent.get_session(chat)
-        self.agent._write_fact(session, "", "Riya", "knows_about", "the rooftop", "Riya scouted the rooftop.", 1.0, 1)
+        self.agent._write_fact(session, "", "Riya", "made", "a1b2c3d4e5f6", "Riya made the rooftop portrait.", 1.0, 1)
 
         self.atlas.reply = lambda body: json.dumps({"lines": [{"speaker": "Riya", "say": "ok"}], "actions": [], "done": True})
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Riya, rooftop ready?"})
         await self.settle(chat)
 
         sent = self.atlas.requests[-1]["messages"]
-        recalled = [i for i, m in enumerate(sent) if "Riya scouted the rooftop." in str(m["content"])]
+        recalled = [i for i, m in enumerate(sent) if "Riya made the rooftop portrait." in str(m["content"])]
         self.assertTrue(recalled, "the fact should have been recalled at all")
         last_user_at = max(i for i, m in enumerate(sent) if m["role"] == "user")
         self.assertGreater(recalled[0], last_user_at,
