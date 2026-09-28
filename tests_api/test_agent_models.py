@@ -294,3 +294,44 @@ class ACacheablePrefix(AgentHarness):
                            "the watermark past which messages are dropped is what used to shrink the catalogue")
         after = (await self.systems_after(chat, "and now"))[0]
         self.assertEqual(before, after, "compacting must not change the cacheable prefix at all")
+
+
+class ADirectorThatKeepsGoing(AgentHarness):
+    """The director walks its chain when the provider errors, instead of ending the run."""
+
+    async def test_a_director_model_the_provider_refuses_falls_through_to_the_next_in_the_chain(self):
+        # Every other model call on this path already caught AtlasError and tried the next id: the prose
+        # turn, both summarisers, the growth merge and the vision ladder. The director's did not, so one
+        # rate limit ended the whole turn with "Model error" -- worth more here than anywhere else, because
+        # the director makes by far the most calls, and fatal for any free-tier model, which is rate
+        # limited by definition.
+        chat = (await self.http.post("/v1/agent/sessions", json={
+            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3"})).json()
+        self.atlas.fail_models = {"xai/grok-4.6"}
+
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "hello"})
+        view = await self.settle(chat["id"])
+
+        self.assertNotEqual(view["session"]["status"], "error",
+                            "a chat must not end because the first model in its chain was refused")
+        spoken = [m for m in view["messages"]
+                  if m["role"] == "assistant" and (m["content"].get("usage") or {}).get("model")]
+        self.assertTrue(spoken, "the director should still have answered")
+        self.assertEqual(spoken[-1]["content"]["usage"]["model"], "xai/grok-4.3",
+                         "the reply should come from the chain's second id, the one the provider serves")
+
+    async def test_a_director_with_nowhere_left_to_fall_still_reports_the_error(self):
+        # The fallback must not turn a genuinely dead provider into a silent no-op: with every id refused
+        # there is nothing to do but say so, which is what the chat did for a single failure before.
+        chat = (await self.http.post("/v1/agent/sessions", json={
+            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3"})).json()
+        self.atlas.fail_models = {"xai/grok-4.6", "xai/grok-4.3"}
+
+        await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "hello"})
+        view = await self.settle(chat["id"])
+
+        self.assertEqual(view["session"]["status"], "error",
+                         "when no model in the chain answers, the chat should say so rather than look idle")
+        notes = [m["content"].get("text", "") for m in view["messages"] if m["role"] == "note"]
+        self.assertTrue(any("Model error" in note for note in notes),
+                        f"a note should name the failure; got {notes}")

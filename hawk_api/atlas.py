@@ -80,6 +80,16 @@ class AtlasError(RuntimeError):
     """Any Atlas failure, worded for a chat or an API caller."""
 
 
+class AtlasTruncated(AtlasError):
+    """The model ran into the token cap mid-reply (finish_reason="length").
+
+    Only raised for a JSON-mode call, where it is never recoverable: an object cut off mid-string cannot be
+    parsed, and every caller on that path asked for JSON because it intends to parse it. It used to pass
+    through as ordinary content, because the only check was that the reply was not empty -- a half-written
+    film plan was stored as a finished one and was found out at render time, several minutes later.
+    """
+
+
 def _price(value) -> float:
     try:
         return float(value)
@@ -259,7 +269,16 @@ class AtlasClient:
                     last_error = str(exc)
                 else:
                     if response.status_code == 200:
-                        return self._parse(response)
+                        try:
+                            return self._parse(response, json_mode=json_mode)
+                        except AtlasTruncated as exc:
+                            # Nothing but asking again can help, so this takes the same backoff as a 429.
+                            if attempt >= max_retries:
+                                raise AtlasError(str(exc)) from None
+                            last_error = str(exc)
+                            attempt += 1
+                            await asyncio.sleep(min(2**attempt, 30) * (0.5 + random.random() / 2))
+                            continue
                     body = response.text
                     if response.status_code == 400 and "response_format" in payload and "response_format" in body:
                         payload.pop("response_format")  # this model rejects JSON mode; the prompt still asks for JSON
@@ -279,7 +298,7 @@ class AtlasClient:
                     raise AtlasError(f"Atlas request failed: {last_error}")
 
     @staticmethod
-    def _parse(response: httpx.Response) -> tuple[str, dict]:
+    def _parse(response: httpx.Response, json_mode: bool = True) -> tuple[str, dict]:
         try:
             data = response.json()
         except json.JSONDecodeError:
@@ -297,4 +316,7 @@ class AtlasClient:
             content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
         if not content:
             raise AtlasError(f"The model returned an empty message (finish_reason={choices[0].get('finish_reason')}).")
+        if json_mode and choices[0].get("finish_reason") == "length":
+            raise AtlasTruncated(f"The model's reply was cut off at the token cap after {len(content)} characters, "
+                                 "so it is not the complete JSON object that was asked for.")
         return content, data.get("usage") or {}

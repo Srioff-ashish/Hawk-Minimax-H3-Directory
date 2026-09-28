@@ -92,6 +92,7 @@ class FakeComfy:
         ]
         self.chat_reply = PLAN_SCRIPT
         self.chat_status = 200
+        self.chat_finish_reason = "stop"  # "length" is a reply the model ran out of room to finish
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
         self.app.add_routes([
             web.get("/v1/models", self.llm_models),
@@ -115,7 +116,8 @@ class FakeComfy:
         self.chat_requests.append(await request.json())
         if self.chat_status != 200:
             return web.json_response({"error": {"message": "no"}}, status=self.chat_status)
-        return web.json_response({"choices": [{"message": {"content": self.chat_reply}}],
+        return web.json_response({"choices": [{"message": {"content": self.chat_reply},
+                                               "finish_reason": self.chat_finish_reason}],
                                   "usage": {"prompt_tokens": 900, "completion_tokens": 120}})
 
     async def upload(self, request):
@@ -407,6 +409,43 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(plan["error"], "a failed plan must say why: the caller is holding a job id and polling")
         retried = (await self.http.post(f"/v1/jobs/{plan['id']}/retry")).json()
         self.assertIn(retried["status"], ("planning", "queued"), "a plan retries by running the call again")
+
+    async def test_a_plan_with_reference_photos_uses_a_model_that_can_read_them(self):
+        # The planner sends references as image parts, so with photos attached this call is multimodal. The
+        # role carried no image requirement, so the head of the chain won whatever it could do, and every
+        # plan with references failed with the provider's own 404: "No endpoints found that support image
+        # input". The requirement belongs to the call, not to the role -- hence the second half below.
+        self.fake.llm_models_data = [
+            {"id": "xai/grok-4.6", "name": "Grok 4.6", "input_modalities": ["text"],
+             "output_modalities": ["text"], "pricing": {"prompt": "0.000002", "completion": "0.000006"}},
+            {"id": "xai/grok-4.3", "name": "Grok 4.3", "input_modalities": ["text", "image"],
+             "output_modalities": ["text"], "pricing": {"prompt": "0.00000125", "completion": "0.0000025"}}]
+        asset = await self.upload_picture()
+
+        plan = await self.wait((await self.http.post("/v1/plans", json={
+            "story": "A walk", "references": [{"asset_id": asset, "role": "picture", "label": "her face"}]})).json()["id"])
+        self.assertEqual(plan["status"], "done", plan)
+        self.assertEqual(self.fake.chat_requests[-1]["model"], "xai/grok-4.3",
+                         "a plan carrying photos must go to a model the provider serves image input for")
+
+        plain = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertEqual(plain["status"], "done", plain)
+        self.assertEqual(self.fake.chat_requests[-1]["model"], "xai/grok-4.6",
+                         "with no photos the cheaper head of the chain should still be used")
+
+    async def test_a_plan_cut_off_mid_sentence_fails_rather_than_arriving_as_done(self):
+        # The only check on this path was that the reply was not empty, and a script that stops mid-sentence
+        # is not empty: the job said done with no error, Studio drew a half-written plan, and the first thing
+        # to actually parse it was the render, minutes later.
+        self.fake.chat_finish_reason = "length"
+        self.fake.chat_reply = PLAN_SCRIPT[: len(PLAN_SCRIPT) // 2]
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+
+        self.assertEqual(plan["status"], "failed", "a plan that cannot be parsed is not a finished plan")
+        self.assertFalse(plan.get("script"), "a half-written script must not be offered as the plan")
+        self.assertTrue(plan["error"], "a failed plan must say why: the caller is holding a job id and polling")
+        self.assertGreater(len(self.fake.chat_requests), 1,
+                           "being cut off is worth asking again for, since nothing else can fix it")
 
     async def test_plan_then_render_with_loras_and_downloads(self):
         asset = await self.upload_picture()

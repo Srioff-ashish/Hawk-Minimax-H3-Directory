@@ -39,6 +39,21 @@ class AModelIdOnEitherProvider(unittest.TestCase):
         self.assertEqual(models_llm.resolve("summary", "deepseek-ai/deepseek-v4.1-flash", OPENROUTER),
                          "deepseek/deepseek-v4.1-flash", "deepseek-ai/ and deepseek/ name one model")
 
+    def test_a_role_can_be_given_the_image_requirement_for_one_call(self):
+        # The planner is a text role right up until the plan has reference photos, and then the very same
+        # call is multimodal. Asking a text-only model to read an image is not a weaker answer: the provider
+        # refuses the request outright, which is how every plan with references came to fail.
+        chain = "anthracite-org/magnum-v4-72b, x-ai/grok-4.6"
+        self.assertEqual(models_llm.resolve("planner", chain, OPENROUTER, vision=True), "x-ai/grok-4.6",
+                         "with photos attached the chain should skip the text-only head and take one that sees")
+
+    def test_without_the_requirement_the_same_chain_keeps_its_cheaper_text_model(self):
+        # The other half of the bargain: a plan with no references must not be pushed onto a vision model
+        # it does not need, or the requirement would just be a more expensive default.
+        chain = "anthracite-org/magnum-v4-72b, x-ai/grok-4.6"
+        self.assertEqual(models_llm.resolve("planner", chain, OPENROUTER), "anthracite-org/magnum-v4-72b",
+                         "with no photos the head of the chain is still the right answer")
+
     def test_a_variant_suffix_does_not_stop_a_match(self):
         listed = [{"id": "x-ai/grok-4.6:free", "vision": True, "price_in": 0.0}]
         self.assertEqual(models_llm.resolve("director", "xai/grok-4.6", listed), "x-ai/grok-4.6:free",

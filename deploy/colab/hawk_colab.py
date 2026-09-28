@@ -724,9 +724,16 @@ def status_line(session: Session) -> str:
     return " | ".join(parts)
 
 
-def watch(session: Session, interval: int = 60) -> None:
-    """Print status every `interval` seconds and restart the tunnel or API if they die.
-    Stop the cell to stop watching; the services keep running."""
+def watch(session: Session, interval: int = 60, comfy_restarts: int = 3) -> None:
+    """Print status every `interval` seconds and restart ComfyUI, the tunnel or the API if they die.
+    Stop the cell to stop watching; the services keep running.
+
+    ComfyUI used to be the one service this gave up on: the tunnel and the API were restarted, and a dead
+    ComfyUI only printed "run the start cell again" and stopped watching. Because the API kept serving, the
+    pod stayed up answering /healthz with comfy unreachable, so Studio showed "GPU unreachable" for as long
+    as nobody was looking at the notebook. An OOM in one render is now a couple of minutes, not a dead pod.
+    """
+    restarts, last_restart = 0, 0.0
     try:
         while True:
             comfy = session.procs.get("comfyui")
@@ -734,8 +741,22 @@ def watch(session: Session, interval: int = 60) -> None:
                 _http_status(f"http://127.0.0.1:{COMFY_PORT}/queue", timeout=5) != 200
             if comfy_dead:
                 print("ComfyUI stopped." + (f" Last log lines:\n{log_tail(session.log('comfyui'))}" if comfy else ""))
-                print("Run the start cell again.")
-                return
+                if time.time() - last_restart > 3600:
+                    restarts = 0  # healthy for an hour: the budget is for a crash loop, not for the pod's lifetime
+                if restarts >= comfy_restarts:
+                    print(f"ComfyUI has stopped {comfy_restarts} times in the last hour; leaving it down so the "
+                          "log above is not overwritten. Fix the cause, then run the start cell again.")
+                    return
+                restarts, last_restart = restarts + 1, time.time()
+                print(f"Restarting ComfyUI ({restarts}/{comfy_restarts})...", flush=True)
+                try:
+                    restart_comfyui(session, force=True)
+                except Exception as exc:
+                    print(f"ComfyUI would not restart: {exc}\nRun the start cell again.")
+                    return
+                print(status_line(session), flush=True)
+                time.sleep(interval)
+                continue
             if session.procs["tunnel"].poll() is not None:
                 print("Tunnel stopped; opening a new one (the URL changes).")
                 session.procs["api"].terminate()

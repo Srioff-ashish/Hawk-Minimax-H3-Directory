@@ -776,32 +776,34 @@ class AgentService:
         except AtlasError:
             return []
 
-    async def model_for(self, role: str, session: dict | None = None) -> str:
-        """The id to send for one role, resolved against the provider that is switched on.
-
-        Every role used to hold a bare id, so switching provider silently pointed five of them at models the
-        new service does not serve. See hawk_api/models_llm.py.
-        """
+    def _configured_chain(self, role: str, session: dict | None = None) -> str:
+        """The chain a role is set to, before it meets the provider's catalogue."""
         llm = self._llm()
         settings = self.service.settings
-        configured = {
+        return {
             "director": (session or {}).get("model") or llm.agent_model_override or settings.agent_model,
             "prose": (session or {}).get("prose_model") or llm.agent_prose_model_override
             or settings.agent_prose_model or (session or {}).get("model") or settings.agent_model,
             "summary": llm.agent_summary_model_override or settings.agent_summary_model,
             "vision": llm.agent_vision_model_override or settings.agent_vision_model,
         }.get(role, "")
-        return models_llm.resolve(role, configured, await self._catalogue())
+
+    async def model_for(self, role: str, session: dict | None = None) -> str:
+        """The id to send for one role, resolved against the provider that is switched on.
+
+        Every role used to hold a bare id, so switching provider silently pointed five of them at models the
+        new service does not serve. See hawk_api/models_llm.py.
+        """
+        return models_llm.resolve(role, self._configured_chain(role, session), await self._catalogue())
 
     async def models_for(self, role: str, session: dict | None = None) -> list[str]:
-        """Every id worth trying for a role, best first. Only the vision ladder walks more than one."""
-        llm = self._llm()
-        settings = self.service.settings
-        if role == "vision":
-            configured = llm.agent_vision_model_override or settings.agent_vision_model
-        else:
-            return [await self.model_for(role, session)]
-        return models_llm.resolve_many(role, configured, await self._catalogue())
+        """Every id worth trying for a role, best first.
+
+        The vision ladder walks the whole list looking for a model that will agree to look at the picture.
+        The other roles use the tail as a failover: the chain was always meant to answer "the provider would
+        not serve this one", and a provider that errors mid-run is the same question asked later.
+        """
+        return models_llm.resolve_many(role, self._configured_chain(role, session), await self._catalogue())
 
     @property
     def summary_model(self) -> str:
@@ -1367,6 +1369,28 @@ class AgentService:
             return True
         return False
 
+    async def _director_call(self, session_id: str, session: dict, messages: list[dict]) -> tuple[str, str, dict]:
+        """One director step, walking down the configured chain when the provider errors.
+
+        The director was the only model call on the whole path with no fallback at all: the prose turn, both
+        summarisers, the growth merge and the vision ladder each catch AtlasError and try the next id, while
+        this one let it escape to _run, which ends the entire turn with "Model error". A single rate limit
+        was therefore worth more here than anywhere else -- and it is what makes a free-tier model, which is
+        rate limited by definition, unusable for the busiest role in the chat.
+        """
+        models = await self.models_for("director", session)
+        for position, model in enumerate(models):
+            try:
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192)
+            except AtlasError as exc:
+                if position + 1 >= len(models):
+                    raise
+                log.warning("director step with %s failed: %s", model, exc)
+                self._note(session_id, f"{model} could not answer ({exc}); trying {models[position + 1]}.", "warn")
+                continue
+            return model, text, usage
+        raise AtlasError("No director model is available: the provider lists none of the configured ids.")
+
     async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "",
                              subjects: tuple[str, ...] = ()) -> dict | None:
         """The full agent (persona or cast, tools, pipeline) works until it replies without actions. Returns the last
@@ -1381,8 +1405,7 @@ class AgentService:
             session = self.get_session(session_id)
             await self._maybe_summarize(session)
             messages = await self._build_messages(session)
-            model = await self.model_for("director", session)
-            text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192)
+            model, text, usage = await self._director_call(session_id, session, messages)
             steps += 1
             call = await self._add_usage(session_id, model, usage)
             reply = parse_reply(text)

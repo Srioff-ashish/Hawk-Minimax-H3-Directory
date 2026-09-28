@@ -85,23 +85,30 @@ def _usable(entry: dict, want_vision: bool) -> bool:
     return bool(entry.get("id")) and (entry.get("vision") is True or not want_vision)
 
 
-def resolve(role: str, setting, catalogue: list[dict] | None) -> str:
+def resolve(role: str, setting, catalogue: list[dict] | None, *, vision: bool = False) -> str:
     """The id to send for ``role``: the first candidate this provider actually serves.
 
     ``setting`` is the configured chain (blank falls back to the role's own), ``catalogue`` is what
     ``AtlasClient.list_models`` returned. Returns "" only when there is no candidate anywhere, which callers
     treat as "this role is unavailable" rather than sending a guess.
+
+    ``vision`` adds the image requirement to a role that does not always carry it. The planner is the case:
+    it is a text role until the plan has reference photos, and then the very same call is multimodal.
     """
-    return (resolve_many(role, setting, catalogue) or [""])[0]
+    return (resolve_many(role, setting, catalogue, vision=vision) or [""])[0]
 
 
-def resolve_many(role: str, setting, catalogue: list[dict] | None) -> list[str]:
+def resolve_many(role: str, setting, catalogue: list[dict] | None, *, vision: bool = False) -> list[str]:
     """Every id worth trying for ``role``, best first.
 
     Only the vision role has more than one caller-visible rung today -- ``_inspect_images`` walks the list
     until a model agrees to look -- but returning a list keeps that from being a special case.
     """
     spec = ROLES.get(role) or Role(chain=())
+    # A role can need vision for one call and not the next, so the requirement is the role's OR the
+    # caller's. Resolving a multimodal call against a text-only model is not a quality problem: the
+    # provider rejects the request outright ("No endpoints found that support image input").
+    want_vision = bool(vision or spec.vision)
     wanted = chain(setting) or list(spec.chain)
     # No catalogue is not the same as an empty catalogue. A provider outage, a missing key or a /models call
     # that raised must never be the reason a call does not happen, so the configured id goes out unchanged and
@@ -109,7 +116,7 @@ def resolve_many(role: str, setting, catalogue: list[dict] | None) -> list[str]:
     if not catalogue:
         return wanted or list(spec.chain)
 
-    listed = [entry for entry in catalogue if _usable(entry, spec.vision)]
+    listed = [entry for entry in catalogue if _usable(entry, want_vision)]
     by_id = {str(entry["id"]): entry for entry in listed}
     by_slug: dict[str, list[str]] = {}
     for model_id in by_id:
@@ -133,7 +140,7 @@ def resolve_many(role: str, setting, catalogue: list[dict] | None) -> list[str]:
         found = [str(entry["id"]) for entry in cheapest[:1]]
 
     ordered = list(dict.fromkeys(found))
-    return ordered[:MAX_VISION_CANDIDATES] if spec.vision else ordered
+    return ordered[:MAX_VISION_CANDIDATES] if want_vision else ordered
 
 
 def report(settings: dict, catalogue: list[dict] | None) -> dict:

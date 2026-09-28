@@ -62,6 +62,7 @@ class FakeAtlas:
         self.polls = 0
         self.model_list = MODELS
         self.fail_vision: set[str] = set()  # these models answer 400 to calls with images
+        self.fail_models: set[str] = set()  # these models answer 404, the way a rate-limited or dropped one does
         self.usage = {"prompt_tokens": 1000, "completion_tokens": 100}
         self.app.add_routes([web.get("/v1/models", self.models), web.post("/v1/chat/completions", self.chat),
                              web.post("/api/v1/model/generateImage", self.generate), web.get("/api/v1/model/prediction/{pid}", self.prediction)])
@@ -88,6 +89,8 @@ class FakeAtlas:
             await asyncio.sleep(self.delay)
         if body["model"] in self.fail_vision and isinstance(body["messages"][0]["content"], list):
             return web.json_response({"error": {"message": "content policy: image rejected"}}, status=400)
+        if body["model"] in self.fail_models:
+            return web.json_response({"error": {"message": "no endpoints found"}}, status=404)
         text = self.reply(body)
         return web.json_response({"choices": [{"message": {"content": text}, "finish_reason": "stop"}],
                                   "usage": self.usage})

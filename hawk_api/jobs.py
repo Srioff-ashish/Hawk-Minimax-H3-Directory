@@ -424,8 +424,11 @@ class HawkService:
             log.warning("hawk_api: model list unavailable, using configured ids as-is: %s", exc)
             return []
 
-    async def model_for(self, role: str, catalogue: list[dict] | None = None) -> str:
-        """The id to send for one role on whichever provider is switched on. See hawk_api/models_llm.py."""
+    async def model_for(self, role: str, catalogue: list[dict] | None = None, *, vision: bool = False) -> str:
+        """The id to send for one role on whichever provider is switched on. See hawk_api/models_llm.py.
+
+        ``vision`` is for a role whose need for image support depends on the call rather than the role.
+        """
         llm = self.llm()
         configured = {
             "planner": llm.planner_model_override or self.settings.planner_model,
@@ -436,7 +439,7 @@ class HawkService:
         }.get(role, "")
         if catalogue is None:
             catalogue = await self.model_catalogue()
-        return models_llm.resolve(role, configured, catalogue)
+        return models_llm.resolve(role, configured, catalogue, vision=vision)
 
     async def model_report(self, catalogue: list[dict] | None = None) -> dict:
         """Per role: what is configured, what it resolves to here, and whether that is what was asked for.
@@ -1480,16 +1483,22 @@ class HawkService:
             "system_prompt": (f"{custom.rstrip()}\n\n{PLATFORM_RULES}" if (custom := self.prompts.custom("planner")) else ""),
         }
 
-    async def _planner_model_id(self, requested: str = "") -> str:
+    async def _planner_model_id(self, requested: str = "", *, needs_vision: bool = False) -> str:
         """One model id for the planner: what the caller asked for, else the configured chain, resolved here.
 
         A request naming a model still goes through the resolver, so "xai/grok-4.6" works on a pod switched to
         OpenRouter, where the same model is spelled "x-ai/grok-4.6".
+
+        ``needs_vision`` is set when the plan has reference photos, because those are sent as image parts and a
+        text-only model is refused by the provider rather than merely doing the job badly. It is per call, not
+        per role: a plan with no references is still free to use the cheaper text-only model at the head of the
+        chain. This is how a chain like "deepseek-v4-pro, xai/grok-4.6" does the right thing in both cases.
         """
         catalogue = await self.model_catalogue()
         if str(requested or "").strip():
-            return models_llm.resolve("planner", requested, catalogue) or str(requested).strip()
-        return await self.model_for("planner", catalogue)
+            return (models_llm.resolve("planner", requested, catalogue, vision=needs_vision)
+                    or ("" if needs_vision else str(requested).strip()))
+        return await self.model_for("planner", catalogue, vision=needs_vision)
 
     def planner_system_prompt(self) -> str:
         """The planner's instructions: the user's edited prompt with the platform rules, else the node's own.
@@ -1611,10 +1620,17 @@ class HawkService:
         Calling it from here fixes all three, and keeps the key out of a graph that gets stored in job records
         and ComfyUI's history.
         """
-        model = await self._planner_model_id(options.model)
-        if not model:
-            raise Unavailable("No planner model: the provider in force lists none of the configured ids.")
+        # The message is built first because whether it carries photos is what decides which models can serve
+        # it: with references this call is multimodal, and a text-only model is rejected outright.
         text, images = await self._planner_message(options, refs)
+        model = await self._planner_model_id(options.model, needs_vision=bool(images))
+        if not model:
+            raise Unavailable(
+                "No planner model that can read reference photos: the provider in force lists none of the "
+                "configured planner ids with image support. Put a model that can see at the head of the "
+                "planner chain, or plan without references."
+                if images else
+                "No planner model: the provider in force lists none of the configured ids.")
         content: list[dict] = [{"type": "text", "text": text}]
         for uri in images:
             content.append({"type": "image_url", "image_url": {"url": uri}})
@@ -1624,6 +1640,14 @@ class HawkService:
                                             max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature)
         if not (reply or "").strip():
             raise Unavailable(f"{model} returned an empty plan.")
+        # "Not empty" was the only thing ever checked here, so a plan cut off mid-sentence was stored as a
+        # finished one: the job said done with no error, Studio drew a half-written script, and the first
+        # thing to actually parse it was the render, at _validate_script, minutes later. Parsing it here
+        # turns that into a failed plan the caller can simply run again.
+        try:
+            parse_script(reply)
+        except ScriptError as exc:
+            raise Unavailable(f"{model} returned a plan that does not parse: {exc}") from None
         return reply, model, usage or {}
 
     @staticmethod
