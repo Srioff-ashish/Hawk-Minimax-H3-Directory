@@ -84,6 +84,41 @@
   .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
   .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
 
+  /* ---------- sidebar, collapsed to a rail ----------
+     Only above the mobile breakpoint: below it the sidebar is already a horizontal icon bar (see the
+     max-width: 860px block), and the two must never both apply. The shell grid needs no change because
+     .app already reads --sidebar. */
+  .app { transition: grid-template-columns .16s ease; }
+  @media (prefers-reduced-motion: reduce) { .app { transition: none; } }
+  #sidebarToggle svg { transform: rotate(180deg); transition: transform .16s ease; }
+  @media (min-width: 861px) {
+    :root[data-sidebar="collapsed"] { --sidebar: 64px; }
+    :root[data-sidebar="collapsed"] .sidebar { padding: 16px 8px; }
+    :root[data-sidebar="collapsed"] .logo { justify-content: center; padding: 6px 0 18px; }
+    :root[data-sidebar="collapsed"] .nav-item { justify-content: center; padding: 8px; position: relative; }
+    :root[data-sidebar="collapsed"] .status-line { justify-content: center; }
+    :root[data-sidebar="collapsed"] .sidebar-foot { padding: 12px 0 0; }
+    :root[data-sidebar="collapsed"] #sidebarToggle,
+    :root[data-sidebar="collapsed"] #themeBtn { justify-content: center; padding: 0; }
+    :root[data-sidebar="collapsed"] #sidebarToggle svg { transform: none; }
+    /* Hidden the .sr-only way rather than with display:none, so a screen reader still reads every
+       label. Sighted users get the name back as a hover tooltip, set on the item by applySidebar. */
+    :root[data-sidebar="collapsed"] .wordmark,
+    :root[data-sidebar="collapsed"] .nav-item > span:not(.nav-count),
+    :root[data-sidebar="collapsed"] #sidebarToggleLabel,
+    :root[data-sidebar="collapsed"] #themeLabel,
+    :root[data-sidebar="collapsed"] #healthText {
+      position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+    }
+    /* The health line keeps its dot, the only live signal left in the rail. The queue line is text
+       with no dot, so the whole row goes rather than leaving an empty flex line behind; the topbar's
+       own #topQueue pill already carries it. */
+    :root[data-sidebar="collapsed"] .sidebar-foot .status-line:not([role="status"]) { display: none; }
+    /* margin-left:auto has nothing to push against at 64px, so the count becomes a corner badge. */
+    :root[data-sidebar="collapsed"] .nav-count { position: absolute; top: 2px; right: 5px; margin: 0;
+      min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+  }
+
   .main { min-width: 0; display: flex; flex-direction: column; }
   .topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px; padding: 12px 28px;
             background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: saturate(1.4) blur(10px); border-bottom: 1px solid var(--line); }
@@ -531,8 +566,6 @@
     .summary { position: static; }
   }
   @media (max-width: 860px) {
-    /* Two columns of form fields at phone width squeezes both into something neither fits in. */
-    .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); }
     .app { grid-template-columns: minmax(0, 1fr); }
     .sidebar { position: sticky; top: 0; z-index: 30; height: auto; flex-direction: row; align-items: center; gap: 2px; padding: 8px 10px; overflow-x: auto;
                border-right: 0; border-bottom: 1px solid var(--line); }
@@ -577,7 +610,7 @@
 </svg>
 
 <div class="app">
-  <nav class="sidebar" aria-label="Main">
+  <nav class="sidebar" id="sidebarNav" aria-label="Main">
     <a class="logo" href="#create" aria-label="Hawk H3 Studio home"><svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true"><use href="#i-logo"/></svg><span class="wordmark"><b>Hawk <span>H3</span> Studio</b><small>AI video director</small></span></a>
     <a class="nav-item" href="#create" data-route="create"><svg><use href="#i-create"/></svg><span>Create</span></a>
     <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Videos</span><span class="nav-count" id="activeCount" hidden>0</span></a>
@@ -588,6 +621,7 @@
     <div class="sidebar-foot">
       <div class="status-line" role="status" aria-live="polite"><span class="dot" id="healthDot"></span><span id="healthText">Checking server…</span></div>
       <div class="status-line"><span id="queueText">No active jobs</span></div>
+      <button class="btn btn-ghost btn-sm" id="sidebarToggle" type="button" aria-expanded="true" aria-controls="sidebarNav"><svg><use href="#i-chevron"/></svg><span id="sidebarToggleLabel">Collapse</span></button>
       <button class="btn btn-ghost btn-sm" id="themeBtn" type="button" title="Theme"><svg><use href="#i-sun"/></svg><span id="themeLabel">System theme</span></button>
     </div>
   </nav>
@@ -990,7 +1024,7 @@
             <div class="field" id="tokenField"><span class="label">API token</span>
               <div class="row"><button class="btn btn-sm" id="tokenChange" type="button">Change token</button><span class="hint">Stored in this browser only.</span></div></div>
             <div class="field"><span class="label">Keyboard</span>
-              <span class="hint"><span class="kbd">⌘/Ctrl ↵</span> generate · <span class="kbd">Esc</span> close panels · <span class="kbd">/</span> search library</span></div>
+              <span class="hint"><span class="kbd">⌘/Ctrl ↵</span> generate · <span class="kbd">Esc</span> close panels · <span class="kbd">/</span> search library · <span class="kbd">[</span> collapse sidebar</span></div>
           </div>
         </section>
         <section class="card span-all">
@@ -1398,6 +1432,27 @@
     const order = ["system", "light", "dark"];
     applyTheme(order[(order.indexOf($("themeSelect").value) + 1) % order.length]);
   };
+
+  function applySidebar(mode) {
+    const collapsed = mode === "collapsed";
+    if (collapsed) document.documentElement.dataset.sidebar = "collapsed";
+    else delete document.documentElement.dataset.sidebar;
+    const toggle = $("sidebarToggle");
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+    $("sidebarToggleLabel").textContent = collapsed ? "Expand" : "Collapse";
+    // The labels stay in the DOM when collapsed (hidden the .sr-only way) so a screen reader still
+    // reads them; this is how a sighted user gets the name back, on hover. Taking the text from the
+    // span it is replacing means the label is never written down twice and so cannot drift.
+    for (const item of document.querySelectorAll("#sidebarNav .nav-item")) {
+      const label = item.querySelector("span:not(.nav-count)");
+      if (collapsed && label) item.title = label.textContent.trim();
+      else item.removeAttribute("title");
+    }
+    storage.set("hawkH3Sidebar", collapsed ? "collapsed" : "expanded");
+  }
+  $("sidebarToggle").onclick = () =>
+    applySidebar(document.documentElement.dataset.sidebar === "collapsed" ? "expanded" : "collapsed");
 
   // --------------------------------------------------------------- router
 
@@ -1985,6 +2040,9 @@
       closeDrawer(); toggleTemplates(false);
     } else if (event.key === "/" && !$("page-library").hidden && !/input|textarea|select/i.test(document.activeElement.tagName)) {
       event.preventDefault(); $("jobSearch").focus();
+    } else if (event.key === "[" && !/input|textarea|select/i.test(document.activeElement.tagName)
+               && !document.activeElement.isContentEditable) {
+      event.preventDefault(); $("sidebarToggle").click();
     }
   });
 
@@ -4627,6 +4685,7 @@
   // ---------------------------------------------------------------- start
 
   applyTheme(storage.get("hawkH3Theme") || "system");
+  applySidebar(storage.get("hawkH3Sidebar") || "expanded");
   $("helpLink").href = `${location.origin}/docs`;
   $("aspect").innerHTML = FALLBACK_ASPECTS.map((a) => `<option ${a === (draft.aspect || "16:9") ? "selected" : ""}>${esc(a)}</option>`).join("");
   restoreDraft();
