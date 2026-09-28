@@ -13,7 +13,8 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from test_agent import DEEPSEEK, MODELS, AgentHarness, tiny_png  # noqa: E402  (fixtures, reused not copied)
+from test_agent import (DEEPSEEK, MODELS, AgentHarness,  # noqa: E402  (fixtures, reused not copied)
+                        speaking_character, tiny_png)
 
 PROSE = "deepseek-ai/deepseek-v4.1-flash"
 
@@ -23,7 +24,7 @@ class TwoModelsOneChat(AgentHarness):
 
     def character_calls(self, model: str | None = None) -> list[dict]:
         calls = [r for r in self.atlas.requests
-                 if re.match(r"You are (\w|\s)+, one of the characters", str(r["messages"][0]["content"]))]
+                 if speaking_character(r)]
         return [c for c in calls if model is None or c["model"] == model]
 
     async def talk_once(self, chat: str) -> None:
@@ -40,7 +41,7 @@ class TwoModelsOneChat(AgentHarness):
         self.assertEqual(chat["prose_model"], PROSE, "the chat should remember the model its characters speak with")
 
         def reply(body):
-            if re.match(r"You are (\w|\s)+, one of the characters", str(body["messages"][0]["content"])):
+            if speaking_character(body):
                 return json.dumps({"say": "arre wah", "to": "all"})
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
@@ -67,7 +68,7 @@ class TwoModelsOneChat(AgentHarness):
         self.assertEqual(chat.get("prose_model", ""), "", "a chat with no prose model of its own is the default")
 
         def reply(body):
-            if re.match(r"You are (\w|\s)+, one of the characters", str(body["messages"][0]["content"])):
+            if speaking_character(body):
                 return json.dumps({"say": "theek hai", "to": "all"})
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
@@ -84,7 +85,7 @@ class TwoModelsOneChat(AgentHarness):
             "prose_model": PROSE})).json()
 
         def reply(body):
-            if re.match(r"You are (\w|\s)+, one of the characters", str(body["messages"][0]["content"])):
+            if speaking_character(body):
                 return "Maya: yaar, main aa rahi hoon."   # prose, no JSON anywhere
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
@@ -103,7 +104,7 @@ class TwoModelsOneChat(AgentHarness):
             "prose_model": PROSE})).json()
 
         def reply(body):
-            if re.match(r"You are (\w|\s)+, one of the characters", str(body["messages"][0]["content"])):
+            if speaking_character(body):
                 # The prose model never manages it; the director's model does.
                 return "{{ not json" if body["model"] == PROSE else json.dumps({"say": "ho gaya", "to": "all"})
             return json.dumps({"say": "Done.", "actions": [], "done": True})
@@ -221,6 +222,28 @@ class ACacheablePrefix(AgentHarness):
                            "recall must sit below the history, or a turn that changes it re-reads every "
                            "message above it at full price")
         self.assertEqual(sent[0]["role"], "system", "the stable instruction block still comes first")
+
+    async def test_two_characters_speaking_in_turn_share_a_cacheable_prefix(self):
+        """The group-chat cache hole, measured on the pod: group chats cached at 21-55% where single-persona
+        chats reached 88-91%, and the group chats are the expensive ones. A character turn began "You are
+        {name}", so two characters alternating shared no leading bytes and nothing could ever match."""
+        chat = (await self.http.post("/v1/agent/sessions", json={
+            "cast": [{"name": "Riya", "persona": "a blunt director"},
+                     {"name": "Tiya", "persona": "a dreamy stylist"}]})).json()["id"]
+        self.atlas.reply = lambda body: json.dumps({"say": "haan", "to": "all"})
+        await self.http.post(f"/v1/agent/sessions/{chat}/talk", json={"rounds": 1})
+        await self.settle(chat)
+
+        turns = [r for r in self.atlas.requests if speaking_character(r)]
+        self.assertEqual(len({speaking_character(r) for r in turns}), 2, "both characters should have spoken")
+        first = {r["messages"][0]["content"] for r in turns}
+        self.assertEqual(len(first), 1,
+                         "every character's turn must open with byte-identical rules, or no prefix can cache")
+        self.assertNotIn("Riya", first.pop(), "a name in the shared block would make it per-character again")
+        for request in turns:
+            self.assertEqual(request["messages"][-1]["role"], "system")
+            self.assertIn("YOU ARE", request["messages"][-1]["content"],
+                          "who you are belongs below the conversation, where it invalidates only itself")
 
     async def test_a_compaction_does_not_shrink_the_tool_catalogue(self):
         # _tools_in_use used to read only the messages after the summary watermark, so compacting a chat took a

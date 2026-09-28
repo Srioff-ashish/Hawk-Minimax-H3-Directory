@@ -117,6 +117,20 @@ def tool_result_text(content: str, tool: str) -> str:
     return match.group(1)
 
 
+def speaking_character(body: dict) -> str | None:
+    """The character whose turn a recorded call is, or None when it is not a character turn.
+
+    Not messages[0]: the rules shared by every character lead the prompt so that they cache, and who you are
+    is sent below the conversation. Two characters speaking in turn used to share no leading bytes at all,
+    and on the pod group chats cached at 21-55% against 88-91% for single-persona ones.
+    """
+    system = "\n".join(str(m["content"]) for m in body.get("messages") or [] if m["role"] == "system")
+    if "one of the characters in a group chat" not in system:
+        return None
+    found = re.search(r"^YOU ARE (.+)$", system, re.MULTILINE)
+    return found.group(1).strip() if found else None
+
+
 def last_user(body: dict) -> str:
     """The newest user turn in a prompt.
 
@@ -261,8 +275,10 @@ class AgentApi(AgentHarness):
         self.assertTrue(options["planner_models"][0]["vision"])
         # The planner leads with 4.6: 4.3 writes markedly weaker film plans and is the fallback, not the default.
         self.assertEqual((options["default_planner_model"], options["default_agent_model"]), ("xai/grok-4.6", "xai/grok-4.6"))
-        self.assertEqual(options["model_chains"]["planner"], "xai/grok-4.6, xai/grok-4.3",
+        self.assertEqual(options["model_chains"]["planner"], "deepseek/deepseek-v4-pro, xai/grok-4.6, xai/grok-4.3",
                          "the configured chain is returned beside the resolved id, because that is what the field holds")
+        self.assertEqual(options["default_planner_model"], "xai/grok-4.6",
+                         "this provider does not serve the cheaper lead, so the chain falls through to grok")
         await self.planner_system_message({"story": "A walk", "model": "xai/grok-4.6"})
         planner_call = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])][-1]
         self.assertEqual(planner_call["model"], "xai/grok-4.6",
@@ -542,7 +558,7 @@ class AgentApi(AgentHarness):
 
         def reply(body):
             system = body["messages"][0]["content"]
-            who = re.match(r"You are (\w+), one of the characters", system).group(1)
+            who = speaking_character(body)
             speakers.append(who)
             expected, say = next(script)
             self.assertEqual(who, expected, "the named character speaks next, else whoever waited longest")
@@ -560,8 +576,12 @@ class AgentApi(AgentHarness):
         last = self.atlas.requests[-1]["messages"]
         self.assertNotIn("You are Hawk", last[0]["content"], "a character turn has no director prompt")
         self.assertNotIn("render_film", last[0]["content"], "and no tool catalogue")
-        self.assertIn("Maya: Dekha?", last[1]["content"])
-        self.assertIn("It's your turn, Riya", last[1]["content"])
+        self.assertIn("Maya: Dekha?", last[1]["content"], "the conversation is the middle message")
+        # Who is speaking is the last message, below the conversation: the rules above it are identical for
+        # every character in the chat, which is what lets two characters share a cached prefix at all.
+        self.assertEqual(speaking_character(self.atlas.requests[-1]), "Riya")
+        self.assertIn("It is your turn, Riya", last[-1]["content"])
+        self.assertEqual(last[-1]["role"], "system")
         self.assertEqual(view["session"]["status"], "idle")
 
     async def test_setting_up_a_cast_in_a_fresh_chat(self):
@@ -593,7 +613,8 @@ class AgentApi(AgentHarness):
         spoken = []
 
         def reply(body):
-            who = re.match(r"You are (\w+)", body["messages"][0]["content"]).group(1)
+            # First name only: "Sonia Mausi" is chosen by being named as "Sonia", which is the point here.
+            who = (speaking_character(body) or "").split()[0]
             spoken.append(who)
             say = {"Nisha": "Ananya, tum batao.", "Ananya": "Sonia ka gym body alag hai, beta decide karo.", "Sonia": "Main hi jeetungi."}[who]
             return json.dumps({"say": say, "to": "all", "pause": True})  # every turn tries to hand back to the user
@@ -643,10 +664,10 @@ class AgentApi(AgentHarness):
 
         def reply(body):
             system = body["messages"][0]["content"]
-            character = re.match(r"You are (\w+), one of the characters", system)
+            character = speaking_character(body)
             if character:
                 who, turn = next(turns)
-                self.assertEqual(character.group(1), who)
+                self.assertEqual(character, who)
                 prompts.setdefault(who, []).append(body["messages"])
                 return json.dumps(turn)
             if system.startswith("You are Hawk"):
@@ -668,9 +689,11 @@ class AgentApi(AgentHarness):
         grows = [m["content"] for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "grow"]
         self.assertEqual([(g["speaker"], g.get("about")) for g in grows], [("Maya", "Riya"), ("Maya", "the user")])
 
-        riya_prompt = prompts["Riya"][0][0]["content"]
-        self.assertNotIn("Tired of Riya", riya_prompt, "Maya's feelings are private to Maya")
-        self.assertIn("Tired of Riya", prompts["Maya"][1][0]["content"], "Maya keeps her own feelings")
+        # The whole prompt, not one message of it: a privacy check that looked at a single index would pass
+        # simply because the private block had moved somewhere else.
+        whole = lambda msgs: "\n".join(str(m["content"]) for m in msgs)
+        self.assertNotIn("Tired of Riya", whole(prompts["Riya"][0]), "Maya's feelings are private to Maya")
+        self.assertIn("Tired of Riya", whole(prompts["Maya"][1]), "Maya keeps her own feelings")
 
         kinds = [(m["role"], m["content"].get("kind") or m["content"].get("tool")) for m in view["messages"] if m["role"] in ("note", "tool")]
         self.assertIn(("note", "make"), kinds)

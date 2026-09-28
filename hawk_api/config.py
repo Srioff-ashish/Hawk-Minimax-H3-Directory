@@ -186,20 +186,29 @@ class Settings:
     link_ttl_seconds: int = 7 * 24 * 3600
     lora_cache_seconds: float = 60.0
     reconcile_seconds: float = 30.0
-    #: Comma-separated, best first: the second id is what runs when the provider in force does not serve the
-    #: first. grok-4.3 leads to noticeably weaker film plans, so it is the fallback rather than the default.
-    planner_model: str = "xai/grok-4.6, xai/grok-4.3"
+    #: Comma-separated, best first: the later ids run when the provider in force does not serve the earlier
+    #: ones. A plan is 7-9k *output* tokens, which is where its cost is, so the cheaper model leads and grok
+    #: stays as the rung to fall back on. grok-4.3 is last because it writes noticeably weaker plans.
+    planner_model: str = "deepseek/deepseek-v4-pro, xai/grok-4.6, xai/grok-4.3"
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     openrouter_api_key: str = ""
-    agent_model: str = "xai/grok-4.6, xai/grok-4.3"
-    #: The characters' voices. The same chain as agent_model on purpose: turning the prose split on must not
-    #: by itself change how any existing chat sounds. An uncensored chain is something to opt into.
-    agent_prose_model: str = "xai/grok-4.6, xai/grok-4.3"
-    #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense.
-    agent_summary_model: str = "deepseek-ai/deepseek-v4.1-flash, xai/grok-4.3"
-    #: Looks at images for inspect_image, when the chat's own model cannot see.
-    agent_vision_model: str = "xai/grok-4.6, google/gemini-pro-1.5"
+    #: Measured on a live pod: grok-4.6 bills $2.00/M in and $6.00/M out against deepseek-v4-pro's $0.955 and
+    #: $1.911, and the director re-sends the whole prompt on every step of a chain, so this one setting moves
+    #: the bill more than anything else here. deepseek-v4-pro drove a full generate -> inspect -> report chain
+    #: correctly on that pod; grok stays behind it for anyone who wants it back.
+    agent_model: str = "deepseek/deepseek-v4-pro, x-ai/grok-4.6, xai/grok-4.3"
+    #: The characters' voices. The same chain as agent_model on purpose: turning the prose split on must not by
+    #: itself change how any existing chat sounds. An uncensored prose model is something to opt into -- and
+    #: note that magnum-v4-72b bills its cached tokens at full price, so on a group chat, where nearly every
+    #: token is a re-sent prompt, it costs more than grok-4.6 does.
+    agent_prose_model: str = "deepseek/deepseek-v4-pro, x-ai/grok-4.6, xai/grok-4.3"
+    #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense. Its cached
+    #: tokens bill at $0.001/M, which is what makes compaction almost free.
+    agent_summary_model: str = "deepseek/deepseek-v4.1-flash, deepseek-ai/deepseek-v4.1-flash, xai/grok-4.3"
+    #: Looks at images for inspect_image when the chat's own model cannot see. Inspection sends pictures, so it
+    #: is token-heavy: a model built for vision at $0.104/M beats a general one at $2.00/M.
+    agent_vision_model: str = "qwen/qwen3-vl-32b-instruct, x-ai/grok-4.6, xai/grok-4.6, google/gemini-pro-1.5"
     #: Summarise older messages once the conversation sent with each call passes this many tokens (estimated).
     agent_compact_tokens: int = 20_000
     #: Messages kept word for word after an automatic summary.

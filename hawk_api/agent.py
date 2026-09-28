@@ -1502,29 +1502,32 @@ class AgentService:
         feelings = clean_feelings(member.get("feelings"))
         feeling_lines = [f"- About {self._about_name(cast, key)}: " + " ".join(notes) for key, notes in feelings.items()]
         grown = self._growth_text(member).replace("they have", "you have")
-        prompt = cast_talk.CHARACTER_TURN_PROMPT.format(
-            name=name,
-            persona=member.get("persona") or f"{name}, a character in this chat.",
-            growth=f"\n{grown}" if grown else "",
-            others=others,
-            listening=" They are listening to you talk right now and may join in.",
-            feelings="\n".join(feeling_lines) or "(none yet)",
-            # Recall sits in the {memory} region rather than in WHO YOU ARE: it changes every turn, and the
-            # character prompt's own persona block is the part worth keeping stable.
-            memory="\n\n".join(part for part in (
-                member.get("memory") or "",
-                self._recall_text(session, member["id"], self._recent_text(session)),
-            ) if part) or "(nothing older: everything is in the conversation below)",
+        # Identical for every character in this chat and every turn of it, so it leads and stays cached.
+        rules = cast_talk.CHARACTER_RULES_PROMPT.format(
             words=cast_talk.TURN_WORDS,
             adaptive=cast_talk.ADAPTIVE_TURN if session.get("adaptive") else "",
             make_field=', "make": "optional", "act": "selfie|snap|share|group_shot", "of": ["names"]',
             grow_field=', "grow": []' if session.get("adaptive") else "",
             rules=PLATFORM_RULES,
         )
+        # Who this one is, sent below the conversation: it is what differs between one character and the next,
+        # and recall changes it every turn on top of that.
+        self_text = cast_talk.CHARACTER_SELF_PROMPT.format(
+            name=name,
+            persona=member.get("persona") or f"{name}, a character in this chat.",
+            growth=f"\n{grown}" if grown else "",
+            others=others,
+            listening=" They are listening to you talk right now and may join in.",
+            feelings="\n".join(feeling_lines) or "(none yet)",
+            memory="\n\n".join(part for part in (
+                member.get("memory") or "",
+                self._recall_text(session, member["id"], self._recent_text(session)),
+            ) if part) or "(nothing older: everything is in the conversation below)",
+        )
         transcript = self._transcript(session, member["id"], names)
-        messages = [{"role": "system", "content": prompt},
-                    {"role": "user", "content": f"THE CONVERSATION SO FAR (most recent last):\n{transcript or '(nothing yet)'}\n\n"
-                                                f"(It's your turn, {name}. Reply with the JSON only.)"}]
+        messages = [{"role": "system", "content": rules},
+                    {"role": "user", "content": f"THE CONVERSATION SO FAR (most recent last):\n{transcript or '(nothing yet)'}"},
+                    {"role": "system", "content": self_text}]
         def record(turn: dict, call: dict | None) -> dict:
             line = {"speaker": name, "say": turn["say"]}
             if turn.get("to"):
