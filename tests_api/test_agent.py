@@ -117,6 +117,16 @@ def tool_result_text(content: str, tool: str) -> str:
     return match.group(1)
 
 
+def last_user(body: dict) -> str:
+    """The newest user turn in a prompt.
+
+    Not messages[-1]: the volatile block (character state and recalled facts) is sent below the history, so
+    that a turn which changes it re-reads only itself instead of the whole conversation. On the pod that was
+    the difference between a 98% and a 1% cached prompt.
+    """
+    return next((str(m["content"]) for m in reversed(body.get("messages") or []) if m["role"] == "user"), "")
+
+
 def is_summary(body: dict) -> bool:
     """Whether a recorded call is one of the two summarisers rather than a director or character turn.
 
@@ -301,7 +311,7 @@ class AgentApi(AgentHarness):
         self.assertIn("Bollywood ad-film director", system)
         for tool in ("render_film", "plan_film", "list_options", "wait_for_job"):
             self.assertIn(f"- {tool}:", system)
-        self.assertIn(f"Attached assets: {asset}", first["messages"][-1]["content"])
+        self.assertIn(f"Attached assets: {asset}", last_user(first))
 
         later = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"after": messages[-2]["id"]})).json()
         self.assertEqual(len(later["messages"]), 1)
@@ -338,7 +348,7 @@ class AgentApi(AgentHarness):
         chat = await self.new_chat()
         await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Which LoRAs can you use?"})
         await self.settle(chat)
-        last = self.atlas.requests[-1]["messages"][-1]["content"]
+        last = last_user(self.atlas.requests[-1])
         for tool in ("list_options", "list_loras"):
             self.assertIn("extra/style-alpha-minimax-h3.safetensors", tool_result_text(last, tool), tool)
         self.assertIn("- list_loras:", self.atlas.requests[0]["messages"][0]["content"])
@@ -598,7 +608,7 @@ class AgentApi(AgentHarness):
         chat = (await self.http.post("/v1/agent/sessions", json={"cast": cast})).json()["id"]
 
         def reply(body):
-            last = body["messages"][-1]["content"]
+            last = last_user(body)
             if "USER: Main bhi hoon" in last:
                 return json.dumps({"lines": [{"speaker": "Riya", "say": "Aao aao!"}], "actions": [], "done": True})
             return json.dumps({"say": "chit chat", "to": "all"})
@@ -640,7 +650,7 @@ class AgentApi(AgentHarness):
                 prompts.setdefault(who, []).append(body["messages"])
                 return json.dumps(turn)
             if system.startswith("You are Hawk"):
-                last = body["messages"][-1]["content"]
+                last = last_user(body)
                 if "STAGE DIRECTION" in last and "TOOL RESULT" not in last:
                     return json.dumps({"say": "", "actions": [{"tool": "generate_image", "by": "Riya", "args": {"prompt": "Maya in emerald"}}]})
                 if "whispering privately to Maya" in last:

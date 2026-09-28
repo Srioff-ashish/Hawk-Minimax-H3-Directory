@@ -196,6 +196,32 @@ class ACacheablePrefix(AgentHarness):
         self.assertIn("Calls the user boss now.", "\n".join(second),
                       "and the note must still reach the model, below the prefix")
 
+    async def test_the_volatile_block_is_sent_below_the_history(self):
+        """Measured on the pod, and the reason this test exists: a prompt cache matches the longest identical
+        prefix and re-reads from the first byte that differs. With the character state and recalled facts sent
+        between the summary and the history, a turn that changed them re-read the whole conversation -- the
+        cached share alternated between 98% and 1%. Below the history they invalidate only themselves."""
+        chat = (await self.http.post("/v1/agent/sessions", json={
+            "cast": [{"name": "Riya", "persona": "director"}, {"name": "Tiya", "persona": "stylist"}],
+            "adaptive": True})).json()["id"]
+        session = self.agent.get_session(chat)
+        self.agent._seed_graph(session)
+        session = self.agent.get_session(chat)
+        self.agent._write_fact(session, "", "Riya", "knows_about", "the rooftop", "Riya scouted the rooftop.", 1.0, 1)
+
+        self.atlas.reply = lambda body: json.dumps({"lines": [{"speaker": "Riya", "say": "ok"}], "actions": [], "done": True})
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Riya, rooftop ready?"})
+        await self.settle(chat)
+
+        sent = self.atlas.requests[-1]["messages"]
+        recalled = [i for i, m in enumerate(sent) if "Riya scouted the rooftop." in str(m["content"])]
+        self.assertTrue(recalled, "the fact should have been recalled at all")
+        last_user_at = max(i for i, m in enumerate(sent) if m["role"] == "user")
+        self.assertGreater(recalled[0], last_user_at,
+                           "recall must sit below the history, or a turn that changes it re-reads every "
+                           "message above it at full price")
+        self.assertEqual(sent[0]["role"], "system", "the stable instruction block still comes first")
+
     async def test_a_compaction_does_not_shrink_the_tool_catalogue(self):
         # _tools_in_use used to read only the messages after the summary watermark, so compacting a chat took a
         # tool's schema back out of the catalogue: the prefix shrank, and the agent was told to ask once.

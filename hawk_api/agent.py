@@ -2446,20 +2446,25 @@ class AgentService:
                 "Never reply with \"say\" here: every spoken word belongs to a named character, and a reply with no "
                 "\"lines\" reaches the user with no name on it."
             )
-        # The order is the whole point: [0] never changes between calls, [1] changes only at a compaction, [2]
-        # changes every turn. Each one sits below everything more stable than it, so the cached prefix survives.
+        # The order is the whole point, and it is decided by how a prompt cache actually works: a provider
+        # matches the longest identical *prefix* and re-reads everything from the first byte that differs. So
+        # the stable instruction block comes first, then the summary (which changes only at a compaction), then
+        # the history, which only ever grows -- each call extends the last one and the whole thing stays warm.
+        #
+        # The volatile block goes LAST, below the history, not between the summary and it. Measured on the pod:
+        # with it above the history, a turn that changed it re-read the entire conversation and the cached share
+        # fell from 98% to 1%. Below the history it invalidates only itself, and being last also puts the facts
+        # nearest the model's attention, which is where recall wants to be anyway.
         messages = [{"role": "system", "content": system}]
         if session.get("summary"):
             messages.append({"role": "system", "content": f"SUMMARY OF THE EARLIER CONVERSATION:\n{session['summary']}"})
-        state = self._state_text(session)
-        recall = self._recall_text(session, "", self._recent_text(session))
-        block = "\n\n".join(part for part in (state, recall) if part)
-        if block:
-            messages.append({"role": "system", "content": block})
         history = self._history_messages(session)
         if history and history[0]["role"] == "assistant":
             history.insert(0, {"role": "user", "content": "(continuing the conversation)"})
-        return messages + history
+        state = self._state_text(session)
+        recall = self._recall_text(session, "", self._recent_text(session))
+        tail = "\n\n".join(part for part in (state, recall) if part)
+        return messages + history + ([{"role": "system", "content": tail}] if tail else [])
 
     async def _maybe_summarize(self, session: dict, force: bool = False) -> bool:
         """Fold older messages into the chat's summary with one call to the cheap summary model: automatically once the
