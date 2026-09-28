@@ -531,6 +531,8 @@
     .summary { position: static; }
   }
   @media (max-width: 860px) {
+    /* Two columns of form fields at phone width squeezes both into something neither fits in. */
+    .grid-2, .grid-3 { grid-template-columns: minmax(0, 1fr); }
     .app { grid-template-columns: minmax(0, 1fr); }
     .sidebar { position: sticky; top: 0; z-index: 30; height: auto; flex-direction: row; align-items: center; gap: 2px; padding: 8px 10px; overflow-x: auto;
                border-right: 0; border-bottom: 1px solid var(--line); }
@@ -991,19 +993,40 @@
               <span class="hint"><span class="kbd">⌘/Ctrl ↵</span> generate · <span class="kbd">Esc</span> close panels · <span class="kbd">/</span> search library</span></div>
           </div>
         </section>
-        <section class="card">
+        <section class="card span-all">
           <div class="card-head"><h2>LLM Routing</h2></div>
           <div class="card-body" style="display:grid;gap:14px">
             <span class="hint">Configure the LLM provider for planning and agent chats.</span>
-            <div class="field"><label class="label" for="llmProvider">Provider</label>
-              <select class="select" id="llmProvider"><option value="atlas">Atlas (Default)</option><option value="openrouter">OpenRouter / Custom</option></select>
-            </div>
-            <div class="field"><label class="label" for="llmAtlasKey">Atlas API Key</label>
-              <div class="row"><input class="input mono" id="llmAtlasKey" type="password" placeholder="not set">
-                <button class="btn btn-sm" type="button" id="llmAtlasKeyForget" hidden>Forget</button></div>
-            </div>
-            <div class="field"><label class="label" for="llmOpenrouterUrl">OpenRouter URL</label>
-              <input class="input mono" id="llmOpenrouterUrl" placeholder="https://openrouter.ai/api/v1">
+            <div class="grid grid-2">
+              <div class="field"><label class="label" for="llmProvider">Provider</label>
+                <select class="select" id="llmProvider"><option value="atlas">Atlas (Default)</option><option value="openrouter">OpenRouter / Custom</option></select>
+              </div>
+              <div class="field"><label class="label" for="llmOpenrouterUrl">OpenRouter URL</label>
+                <input class="input mono" id="llmOpenrouterUrl" placeholder="https://openrouter.ai/api/v1">
+              </div>
+              <div class="field"><label class="label" for="llmAtlasKey">Atlas API Key</label>
+                <div class="row"><input class="input mono" id="llmAtlasKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
+                  <button class="btn btn-sm" type="button" id="llmAtlasKeyForget" hidden>Forget</button></div>
+              </div>
+              <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
+                <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
+                  <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
+              </div>
+              <div class="field span-all"><label class="label" for="llmRouting">OpenRouter routing</label>
+                <select class="select" id="llmRouting">
+                  <option value="sticky">Sticky — one service per model, so a cached prompt stays warm</option>
+                  <option value="balanced">Balanced — cheapest of the bf16/fp16/fp8 services</option>
+                  <option value="quality">Quality — bf16/fp16 only</option>
+                  <option value="cheapest">Cheapest — any weight, including int4</option>
+                  <option value="fastest">Fastest — highest throughput, bf16/fp16/fp8</option>
+                  <option value="default">OpenRouter default — no filtering</option>
+                </select>
+                <span class="hint">One model id on OpenRouter is served by many companies at different prices and
+                  different weights. An int4 copy is a visibly worse model than the bf16 copy of the same id, so
+                  without this two identical calls can come back at two qualities. A prompt cache belongs to one
+                  service, so anything that moves calls between them — Balanced and Cheapest both do — throws the
+                  warm prefix away and re-reads the whole instruction block at full price. Ignored on Atlas.</span>
+              </div>
             </div>
             <datalist id="llmModelList">
               <option value="anthracite-org/magnum-v4-72b">
@@ -1021,54 +1044,37 @@
               <option value="google/gemini-pro-1.5">
               <option value="meta-llama/llama-3-8b-instruct:free">
             </datalist>
-            <div class="field"><label class="label" for="llmRouting">OpenRouter routing</label>
-              <select class="select" id="llmRouting">
-                <option value="sticky">Sticky \u2014 one service per model, so a cached prompt stays warm</option>
-                <option value="balanced">Balanced \u2014 cheapest of the bf16/fp16/fp8 services</option>
-                <option value="quality">Quality \u2014 bf16/fp16 only</option>
-                <option value="cheapest">Cheapest \u2014 any weight, including int4</option>
-                <option value="fastest">Fastest \u2014 highest throughput, bf16/fp16/fp8</option>
-                <option value="default">OpenRouter default \u2014 no filtering</option>
-              </select>
-              <span class="hint">One model id on OpenRouter is served by many companies at different prices and
-                different weights. An int4 copy is a visibly worse model than the bf16 copy of the same id, so
-                without this two identical calls can come back at two qualities. A prompt cache belongs to one
-                service, so anything that moves calls between them — Balanced and Cheapest both do — throws the
-                warm prefix away and re-reads the whole instruction block at full price. Ignored on Atlas.</span>
-            </div>
-            <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
-              <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set">
-                <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
-            </div>
             <span class="hint">Every box below takes <b>one id or a comma-separated list, best first</b>. A model id
               belongs to a provider, so the later ids are what run when the provider in force does not serve the
               earlier ones — that is how one setting works on both Atlas and OpenRouter. What each role will
               actually send is shown under its box.</span>
-            <div class="field"><label class="label" for="llmPlannerModel">Planner Model — writes the film's segment script</label>
-              <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">
-              <span class="hint" id="llmPlannerResolved"></span>
-            </div>
-            <div class="field"><label class="label" for="llmAgentModel">Director Model — tools, orchestration, image and video prompts</label>
-              <input class="input mono" id="llmAgentModel" list="llmModelList" placeholder="Leave empty for default">
-              <span class="hint" id="llmDirectorResolved"></span>
-            </div>
-            <div class="field"><label class="label" for="llmProseModel">Prose Model — the characters' voices</label>
-              <div class="row"><input class="input mono" id="llmProseModel" list="llmModelList" placeholder="Leave empty to use the chat's own model">
-                <button class="btn btn-sm" type="button" id="llmProseUncensored">Uncensored</button></div>
-              <span class="hint">Must be able to reply with a JSON object; one that will not is retried on the
-                Director's model, and failing that its reply is read as plain speech. Community finetunes are
-                OpenRouter-only, so put a model Atlas serves after it and the same setting works on both.</span>
-              <span class="hint" id="llmProseResolved"></span>
-            </div>
-            <div class="field"><label class="label" for="llmSummaryModel">Summary Model — compaction and per-character memory</label>
-              <input class="input mono" id="llmSummaryModel" list="llmModelList" placeholder="Leave empty for default">
-              <span class="hint" id="llmSummaryResolved"></span>
-            </div>
-            <div class="field"><label class="label" for="llmVisionModel">Vision Model — looks at generated images</label>
-              <input class="input mono" id="llmVisionModel" list="llmModelList" placeholder="Leave empty for default">
-              <span class="hint">Used when the chat's own model cannot see, which is every chat on a text-only
-                prose model. Only models the provider lists as accepting images are tried.</span>
-              <span class="hint" id="llmVisionResolved"></span>
+            <div class="grid grid-2">
+              <div class="field"><label class="label" for="llmPlannerModel">Planner Model — writes the film's segment script</label>
+                <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">
+                <span class="hint" id="llmPlannerResolved"></span>
+              </div>
+              <div class="field"><label class="label" for="llmAgentModel">Director Model — tools, orchestration, image and video prompts</label>
+                <input class="input mono" id="llmAgentModel" list="llmModelList" placeholder="Leave empty for default">
+                <span class="hint" id="llmDirectorResolved"></span>
+              </div>
+              <div class="field"><label class="label" for="llmProseModel">Prose Model — the characters' voices</label>
+                <div class="row"><input class="input mono" id="llmProseModel" list="llmModelList" placeholder="Leave empty to use the chat's own model" style="flex:1;min-width:160px">
+                  <button class="btn btn-sm" type="button" id="llmProseUncensored">Uncensored</button></div>
+                <span class="hint">Must be able to reply with a JSON object; one that will not is retried on the
+                  Director's model, and failing that its reply is read as plain speech. Community finetunes are
+                  OpenRouter-only, so put a model Atlas serves after it and the same setting works on both.</span>
+                <span class="hint" id="llmProseResolved"></span>
+              </div>
+              <div class="field"><label class="label" for="llmSummaryModel">Summary Model — compaction and per-character memory</label>
+                <input class="input mono" id="llmSummaryModel" list="llmModelList" placeholder="Leave empty for default">
+                <span class="hint" id="llmSummaryResolved"></span>
+              </div>
+              <div class="field"><label class="label" for="llmVisionModel">Vision Model — looks at generated images</label>
+                <input class="input mono" id="llmVisionModel" list="llmModelList" placeholder="Leave empty for default">
+                <span class="hint">Used when the chat's own model cannot see, which is every chat on a text-only
+                  prose model. Only models the provider lists as accepting images are tried.</span>
+                <span class="hint" id="llmVisionResolved"></span>
+              </div>
             </div>
             <div class="row"><button class="btn btn-sm btn-primary" id="llmSave" type="button">Save</button><span class="hint" id="llmHint"></span></div>
           </div>
