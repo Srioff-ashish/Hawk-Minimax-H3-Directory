@@ -97,6 +97,28 @@ class TwoModelsOneChat(AgentHarness):
         self.assertNotIn("Maya:", spoken[0]["lines"][0]["say"],
                          "the speaker's own name is a prefix, not part of the line")
 
+    async def test_an_empty_reply_from_the_prose_model_does_not_end_the_talk(self):
+        """Seen on the pod: deepseek-v4-pro returned one empty message and the whole talk stopped. The reply
+        never reached the parsing fallbacks, because an empty message is raised as a provider error inside the
+        chat call and escaped the loop entirely."""
+        chat = (await self.http.post("/v1/agent/sessions", json={
+            "cast": [{"name": "Riya", "persona": "director"}, {"name": "Tiya", "persona": "stylist"}],
+            "prose_model": PROSE})).json()["id"]
+        tries = iter([""])   # the first attempt comes back empty, the next one is fine
+
+        def reply(body):
+            if speaking_character(body):
+                return next(tries, json.dumps({"say": "ho gaya", "to": "all"}))
+            return json.dumps({"say": "Done.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        await self.talk_once(chat)
+        view = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()
+        spoken = [m for m in view["messages"] if m["role"] == "assistant" and m["content"].get("talk")]
+        self.assertTrue(spoken, "one empty reply should be retried, not end the conversation")
+        errors = [m for m in view["messages"] if m["role"] == "note" and m["content"].get("kind") == "error"]
+        self.assertEqual(errors, [], "and it should not be reported to the user as a failure")
+
     async def test_a_prose_model_that_fails_is_retried_on_the_directors_model(self):
         chat = (await self.http.post("/v1/agent/sessions", json={
             "cast": [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}],

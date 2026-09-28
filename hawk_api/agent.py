@@ -1542,16 +1542,26 @@ class AgentService:
         # JSON to drive the tools at all.
         prose = await self.model_for("prose", session)
         director = await self.model_for("director", session)
-        attempts = [prose, prose] + ([director] if director != prose else [])
-        text, call = "", None
+        attempts = [prose, prose, director if director != prose else prose]
+        text, call, failure = "", None, None
         for model in attempts:
-            text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
+            try:
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
+            except AtlasError as exc:
+                # A refusal, a rate limit, or an empty reply -- deepseek-v4-pro returned one on the pod and it
+                # ended the whole talk, because the error escaped before any of the parsing fallbacks below
+                # could run. A model that says nothing once usually says something on the next attempt.
+                log.warning("character turn with %s failed: %s", model, exc)
+                failure = exc
+                continue
             call = await self._add_usage(session_id, model, usage)
             turn = cast_talk.parse_turn(text)
             if turn is not None:
                 return record(turn, call)
             messages.append({"role": "assistant", "content": text[:2000]})
             messages.append({"role": "user", "content": 'Reply with only the JSON object: {"say": "...", "to": "..."}'})
+        if failure is not None and not text:
+            raise failure
         # Both strict attempts are spent. Read the last reply as plain speech rather than dropping the turn:
         # a character that says nothing looks to the user exactly like a broken chat.
         salvaged = cast_talk.spoken_anyway(text, names)
