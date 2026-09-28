@@ -93,10 +93,15 @@ class LLMSettings:
     openrouter_api_key: str = ""
     #: Which of atlas.ROUTING decides between the services serving one OpenRouter model id. Ignored on
     #: Atlas, which serves its own models and has nothing to choose between.
-    openrouter_routing: str = "balanced"
+    openrouter_routing: str = "sticky"
     planner_model_override: str = ""
     agent_model_override: str = ""
     agent_summary_model_override: str = ""
+    #: The characters' voices, kept apart from the director's tool-calling. Blank means "whatever the chat's
+    #: own model is", which is how every chat behaved before the split.
+    agent_prose_model_override: str = ""
+    #: Which model looks at an image. Was a hardcoded pair of Atlas ids that 404ed on any other provider.
+    agent_vision_model_override: str = ""
 
 
 class LLMSettingsStore:
@@ -112,7 +117,7 @@ class LLMSettingsStore:
 
     FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key",
               "openrouter_routing", "planner_model_override", "agent_model_override",
-              "agent_summary_model_override")
+              "agent_summary_model_override", "agent_prose_model_override", "agent_vision_model_override")
     #: Written but never read back out: a key is set or replaced, not displayed or round-tripped.
     SECRETS = ("atlas_api_key_override", "openrouter_api_key")
 
@@ -181,17 +186,29 @@ class Settings:
     link_ttl_seconds: int = 7 * 24 * 3600
     lora_cache_seconds: float = 60.0
     reconcile_seconds: float = 30.0
-    planner_model: str = "xai/grok-4.3"
+    #: Comma-separated, best first: the second id is what runs when the provider in force does not serve the
+    #: first. grok-4.3 leads to noticeably weaker film plans, so it is the fallback rather than the default.
+    planner_model: str = "xai/grok-4.6, xai/grok-4.3"
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     openrouter_api_key: str = ""
-    agent_model: str = "xai/grok-4.6"
+    agent_model: str = "xai/grok-4.6, xai/grok-4.3"
+    #: The characters' voices. The same chain as agent_model on purpose: turning the prose split on must not
+    #: by itself change how any existing chat sounds. An uncensored chain is something to opt into.
+    agent_prose_model: str = "xai/grok-4.6, xai/grok-4.3"
     #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense.
-    agent_summary_model: str = "deepseek-ai/deepseek-v4.1-flash"
+    agent_summary_model: str = "deepseek-ai/deepseek-v4.1-flash, xai/grok-4.3"
+    #: Looks at images for inspect_image, when the chat's own model cannot see.
+    agent_vision_model: str = "xai/grok-4.6, google/gemini-pro-1.5"
     #: Summarise older messages once the conversation sent with each call passes this many tokens (estimated).
     agent_compact_tokens: int = 20_000
     #: Messages kept word for word after an automatic summary.
     agent_keep_messages: int = 10
+    #: How much of the prompt recalled facts may fill. 500 is roughly 10-15 one-sentence facts.
+    agent_recall_tokens: int = 500
+    #: The kill switch for recall. False stops facts being injected but keeps extracting them, so turning it
+    #: back on has data to work with rather than starting from nothing.
+    agent_graph_recall: bool = True
     #: Text-to-image default: fast and cheap. Edits (reference images) always use Seedream edit.
     image_model: str = "z-image/turbo"
     #: auto = local Krea 2 when installed and idle, else image_model, else Seedream.
@@ -261,8 +278,12 @@ class Settings:
             atlas_api_key=_env("ATLAS_API_KEY"),
             openrouter_api_key=_env("OPENROUTER_API_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
+            agent_prose_model=_env("HAWK_AGENT_PROSE_MODEL", cls.agent_prose_model),
             agent_summary_model=_env("HAWK_AGENT_SUMMARY_MODEL", cls.agent_summary_model),
+            agent_vision_model=_env("HAWK_AGENT_VISION_MODEL", cls.agent_vision_model),
             agent_compact_tokens=int(_env("HAWK_AGENT_COMPACT_TOKENS", str(cls.agent_compact_tokens))),
+            agent_recall_tokens=int(_env("HAWK_AGENT_RECALL_TOKENS", str(cls.agent_recall_tokens))),
+            agent_graph_recall=_env("HAWK_AGENT_GRAPH_RECALL", "1").strip().lower() not in ("0", "false", "no"),
             agent_keep_messages=max(2, int(_env("HAWK_AGENT_KEEP_MESSAGES", str(cls.agent_keep_messages)))),
             image_model=_env("HAWK_IMAGE_MODEL", cls.image_model),
             image_engine=_env("HAWK_IMAGE_ENGINE", cls.image_engine),
@@ -294,5 +315,7 @@ class Settings:
                 planner_model_override=_env("HAWK_PLANNER_MODEL_OVERRIDE"),
                 agent_model_override=_env("HAWK_AGENT_MODEL_OVERRIDE"),
                 agent_summary_model_override=_env("HAWK_AGENT_SUMMARY_MODEL_OVERRIDE"),
+                agent_prose_model_override=_env("HAWK_AGENT_PROSE_MODEL_OVERRIDE"),
+                agent_vision_model_override=_env("HAWK_AGENT_VISION_MODEL_OVERRIDE"),
             ),
         )

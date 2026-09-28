@@ -81,8 +81,21 @@ class FakeComfy:
             "diffusion_models": [UNET_FL2VA, UNET_INT8, UNET_BF16],
             "text_encoders": [CLIP_INT8, CLIP_BF16, "umt5_xxl.safetensors"],
         }
+        #: Planning is an LLM call the gateway makes itself now, so this fake answers /v1/models and
+        #: /v1/chat/completions too. One fake server for both keeps the wiring in these tests to one port.
+        self.chat_requests: list[dict] = []
+        self.llm_models_data = [
+            {"id": "xai/grok-4.6", "name": "Grok 4.6", "input_modalities": ["text", "image"],
+             "output_modalities": ["text"], "pricing": {"prompt": "0.000002", "completion": "0.000006"}},
+            {"id": "xai/grok-4.3", "name": "Grok 4.3", "input_modalities": ["text", "image"],
+             "output_modalities": ["text"], "pricing": {"prompt": "0.00000125", "completion": "0.0000025"}},
+        ]
+        self.chat_reply = PLAN_SCRIPT
+        self.chat_status = 200
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
         self.app.add_routes([
+            web.get("/v1/models", self.llm_models),
+            web.post("/v1/chat/completions", self.chat),
             web.post("/upload/image", self.upload),
             web.post("/prompt", self.prompt),
             web.get("/history/{pid}", self.get_history),
@@ -94,6 +107,16 @@ class FakeComfy:
             web.get("/internal/logs/raw", self.logs),
             web.get("/ws", self.ws),
         ])
+
+    async def llm_models(self, _request):
+        return web.json_response({"data": self.llm_models_data})
+
+    async def chat(self, request):
+        self.chat_requests.append(await request.json())
+        if self.chat_status != 200:
+            return web.json_response({"error": {"message": "no"}}, status=self.chat_status)
+        return web.json_response({"choices": [{"message": {"content": self.chat_reply}}],
+                                  "usage": {"prompt_tokens": 900, "completion_tokens": 120}})
 
     async def upload(self, request):
         post = await request.post()
@@ -290,6 +313,9 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             token=TOKEN, comfy_url=f"http://127.0.0.1:{comfy_port}", public_base_url=self.base,
             data_dir=self.data_dir, lora_cache_seconds=0, reconcile_seconds=0.3,
+            # The planner is a gateway-side call now, so these tests need a chat service; the ComfyUI fake
+            # answers for it. Before, the plan came out of the fake's HawkH3StoryPlanner node.
+            atlas_url=f"http://127.0.0.1:{comfy_port}/v1", atlas_api_key="test-key",
         )
         self._lost_after = jobs_module.LOST_AFTER_SECONDS
         jobs_module.LOST_AFTER_SECONDS = 0.5
@@ -341,6 +367,46 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
             for probe in ("/.well-known/oauth-protected-resource", f"/.well-known/oauth-protected-resource/t/{TOKEN}/mcp",
                           "/.well-known/oauth-authorization-server"):
                 self.assertEqual((await anonymous.get(probe)).status_code, 404, probe)
+
+    async def test_the_planner_calls_the_chosen_provider_and_not_comfyui(self):
+        # Planning used to happen inside ComfyUI, where the graph hardcoded Atlas's URL and an empty key, so the
+        # node fell back to ATLAS_API_KEY in ComfyUI's own environment: choosing a provider in Studio set the
+        # planner's model and silently left its provider alone, and its tokens were never counted anywhere.
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertEqual(plan["status"], "done", plan)
+        self.assertTrue(self.fake.chat_requests, "the gateway should have made the planner call itself")
+        self.assertEqual(self.fake.prompts, {}, "a plan should no longer submit any graph to ComfyUI")
+
+        call = self.fake.chat_requests[-1]
+        self.assertEqual(call["model"], "xai/grok-4.6",
+                         "the planner leads with 4.6; 4.3 writes weaker plans and is only the fallback")
+        self.assertIn("BRIEF:", json.dumps(call["messages"][-1]["content"]))
+        self.assertNotIn("test-key", json.dumps(call["messages"]), "the key belongs in a header, never in the prompt")
+
+    async def test_a_plan_records_what_its_llm_call_cost(self):
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        usage = plan.get("usage") or {}
+        self.assertEqual((usage.get("prompt_tokens"), usage.get("completion_tokens")), (900, 120),
+                         "the planner is a paid call and used to be billed invisibly inside ComfyUI")
+        self.assertEqual(plan.get("planner_model"), "xai/grok-4.6")
+
+    async def test_the_planner_falls_back_to_a_model_the_provider_lists(self):
+        # The provider drops 4.6 -- a real case when switching provider or account.
+        self.fake.llm_models_data = [
+            {"id": "xai/grok-4.3", "name": "Grok 4.3", "input_modalities": ["text", "image"],
+             "output_modalities": ["text"], "pricing": {"prompt": "0.00000125", "completion": "0.0000025"}}]
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertEqual(plan["status"], "done", plan)
+        self.assertEqual(self.fake.chat_requests[-1]["model"], "xai/grok-4.3",
+                         "the chain's second id should run rather than the feature failing")
+
+    async def test_a_plan_that_the_provider_refuses_fails_the_job_rather_than_hanging(self):
+        self.fake.chat_status = 503
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertEqual(plan["status"], "failed", plan)
+        self.assertTrue(plan["error"], "a failed plan must say why: the caller is holding a job id and polling")
+        retried = (await self.http.post(f"/v1/jobs/{plan['id']}/retry")).json()
+        self.assertIn(retried["status"], ("planning", "queued"), "a plan retries by running the call again")
 
     async def test_plan_then_render_with_loras_and_downloads(self):
         asset = await self.upload_picture()

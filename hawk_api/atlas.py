@@ -45,6 +45,12 @@ MODEL_CACHE_SECONDS = 600.0
 #: we send; a provider that ignores response_format answers in prose, which reads here as a model that
 #: cannot follow the format rather than a provider that was never asked to.
 ROUTING: dict[str, dict] = {
+    # A prompt cache is the provider's, so it only helps while requests keep landing on the same one. "balanced"
+    # sorts by price and lets OpenRouter fall back, which moves a chat between services and throws the warm
+    # prefix away every time -- paying full price for ~6k tokens to save a fraction of a cent on the rest.
+    # "sticky" keeps the same quality floor and stops the moving.
+    "sticky": {"quantizations": ["bf16", "fp16", "fp8"], "require_parameters": True,
+               "data_collection": "deny", "allow_fallbacks": False},
     "balanced": {"sort": "price", "quantizations": ["bf16", "fp16", "fp8"],
                  "require_parameters": True, "data_collection": "deny", "allow_fallbacks": True},
     "quality": {"quantizations": ["bf16", "fp16"],
@@ -62,10 +68,11 @@ IMAGE_FAILED = frozenset({"failed", "error", "canceled", "cancelled"})
 def routing_block(name: str) -> dict | None:
     """The provider block for a preset name, or None when there is nothing to send.
 
-    An unknown name falls back to the balanced preset rather than to no filtering: a typo in a setting
-    should not quietly re-open the cheap heavily-quantised services this exists to keep out.
+    An unknown name falls back to the sticky preset rather than to no filtering: a typo in a setting should not
+    quietly re-open the cheap heavily-quantised services this exists to keep out, nor start moving a warm
+    prompt cache between providers.
     """
-    block = ROUTING.get(str(name or "").strip().lower(), ROUTING["balanced"])
+    block = ROUTING.get(str(name or "").strip().lower(), ROUTING["sticky"])
     return dict(block) if block else None
 
 

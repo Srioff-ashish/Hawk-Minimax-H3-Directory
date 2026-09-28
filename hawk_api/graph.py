@@ -288,6 +288,16 @@ def add_director(g: PromptGraph, pipe: list, refs_node: str | None, script, para
 # ------------------------------------------------------------------ graphs
 
 
+def reference_wiring(refs: list[Ref], pose_instruction: str = DEFAULT_POSE_INSTRUCTION) -> RefWiring:
+    """Validate references and report their counts, without building a graph.
+
+    Planning happens in the gateway now, so a plan has nothing to submit to ComfyUI -- but its references still
+    have to be checked (role against asset kind, a video with two soundtracks) before a caller is handed a job
+    id. Reusing add_references against a throwaway graph keeps one set of rules for both paths.
+    """
+    return add_references(PromptGraph(), refs, pose_instruction)
+
+
 def plan_graph(refs: list[Ref], planner: dict, pose_instruction: str = DEFAULT_POSE_INSTRUCTION) -> tuple[BuiltGraph, RefWiring]:
     """References -> Story Planner -> Preview Any. No diffusion model is loaded."""
     g = PromptGraph()

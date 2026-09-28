@@ -359,7 +359,10 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         store = service.llm_settings
         stored = {key: value for key, value in store.stored().items() if key not in store.SECRETS}
         set_flags = {f"{key}_set": bool(store.stored().get(key)) for key in store.SECRETS}
-        return {**stored, **set_flags, **store.hints()}
+        # What each role will actually send on the provider in force. A model id belongs to a provider, so
+        # switching one silently re-points every role; without this the first sign of a bad switch is a render
+        # failing much later. "honoured" false means this provider does not serve what was asked for.
+        return {**stored, **set_flags, **store.hints(), "models": await service.model_report()}
 
     @app.put("/v1/settings/llm", tags=["system"])
     async def update_llm_settings(body: LLMSettingsUpdate):
@@ -517,14 +520,18 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         # a new chat actually opens on, so the dropdown has to mark that one rather than the one it replaced.
         llm = service.llm()
         return {"models": models,
-                "default_agent_model": llm.agent_model_override or settings.agent_model,
-                "default_planner_model": service.planner_model(),
+                # Resolved against this provider's own catalogue, so the dropdown marks a model it lists. The
+                # chains are returned beside them because that is what the settings fields hold.
+                "default_agent_model": await service.model_for("director", models),
+                "default_prose_model": await service.model_for("prose", models),
+                "default_planner_model": await service.model_for("planner", models),
+                "model_chains": {role: card["configured"] for role, card in (await service.model_report(models)).items()},
                 "provider": llm.llm_provider,
                 "configured": service.atlas.configured}
 
     @app.post("/v1/agent/sessions", tags=["agent"], status_code=201)
     async def agent_create(body: AgentSessionIn):
-        session = agent.create_session(body.title, body.persona, body.model)
+        session = agent.create_session(body.title, body.persona, body.model, body.prose_model)
         if any(v is not None for v in (body.name, body.avatar_asset_id, body.cast, body.adaptive, body.whispers)):
             session = agent.update_session(session["id"], name=body.name, avatar_asset_id=body.avatar_asset_id,
                                            cast=[m.model_dump() for m in body.cast] if body.cast is not None else None,
@@ -544,9 +551,23 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.patch("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_update(session_id: str, body: AgentSessionIn):
         return agent.public(agent.update_session(session_id, title=body.title, persona=body.persona, model=body.model,
+                                                 prose_model=body.prose_model,
                                                  name=body.name, avatar_asset_id=body.avatar_asset_id,
                                                  cast=[m.model_dump() for m in body.cast] if body.cast is not None else None,
                                                  adaptive=body.adaptive, whispers=body.whispers))
+
+    @app.get("/v1/agent/sessions/{session_id}/graph", tags=["agent"])
+    async def agent_graph(session_id: str):
+        """The entities and relations this chat has accumulated, newest first.
+
+        A cheap summary model will occasionally invent one, so this exists to be read: a wrong fact can be
+        deleted below, and HAWK_AGENT_GRAPH_RECALL=0 turns injection off entirely while still collecting.
+        """
+        return agent.graph_view(session_id)
+
+    @app.delete("/v1/agent/sessions/{session_id}/graph/facts/{fact_id}", tags=["agent"])
+    async def agent_forget_fact(session_id: str, fact_id: int):
+        return agent.forget_fact(session_id, fact_id)
 
     @app.post("/v1/agent/sessions/{session_id}/messages", tags=["agent"], status_code=202)
     async def agent_send(session_id: str, body: AgentMessageIn):

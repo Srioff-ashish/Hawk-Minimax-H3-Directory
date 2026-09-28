@@ -186,3 +186,40 @@ def parse_turn(text: str) -> dict | None:
             turn["pause"] = True
         return turn
     return None
+
+
+def spoken_anyway(text: str, names=()) -> dict | None:
+    """A last resort for a model that would not answer with JSON: read the reply as plain speech.
+
+    ``make``, ``act``, ``grow`` and ``pause`` are optional by design, so a turn built from prose alone is a
+    duller turn rather than a broken one -- and the alternative, a character that says nothing at all, is
+    indistinguishable from the chat being broken. A prose model is chosen for its voice, not its formatting,
+    so this exists for it; callers should reach here only once the strict attempts are spent, because the
+    retry that asks again for JSON usually gets ``make`` and ``grow`` back too.
+
+    A reply that *tried* to be JSON is treated differently: raw braces read terribly as dialogue, so only an
+    intact ``say`` value is salvaged out of it and a mangled object with nothing quotable stays a failure.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    if text.startswith("{"):
+        hit = re.search(r'"say"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if not hit:
+            return None
+        try:
+            text = json.loads(f'"{hit.group(1)}"').strip()
+        except json.JSONDecodeError:
+            return None
+    else:
+        fenced = re.match(r"^```[a-zA-Z]*\s*\n(.*?)\n?```\s*$", text, re.DOTALL)
+        if fenced:
+            text = fenced.group(1).strip()
+    # "Nisha: chal na" -- the shape split_spoken_lines already recovers. Stripped only when it is one of the
+    # cast's actual names, not "any capitalised word before a colon": guessing there silently eats the opening
+    # of a line like "Listen to me: I said no".
+    pattern = "|".join(re.escape(name) for name in names if name)
+    if pattern:
+        text = re.sub(rf"^[ \t*_]{{0,4}}(?:{pattern})[ \t]*[:—-][ \t]*", "", text, count=1, flags=re.IGNORECASE)
+    text = text.strip()
+    return {"say": text, "to": ""} if text else None

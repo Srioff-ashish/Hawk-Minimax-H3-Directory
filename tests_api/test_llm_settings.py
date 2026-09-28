@@ -207,8 +207,19 @@ class WhichServiceServesTheModel(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(block["allow_fallbacks"], "one service being down must not fail the call")
 
     def test_a_typo_falls_back_to_filtering_rather_than_to_none(self):
-        self.assertEqual(self.atlas.routing_block("chepest"), self.atlas.routing_block("balanced"),
-                         "a mistyped setting must not quietly re-open the cheapest weights")
+        self.assertEqual(self.atlas.routing_block("chepest"), self.atlas.routing_block("sticky"),
+                         "a mistyped setting must not re-open the cheapest weights, nor start moving a warm cache")
+
+    def test_the_default_preset_keeps_a_chat_on_one_service(self):
+        # A prompt cache belongs to the service that made it, so a preset that shops around throws away the
+        # warm ~6k prefix on every call to save a fraction of a cent on the rest.
+        self.assertFalse(self.atlas.routing_block("sticky")["allow_fallbacks"],
+                         "sticky exists to stop calls moving between services")
+        self.assertTrue(self.atlas.routing_block("balanced")["allow_fallbacks"],
+                        "balanced is still selectable for anyone who would rather have the cheaper service")
+        self.assertEqual(self.atlas.routing_block("sticky")["quantizations"],
+                         self.atlas.routing_block("balanced")["quantizations"],
+                         "the quality floor is the same; only the shopping around differs")
 
     def test_asking_for_openrouters_own_choice_sends_nothing(self):
         self.assertIsNone(self.atlas.routing_block("default"), "no block means no provider field at all")
@@ -222,7 +233,8 @@ class WhichServiceServesTheModel(unittest.IsolatedAsyncioTestCase):
     async def test_openrouter_is(self):
         service = WhichServiceAnswers.service(self, atlas_api_key="atlas-key")
         service.llm_settings.save({"llm_provider": "openrouter", "openrouter_api_key": "sk-or-1"})
-        self.assertEqual(service.atlas.routing, self.atlas.routing_block("balanced"))
+        self.assertEqual(service.atlas.routing, self.atlas.routing_block("sticky"),
+                         "a pod that was told nothing should keep its prompt cache warm by default")
 
     async def test_changing_the_routing_is_a_different_client(self):
         # The routing travels in the request, not the connection, but a client caches a model list and the

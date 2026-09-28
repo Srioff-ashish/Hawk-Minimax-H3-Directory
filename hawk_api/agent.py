@@ -16,6 +16,7 @@ import asyncio
 import base64
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -26,6 +27,7 @@ import uuid
 
 from . import cast_talk
 from . import image_engines
+from . import models_llm
 from .atlas import AtlasClient, AtlasError
 from .cast_talk import USER_KEY, clean_feelings, visible_to
 from .jobs import ACTIVE, IMAGE_PRICES, Conflict, HawkService, NotFound, RequestError
@@ -53,6 +55,8 @@ MERGED_GROWTH = 4
 MAX_GROWTH_CHARS = 240
 # inspect_image tries the chat's model (when it sees images), then these, until one returns a usable verdict: some models
 # refuse or garble reviews of certain images (adult content in particular).
+#: Superseded by the "vision" role in models_llm.ROLES, which resolves against the provider's own catalogue.
+#: Kept as the last-resort chain so a pod with no /models access behaves as it always did.
 VISION_FALLBACK_MODELS = ("xai/grok-4.6", "xai/grok-4.3")
 # Reasoning models (DeepSeek V4.x) think before the verdict; too small a budget ends the reply empty (finish_reason=length).
 INSPECT_MAX_TOKENS = 8000
@@ -71,6 +75,19 @@ MANUAL_KEEP_MESSAGES = 4  # the Compact button keeps this many messages word for
 SUMMARY_MAX_TOKENS = 6000  # room for reasoning models to think before writing the summary
 # Tools whose argument schema is large are listed by description only until the chat uses them (describe_tool shows it).
 BIG_SCHEMA_TOKENS = 250
+
+#: relation -> the family it supersedes within. A closed vocabulary, named verbatim in the extraction prompt:
+#: an open one produces "feels_toward", "feels", "has_feelings_about" for the same thing and nothing ever
+#: contradicts anything. The family is how a new fact knows what it replaces, with no model call.
+RELATIONS = {
+    "feels_toward": "feeling", "relation_to": "relation", "located_in": "place", "status_of": "status",
+    "wants": "want", "owns": "owns", "made": "made", "agreed": "agreed", "knows_about": "knows",
+}
+#: Facts taken from one compaction. A cheap summary model will invent them given room, so the cap is in the
+#: prompt and here.
+MAX_FACTS = 20
+#: A node's identity shapes: how many characters an asset id has, and the kinds a fact may name.
+NODE_KINDS = ("person", "place", "thing", "event", "asset", "topic")
 ALWAYS_FULL_TOOLS = frozenset({"generate_image"})
 # What survives in tool results from earlier turns: ids, links, outcomes and verdicts; raw details are dropped.
 BRIEF_KEYS = frozenset({
@@ -140,6 +157,41 @@ SUMMARY_PROMPT = (
     "the user and about each other and the moments that caused it, "
     "decisions made, every asset id, job id and video link, what is finished and what is still open. Plain text, at most 400 words."
 )
+
+#: Appended to both summarisers. They already make exactly one call each, so the facts ride along in it and the
+#: graph costs no extra request -- which was the requirement, not an optimisation.
+FACTS_TAIL = (
+    "\n\nReply with ONE JSON object and nothing else:\n"
+    '{{"summary": "<the summary above, as plain text>", "facts": [{{"s": "<who or what>", '
+    '"r": "<one of: {relations}>", "o": "<who or what>", "v": <-1..1>, "f": "<one short sentence>"}}]}}\n'
+    "The facts are the lasting ones a later reader would need: who someone is to someone else, how they feel "
+    "(v is how positive, -1 to 1), where something is, what someone wants, owns or made, what was agreed. Name "
+    'people and things exactly as the conversation does, and use "user" for the user. Skip anything passing or '
+    "already obvious. At most {limit} facts, and an empty list is a perfectly good answer."
+)
+
+
+def facts_tail() -> str:
+    return FACTS_TAIL.format(relations=" | ".join(RELATIONS), limit=MAX_FACTS)
+
+
+def read_summary_and_facts(text: str) -> tuple[str, list[dict]]:
+    """A summariser's reply as (prose summary, facts).
+
+    The property that makes asking for facts safe: a reply that is not the JSON object we asked for is treated
+    as the prose summary and yields no facts, which is byte-for-byte what happened before facts existed. A model
+    that ignores the format gives the old product, never a broken one -- so a cheap or unfamiliar summary model
+    can never cost a chat its memory.
+    """
+    raw = (text or "").strip()
+    data = parse_json_object(raw)
+    if not isinstance(data, dict) or not isinstance(data.get("summary"), str) or not data["summary"].strip():
+        return raw, []
+    facts = []
+    for item in data.get("facts") if isinstance(data.get("facts"), list) else []:
+        if isinstance(item, dict) and str(item.get("r") or "").strip().lower() in RELATIONS:
+            facts.append(item)
+    return data["summary"].strip(), facts[:MAX_FACTS]
 
 MERGE_GROWTH_PROMPT = (
     "You keep a character's memory of how they have changed during one chat. Merge the growth notes below into at most "
@@ -233,6 +285,31 @@ class AgentStore:
         id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
         content TEXT NOT NULL, created_at REAL NOT NULL, excluded INTEGER NOT NULL DEFAULT 0);
     CREATE INDEX IF NOT EXISTS agent_messages_session ON agent_messages(session_id, id);
+
+    /* What a chat knows, as entities and the relations between them, so that "who is Riya to Tiya" does not
+       cost a re-read of the whole conversation and survives both a restart and a change of chat model. These
+       live in jobs.sqlite3, which the Drive snapshot already copies whole, so they need no new snapshot work. */
+    CREATE TABLE IF NOT EXISTS agent_nodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        owner TEXT NOT NULL DEFAULT '',        -- '' = said aloud, what the director knows; else a cast member id
+        key TEXT NOT NULL,                     -- 'member:<id>' | 'user' | an asset id | a casefolded label
+        kind TEXT NOT NULL,                    -- person|place|thing|event|asset|topic
+        label TEXT NOT NULL, props TEXT NOT NULL DEFAULT '{}',
+        mentions INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_nodes_key ON agent_nodes(session_id, owner, key);
+
+    CREATE TABLE IF NOT EXISTS agent_edges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+        owner TEXT NOT NULL DEFAULT '', src INTEGER NOT NULL, dst INTEGER NOT NULL,
+        rel TEXT NOT NULL, family TEXT NOT NULL,   -- family = the group a new fact supersedes within
+        fact TEXT NOT NULL,                        -- the one sentence recall injects
+        weight REAL NOT NULL DEFAULT 1.0,          -- -1..+1 for feels_toward
+        state TEXT NOT NULL DEFAULT 'live',        -- live|stale; a superseded fact is kept, never deleted
+        since_message INTEGER NOT NULL DEFAULT 0,
+        created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE UNIQUE INDEX IF NOT EXISTS agent_edges_triple ON agent_edges(session_id, owner, src, rel, dst);
+    CREATE INDEX IF NOT EXISTS agent_edges_src ON agent_edges(session_id, owner, src, state);
+    CREATE INDEX IF NOT EXISTS agent_edges_dst ON agent_edges(session_id, owner, dst, state);
     """
 
     def __init__(self, path: str):
@@ -269,6 +346,8 @@ class AgentStore:
     def delete_session(self, session_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM agent_messages WHERE session_id = ?", (session_id,))
+            self._db.execute("DELETE FROM agent_edges WHERE session_id = ?", (session_id,))
+            self._db.execute("DELETE FROM agent_nodes WHERE session_id = ?", (session_id,))
             self._db.execute("DELETE FROM agent_sessions WHERE id = ?", (session_id,))
             self._db.commit()
 
@@ -339,6 +418,130 @@ class AgentStore:
                 [(1 if value else 0, session_id, message_id) for message_id in message_ids],
             )
             self._db.commit()
+
+    # ------------------------------------------------------------ the graph
+
+    def upsert_node(self, session_id: str, owner: str, key: str, kind: str, label: str) -> int:
+        """A node's row id, created or touched. ``key`` is the caller's already-resolved identity."""
+        now = _now()
+        with self._lock:
+            row = self._db.execute("SELECT id, label FROM agent_nodes WHERE session_id = ? AND owner = ? AND key = ?",
+                                   (session_id, owner, key)).fetchone()
+            if row:
+                # The label follows the newest naming, so a character renamed mid-chat reads correctly, but the
+                # key does not move: the identity is what other rows point at.
+                self._db.execute("UPDATE agent_nodes SET mentions = mentions + 1, updated_at = ?, label = ? WHERE id = ?",
+                                 (now, label or row[1], row[0]))
+                self._db.commit()
+                return int(row[0])
+            cursor = self._db.execute(
+                "INSERT INTO agent_nodes (session_id, owner, key, kind, label, props, mentions, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, '{}', 1, ?, ?)",
+                (session_id, owner, key, kind, label, now, now))
+            self._db.commit()
+            return int(cursor.lastrowid)
+
+    def nodes(self, session_id: str, owners: tuple[str, ...]) -> list[dict]:
+        marks = ",".join("?" for _ in owners)
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT id, owner, key, kind, label, mentions FROM agent_nodes WHERE session_id = ? AND owner IN ({marks})",
+                (session_id, *owners)).fetchall()
+        return [{"id": r[0], "owner": r[1], "key": r[2], "kind": r[3], "label": r[4], "mentions": r[5]} for r in rows]
+
+    def node_by_key(self, session_id: str, owner: str, key: str) -> int | None:
+        with self._lock:
+            row = self._db.execute("SELECT id FROM agent_nodes WHERE session_id = ? AND owner = ? AND key = ?",
+                                   (session_id, owner, key)).fetchone()
+        return int(row[0]) if row else None
+
+    def put_edge(self, session_id: str, owner: str, src: int, dst: int, rel: str, family: str, fact: str,
+                 weight: float = 1.0, since_message: int = 0) -> int:
+        """Write one fact, superseding any live fact in the same family between the same two nodes.
+
+        Last writer wins, and the old row is marked stale rather than deleted: keeping it is what lets a
+        character say "she used to trust me", and it is the undo path when a summary is forgotten. Contradiction
+        needs no model call -- it is the family that decides what a new fact replaces.
+        """
+        now = _now()
+        with self._lock:
+            self._db.execute(
+                "UPDATE agent_edges SET state = 'stale', updated_at = ? WHERE session_id = ? AND owner = ? AND src = ?"
+                " AND dst = ? AND family = ? AND rel <> ? AND state = 'live'",
+                (now, session_id, owner, src, dst, family, rel))
+            self._db.execute(
+                "INSERT INTO agent_edges (session_id, owner, src, dst, rel, family, fact, weight, state,"
+                " since_message, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'live', ?, ?, ?)"
+                " ON CONFLICT(session_id, owner, src, rel, dst) DO UPDATE SET"
+                " fact = excluded.fact, weight = excluded.weight, state = 'live',"
+                " since_message = excluded.since_message, updated_at = excluded.updated_at",
+                (session_id, owner, src, dst, rel, family, fact, weight, since_message, now, now))
+            row = self._db.execute("SELECT id FROM agent_edges WHERE session_id = ? AND owner = ? AND src = ?"
+                                   " AND rel = ? AND dst = ?", (session_id, owner, src, rel, dst)).fetchone()
+            self._db.commit()
+        return int(row[0]) if row else 0
+
+    def edges_around(self, session_id: str, owners: tuple[str, ...], node_ids: list[int],
+                     live_only: bool = True) -> list[dict]:
+        """Every edge touching these nodes, in either direction. One query per hop of the walk."""
+        if not node_ids:
+            return []
+        owner_marks = ",".join("?" for _ in owners)
+        node_marks = ",".join("?" for _ in node_ids)
+        state = " AND state = 'live'" if live_only else ""
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT id, owner, src, dst, rel, family, fact, weight, state, since_message FROM agent_edges"
+                f" WHERE session_id = ? AND owner IN ({owner_marks}){state}"
+                f" AND (src IN ({node_marks}) OR dst IN ({node_marks}))",
+                (session_id, *owners, *node_ids, *node_ids)).fetchall()
+        keys = ("id", "owner", "src", "dst", "rel", "family", "fact", "weight", "state", "since_message")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def all_edges(self, session_id: str, live_only: bool = False) -> list[dict]:
+        """The whole graph for one chat, for the panel that lets a wrong fact be found and removed."""
+        state = " AND e.state = 'live'" if live_only else ""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT e.id, e.owner, e.rel, e.family, e.fact, e.weight, e.state, e.since_message,"
+                " s.label, d.label FROM agent_edges e"
+                " JOIN agent_nodes s ON s.id = e.src JOIN agent_nodes d ON d.id = e.dst"
+                f" WHERE e.session_id = ?{state} ORDER BY e.updated_at DESC", (session_id,)).fetchall()
+        keys = ("id", "owner", "rel", "family", "fact", "weight", "state", "since_message", "src_label", "dst_label")
+        return [dict(zip(keys, row)) for row in rows]
+
+    def delete_edge(self, session_id: str, edge_id: int) -> bool:
+        with self._lock:
+            cursor = self._db.execute("DELETE FROM agent_edges WHERE session_id = ? AND id = ?", (session_id, edge_id))
+            self._db.commit()
+        return cursor.rowcount > 0
+
+    def drop_facts_since(self, session_id: str, since_message: int) -> int:
+        """Forget the facts a compaction produced, and revive whatever they superseded.
+
+        Called when messages are forgotten: a fact extracted from a reply that no longer exists should not
+        outlive it, and the family it displaced must not be left with nothing live in it.
+        """
+        with self._lock:
+            families = self._db.execute(
+                "SELECT DISTINCT owner, src, dst, family FROM agent_edges WHERE session_id = ? AND since_message >= ?",
+                (session_id, since_message)).fetchall()
+            cursor = self._db.execute("DELETE FROM agent_edges WHERE session_id = ? AND since_message >= ?",
+                                      (session_id, since_message))
+            for owner, src, dst, family in families:
+                alive = self._db.execute(
+                    "SELECT 1 FROM agent_edges WHERE session_id = ? AND owner = ? AND src = ? AND dst = ?"
+                    " AND family = ? AND state = 'live' LIMIT 1", (session_id, owner, src, dst, family)).fetchone()
+                if alive:
+                    continue
+                newest = self._db.execute(
+                    "SELECT id FROM agent_edges WHERE session_id = ? AND owner = ? AND src = ? AND dst = ?"
+                    " AND family = ? ORDER BY updated_at DESC LIMIT 1",
+                    (session_id, owner, src, dst, family)).fetchone()
+                if newest:
+                    self._db.execute("UPDATE agent_edges SET state = 'live' WHERE id = ?", (newest[0],))
+            self._db.commit()
+        return cursor.rowcount
 
     def delete_messages(self, session_id: str, message_ids: list[int]) -> None:
         with self._lock:
@@ -514,8 +717,47 @@ class AgentService:
         overrides = self.service.settings.llm_overrides
         return store.resolve(overrides) if store is not None else overrides
 
+    async def _catalogue(self) -> list[dict]:
+        """The chat models the provider in force actually serves, or [] when it cannot be asked.
+
+        [] is not "no models": models_llm.resolve reads it as "do not second-guess the setting", so a /models
+        call that fails leaves every role sending exactly the id it was configured with.
+        """
+        try:
+            return await self.atlas.list_models()
+        except AtlasError:
+            return []
+
+    async def model_for(self, role: str, session: dict | None = None) -> str:
+        """The id to send for one role, resolved against the provider that is switched on.
+
+        Every role used to hold a bare id, so switching provider silently pointed five of them at models the
+        new service does not serve. See hawk_api/models_llm.py.
+        """
+        llm = self._llm()
+        settings = self.service.settings
+        configured = {
+            "director": (session or {}).get("model") or llm.agent_model_override or settings.agent_model,
+            "prose": (session or {}).get("prose_model") or llm.agent_prose_model_override
+            or settings.agent_prose_model or (session or {}).get("model") or settings.agent_model,
+            "summary": llm.agent_summary_model_override or settings.agent_summary_model,
+            "vision": llm.agent_vision_model_override or settings.agent_vision_model,
+        }.get(role, "")
+        return models_llm.resolve(role, configured, await self._catalogue())
+
+    async def models_for(self, role: str, session: dict | None = None) -> list[str]:
+        """Every id worth trying for a role, best first. Only the vision ladder walks more than one."""
+        llm = self._llm()
+        settings = self.service.settings
+        if role == "vision":
+            configured = llm.agent_vision_model_override or settings.agent_vision_model
+        else:
+            return [await self.model_for(role, session)]
+        return models_llm.resolve_many(role, configured, await self._catalogue())
+
     @property
     def summary_model(self) -> str:
+        """The configured summary chain, unresolved. Kept for callers that only report the setting."""
         return self._llm().agent_summary_model_override or self.service.settings.agent_summary_model
 
     @property
@@ -538,8 +780,11 @@ class AgentService:
 
     # ------------------------------------------------------------ sessions
 
-    def create_session(self, title: str | None = None, persona: str | None = None, model: str | None = None) -> dict:
+    def create_session(self, title: str | None = None, persona: str | None = None, model: str | None = None,
+                       prose_model: str | None = None) -> dict:
         now = _now()
+        # Stored as configured, not resolved: resolution happens per call against whichever provider is
+        # switched on then, so a chat made today still works after the provider changes under it.
         default_model = self._llm().agent_model_override or self.service.settings.agent_model
         session = {
             "id": str(uuid.uuid4()),
@@ -548,6 +793,9 @@ class AgentService:
             "name": "",
             "avatar_asset_id": "",
             "model": (model or "").strip() or default_model,
+            # Blank means "follow the pod's prose setting, then this chat's own model" -- how every chat
+            # behaved before the director and the characters were given separate models.
+            "prose_model": (prose_model or "").strip(),
             "adaptive": False,
             "whispers": False,
             "status": "idle",
@@ -568,8 +816,8 @@ class AgentService:
     def list_sessions(self) -> list[dict]:
         return self.store.list_sessions()
 
-    def update_session(self, session_id: str, *, title=None, persona=None, model=None, name=None, avatar_asset_id=None,
-                       cast=None, adaptive=None, whispers=None) -> dict:
+    def update_session(self, session_id: str, *, title=None, persona=None, model=None, prose_model=None, name=None,
+                       avatar_asset_id=None, cast=None, adaptive=None, whispers=None) -> dict:
         session = self.get_session(session_id)
         if adaptive is not None:
             session["adaptive"] = bool(adaptive)
@@ -583,6 +831,8 @@ class AgentService:
             session["persona"] = persona.strip()
         if model is not None and model.strip():
             session["model"] = model.strip()
+        if prose_model is not None:  # blank clears it back to the pod's setting, so it is not guarded on strip()
+            session["prose_model"] = prose_model.strip()
         if name is not None:
             session["name"] = name.strip()[:40]
         if avatar_asset_id is not None:
@@ -687,6 +937,10 @@ class AgentService:
         session = self.get_session(session_id)
         oldest = min(ids)
         rebuilt = False
+        # A fact extracted from a reply must not outlive the reply. Anything superseded by a dropped fact comes
+        # back live, so a family is never left with nothing in it.
+        if self.store.drop_facts_since(session_id, oldest):
+            rebuilt = True
         if session.get("summary") and oldest <= session.get("summary_upto", 0):
             session.update(summary="", summary_upto=0)
             rebuilt = True
@@ -826,6 +1080,176 @@ class AgentService:
                 return display_name(member, index, len(cast))
         return key
 
+    # ------------------------------------------------------------ what a chat knows
+
+    def _node_key(self, session: dict, label: str) -> tuple[str, str, str]:
+        """(key, kind, label) for something a fact names.
+
+        Identity reuses what already exists rather than inventing a second notion of who someone is:
+        find_member for the cast, cast_talk's USER_KEY for the user, an asset id as itself. Anything else is a
+        casefolded label. Getting this wrong is how a fact about Riya ends up filed under Tiya, so nothing here
+        guesses -- see _merge_key for the one near-miss rule, which refuses when it is ambiguous.
+        """
+        text = " ".join(str(label or "").strip().lstrip("@").split())
+        if not text:
+            return "", "", ""
+        cast = cast_of(session)
+        index = find_member(cast, text)
+        if index is not None:
+            member = cast[index]
+            return f"member:{member.get('id') or index}", "person", display_name(member, index, len(cast))
+        if text.lower() in ("user", "the user", "you", "me"):
+            return USER_KEY, "person", "the user"
+        if re.fullmatch(r"[0-9a-f]{12,36}", text.lower()):
+            return text.lower(), "asset", text
+        return text.casefold(), "topic", text
+
+    def _merge_key(self, session_id: str, owner: str, key: str, kind: str) -> str:
+        """The existing key this one is plainly the same as, else itself.
+
+        Only a prefix or suffix match against **exactly one** node of the same kind counts, deliberately the
+        same rule as cast_talk.mentioned_all: "a first name two characters share names neither". Ambiguity makes
+        a new node, because two nodes for one person is a smaller bug than one node for two people.
+        """
+        if key in (USER_KEY, "") or key.startswith("member:"):
+            return key
+        candidates = [n["key"] for n in self.store.nodes(session_id, (owner,))
+                      if n["kind"] == kind and n["key"] != key
+                      and (n["key"].startswith(key) or key.startswith(n["key"])
+                           or n["key"].endswith(key) or key.endswith(n["key"]))]
+        return candidates[0] if len(candidates) == 1 else key
+
+    def _node_for(self, session: dict, owner: str, label: str) -> int:
+        key, kind, shown = self._node_key(session, label)
+        if not key:
+            return 0
+        key = self._merge_key(session["id"], owner, key, kind)
+        return self.store.upsert_node(session["id"], owner, key, kind, shown)
+
+    def _write_fact(self, session: dict, owner: str, subject: str, rel: str, obj: str, fact: str,
+                    weight: float = 1.0, since_message: int = 0) -> bool:
+        rel = str(rel or "").strip().lower()
+        if rel not in RELATIONS or not str(fact or "").strip():
+            return False
+        src = self._node_for(session, owner, subject)
+        dst = self._node_for(session, owner, obj)
+        if not src or not dst or src == dst:
+            return False
+        try:
+            weight = max(-1.0, min(1.0, float(weight)))
+        except (TypeError, ValueError):
+            weight = 1.0
+        self.store.put_edge(session["id"], owner, src, dst, rel, RELATIONS[rel],
+                            " ".join(str(fact).split())[:240], weight, since_message)
+        return True
+
+    def _seed_graph(self, session: dict) -> None:
+        """Give an existing chat a usable graph for no tokens at all.
+
+        Every cast member, the user and every avatar become nodes, and the feelings dict -- already one short
+        sentence per entry -- becomes feels_toward edges. This is why no LLM backfill is needed for the chats
+        that already exist: the per-chat cost is exactly what the graph is meant to remove.
+        """
+        if session.get("graph_seeded"):
+            return
+        cast = cast_of(session)
+        self._node_for(session, "", "user")
+        for index, member in enumerate(cast):
+            name = display_name(member, index, len(cast))
+            if name:
+                self._node_for(session, "", name)
+            if member.get("avatar_asset_id"):
+                self._write_fact(session, "", name, "owns", member["avatar_asset_id"],
+                                 f"{name}'s avatar is asset {member['avatar_asset_id']}.")
+            for key, notes in clean_feelings(member.get("feelings")).items():
+                about = self._about_name(cast, key)
+                text = " ".join(notes)
+                if name and about and text:
+                    self._write_fact(session, member.get("id", ""), name, "feels_toward", about,
+                                     f"{name} on {about}: {text}")
+        session["graph_seeded"] = True
+        self.store.save_session(session)
+
+    def _recall_text(self, session: dict, owner: str, seed_text: str) -> str:
+        """Facts about whoever this turn is about, within a token budget. No model call.
+
+        Seeded from the names the turn mentions, then a two-hop walk out from them. Bounded on purpose: the
+        point of the graph is to answer "who is this person to me" without re-reading the conversation, and an
+        unbounded dump would cost more than the prose it is meant to replace.
+        """
+        if not self.service.settings.agent_graph_recall:
+            return ""
+        # A character reads what was said aloud plus its own private view. The director reads only what was said
+        # aloud: it already gets every character's private feelings through _state_text, exactly as it always
+        # did, so pulling them in again here would duplicate them and cost tokens twice.
+        owners = ("",) if not owner else ("", owner)
+        nodes = self.store.nodes(session["id"], owners)
+        if not nodes:
+            return ""
+        text = f" {' '.join(str(seed_text or '').split()).casefold()} "
+        seeds: list[int] = []
+        for node in nodes:
+            label = node["label"].casefold()
+            if node["key"] == USER_KEY or (label and (f" {label} " in text or f" {label}'" in text or f" {label}," in text)):
+                seeds.append(node["id"])
+        if owner:
+            index = find_member(cast_of(session), owner)
+            if index is not None:
+                cast = cast_of(session)
+                me = self.store.node_by_key(session["id"], "", f"member:{cast[index].get('id') or index}")
+                if me:
+                    seeds.append(me)
+        seeds = list(dict.fromkeys(seeds))
+        if not seeds:
+            return ""
+
+        by_id = {node["id"]: node for node in nodes}
+        scored: dict[int, tuple[float, str]] = {}
+        frontier = seeds
+        newest = max((e["since_message"] for e in self.store.edges_around(session["id"], owners, seeds)), default=0) or 1
+        for hop in (1, 2):
+            edges = self.store.edges_around(session["id"], owners, frontier)
+            reached: list[int] = []
+            for edge in edges:
+                other = edge["dst"] if edge["src"] in frontier else edge["src"]
+                node = by_id.get(other)
+                score = (2.0 if hop == 1 else 0.0) + min(1.0, edge["since_message"] / newest) \
+                    + 0.5 * math.log1p(node["mentions"] if node else 1) + abs(edge["weight"])
+                if edge["id"] not in scored or scored[edge["id"]][0] < score:
+                    scored[edge["id"]] = (score, edge["fact"])
+                reached.append(other)
+            frontier = [n for n in dict.fromkeys(reached) if n not in seeds][:6]
+            if not frontier:
+                break
+
+        budget = max(0, int(self.service.settings.agent_recall_tokens))
+        lines, used = [], 0
+        for _, fact in sorted(scored.values(), key=lambda pair: -pair[0]):
+            cost = len(fact) // 4 + 2
+            if used + cost > budget:
+                break
+            lines.append(f"- {fact}")
+            used += cost
+        if not lines:
+            return ""
+        return "WHAT YOU ALREADY KNOW ABOUT WHO IS IN THIS TURN\n" + "\n".join(lines)
+
+    def graph_view(self, session_id: str) -> dict:
+        """What this chat knows, for the panel. Being able to read it is what makes recall safe to leave on."""
+        session = self.get_session(session_id)
+        cast = cast_of(session)
+        rows = []
+        for edge in self.store.all_edges(session_id):
+            rows.append({**edge, "private_to": self._about_name(cast, edge["owner"]) if edge["owner"] else ""})
+        return {"facts": rows, "nodes": len(self.store.nodes(session_id, ("", *(m.get("id", "") for m in cast)))),
+                "recall_on": bool(self.service.settings.agent_graph_recall)}
+
+    def forget_fact(self, session_id: str, edge_id: int) -> dict:
+        self.get_session(session_id)
+        if not self.store.delete_edge(session_id, edge_id):
+            raise NotFound(f"No fact {edge_id} in this chat.")
+        return self.graph_view(session_id)
+
     def request_stop(self, session_id: str) -> dict:
         session = self.get_session(session_id)
         if session_id in self._tasks:
@@ -901,9 +1325,10 @@ class AgentService:
             session = self.get_session(session_id)
             await self._maybe_summarize(session)
             messages = await self._build_messages(session)
-            text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=8192)
+            model = await self.model_for("director", session)
+            text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192)
             steps += 1
-            call = await self._add_usage(session_id, session["model"], usage)
+            call = await self._add_usage(session_id, model, usage)
             reply = parse_reply(text)
             if reply is None:
                 self.store.add_message(session_id, "assistant", {"raw": text[:4000], "invalid": True, "usage": call})
@@ -1028,7 +1453,12 @@ class AgentService:
             others=others,
             listening=" They are listening to you talk right now and may join in.",
             feelings="\n".join(feeling_lines) or "(none yet)",
-            memory=member.get("memory") or "(nothing older: everything is in the conversation below)",
+            # Recall sits in the {memory} region rather than in WHO YOU ARE: it changes every turn, and the
+            # character prompt's own persona block is the part worth keeping stable.
+            memory="\n\n".join(part for part in (
+                member.get("memory") or "",
+                self._recall_text(session, member["id"], self._recent_text(session)),
+            ) if part) or "(nothing older: everything is in the conversation below)",
             words=cast_talk.TURN_WORDS,
             adaptive=cast_talk.ADAPTIVE_TURN if session.get("adaptive") else "",
             make_field=', "make": "optional", "act": "selfie|snap|share|group_shot", "of": ["names"]',
@@ -1039,21 +1469,34 @@ class AgentService:
         messages = [{"role": "system", "content": prompt},
                     {"role": "user", "content": f"THE CONVERSATION SO FAR (most recent last):\n{transcript or '(nothing yet)'}\n\n"
                                                 f"(It's your turn, {name}. Reply with the JSON only.)"}]
-        for attempt in range(2):
-            text, usage = await self.atlas.chat(session["model"], messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
-            call = await self._add_usage(session_id, session["model"], usage)
+        def record(turn: dict, call: dict | None) -> dict:
+            line = {"speaker": name, "say": turn["say"]}
+            if turn.get("to"):
+                line["to"] = turn["to"]
+            content = {"lines": [line], "say": f"{name}: {turn['say']}", "actions": [], "done": True, "talk": True,
+                       "speaker_id": member["id"], "raw": json.dumps({"lines": [line]}, ensure_ascii=False), "usage": call}
+            self.store.add_message(session_id, "assistant", content)
+            return turn
+
+        # The characters speak with the prose model and the director keeps its own. A model chosen for voice is
+        # often worse at formatting, so the last attempt moves to the director's model, which has to be good at
+        # JSON to drive the tools at all.
+        prose = await self.model_for("prose", session)
+        director = await self.model_for("director", session)
+        attempts = [prose, prose] + ([director] if director != prose else [])
+        text, call = "", None
+        for model in attempts:
+            text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
+            call = await self._add_usage(session_id, model, usage)
             turn = cast_talk.parse_turn(text)
             if turn is not None:
-                line = {"speaker": name, "say": turn["say"]}
-                if turn.get("to"):
-                    line["to"] = turn["to"]
-                content = {"lines": [line], "say": f"{name}: {turn['say']}", "actions": [], "done": True, "talk": True,
-                           "speaker_id": member["id"], "raw": json.dumps({"lines": [line]}, ensure_ascii=False), "usage": call}
-                self.store.add_message(session_id, "assistant", content)
-                return turn
+                return record(turn, call)
             messages.append({"role": "assistant", "content": text[:2000]})
             messages.append({"role": "user", "content": 'Reply with only the JSON object: {"say": "...", "to": "..."}'})
-        return None
+        # Both strict attempts are spent. Read the last reply as plain speech rather than dropping the turn:
+        # a character that says nothing looks to the user exactly like a broken chat.
+        salvaged = cast_talk.spoken_anyway(text, names)
+        return record(salvaged, call) if salvaged is not None else None
 
     def _transcript(self, session: dict, member_id: str, names: list[str], upto: int | None = None) -> str:
         """The chat as one character heard it, after its memory (whispers to others left out), newest last."""
@@ -1297,22 +1740,29 @@ class AgentService:
         older = self._transcript(session, member_id, names, upto=older_upto)
         name = names[cast.index(member)]
         previous = f"Your earlier memory:\n{member['memory']}\n\n" if member.get("memory") else ""
-        request = [{"role": "system", "content": cast_talk.MEMORY_PROMPT.format(name=name)},
+        request = [{"role": "system", "content": cast_talk.MEMORY_PROMPT.format(name=name) + facts_tail()},
                    {"role": "user", "content": f"{previous}What you heard since:\n{older}"}]
-        for model in dict.fromkeys((self.summary_model, session["model"])):
+        for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
             except AtlasError as exc:
                 log.warning("character memory with %s failed: %s", model, exc)
                 continue
             await self._add_usage(session["id"], model, usage)
+            memory, facts = read_summary_and_facts(text)
             fresh = self.get_session(session["id"])
             cast = [dict(m) for m in cast_of(fresh)]
             for entry in cast:
                 if entry.get("id") == member_id:
-                    entry["memory"], entry["memory_upto"] = text.strip(), older_upto
+                    entry["memory"], entry["memory_upto"] = memory, older_upto
             fresh["cast"] = cast
             self.store.save_session(fresh)
+            # owner = this character: the transcript was already filtered through visible_to, so by construction
+            # these facts are only what this one heard. A whisper to someone else cannot leak in here.
+            self._seed_graph(fresh)
+            for fact in facts:
+                self._write_fact(fresh, member_id, fact.get("s"), fact.get("r"), fact.get("o"),
+                                 fact.get("f"), fact.get("v", 1.0), older_upto)
             return True
         return False
 
@@ -1325,6 +1775,10 @@ class AgentService:
         details = usage.get("prompt_tokens_details") or {}
         cached = int((details.get("cached_tokens") if isinstance(details, dict) else 0) or usage.get("prompt_cache_hit_tokens") or 0)
         cached = min(cached, prompt)
+        # Reasoning tokens are billed as output but are not in the reply, so a chat on a thinking model looks
+        # inexplicably expensive until they are shown.
+        out_details = usage.get("completion_tokens_details") or {}
+        reasoning = int((out_details.get("reasoning_tokens") if isinstance(out_details, dict) else 0) or 0)
         price_in = info.get("price_in", 0.0)
         cost = ((prompt - cached) * price_in + cached * info.get("price_cache", price_in)
                 + completion * info.get("price_out", 0.0))
@@ -1332,25 +1786,42 @@ class AgentService:
         totals["prompt_tokens"] += prompt
         totals["completion_tokens"] += completion
         totals["cached_tokens"] = totals.get("cached_tokens", 0) + cached
+        totals["reasoning_tokens"] = totals.get("reasoning_tokens", 0) + reasoning
         totals["steps"] = totals.get("steps", 0) + 1
         totals["cost_usd"] = round(totals.get("cost_usd", 0.0) + cost, 6)
         self.store.save_session(session)
-        return {"model": model, "in": prompt, "out": completion, "cached": cached, "cost_usd": round(cost, 6)}
+        return {"model": model, "in": prompt, "out": completion, "cached": cached,
+                "reasoning": reasoning, "cost_usd": round(cost, 6)}
 
     # ------------------------------------------------------------ tools
 
     def _tools_in_use(self, session: dict | None) -> set[str]:
-        """Tools this chat has called or described since its summary: their full schemas stay in the catalogue."""
+        """Tools this chat has used, ever: their full schemas stay in the catalogue.
+
+        Deliberately cumulative. It used to read only the messages after the summary watermark, so a compaction
+        could take a tool's schema back *out* of the catalogue -- which is both a cache problem (the prefix
+        shrinks, and everything after the change is re-read at full price) and arguably a correctness one, since
+        the agent is told to call describe_tool once per chat and would have no way of knowing the answer had
+        been withdrawn. The set is kept on the session and only ever grows; a few hundred resident tokens buys a
+        prefix that a compaction cannot move.
+        """
         if session is None:
             return set()
-        used = set()
-        for message in self.store.messages(session["id"], after=session.get("summary_upto", 0)):
+        seen = {str(name) for name in (session.get("tools_seen") or []) if name}
+        before = set(seen)
+        for message in self.store.messages(session["id"]):
             if message["role"] == "tool":
                 content = message["content"]
-                used.add(content.get("tool"))
+                if content.get("tool"):
+                    seen.add(str(content["tool"]))
                 if content.get("tool") == "describe_tool":
-                    used.add(str((content.get("args") or {}).get("name") or ""))
-        return used
+                    named = str((content.get("args") or {}).get("name") or "")
+                    if named:
+                        seen.add(named)
+        if seen != before:
+            session["tools_seen"] = sorted(seen)
+            self.store.save_session(session)
+        return seen
 
     async def _catalog(self, session: dict | None = None) -> str:
         """Every tool with its description. Large argument schemas appear only once the chat uses the tool, so a chat
@@ -1609,8 +2080,11 @@ class AgentService:
             parts.append({"type": "text", "text": f"Image asset_id {asset_id}:"})
             parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
         session = self.get_session(session_id)
-        models = [session["model"]] if ((await self.atlas.model_info(session["model"])) or {}).get("vision") else []
-        models += [m for m in VISION_FALLBACK_MODELS if m not in models]
+        # The chat's own model first when it can see, then the vision role. That role used to be a hardcoded
+        # pair of Atlas ids, so on any other provider both 404ed and a text-only chat could not inspect at all.
+        chat_model = await self.model_for("director", session)
+        models = [chat_model] if ((await self.atlas.model_info(chat_model)) or {}).get("vision") else []
+        models += [m for m in await self.models_for("vision", session) if m not in models]
         failures = []
         for model in models:
             try:
@@ -1762,7 +2236,7 @@ class AgentService:
                 before = member.get("growth") or []
                 member["growth"] = clean_growth(before + [item["note"]])
                 if member["growth"] != before:
-                    added.append((display_name(member, index, len(cast)), item["note"], ""))
+                    added.append((member.get("id", ""), display_name(member, index, len(cast)), item["note"], ""))
                     if len(member["growth"]) >= MERGE_GROWTH_AT:
                         merge.append((member["id"], None))
                 continue
@@ -1771,13 +2245,26 @@ class AgentService:
             feelings = clean_feelings({**feelings, key: before + [item["note"]]})
             if feelings.get(key) != before:
                 member["feelings"] = feelings
-                added.append((display_name(member, index, len(cast)), item["note"], self._about_name(cast, key)))
+                added.append((member.get("id", ""), display_name(member, index, len(cast)), item["note"],
+                              self._about_name(cast, key)))
                 if len(feelings[key]) >= cast_talk.MAX_FEELINGS:
                     merge.append((member["id"], key))
         if not added:
             return
-        self.update_session(session_id, cast=cast)
-        for speaker, note, about in added:
+        updated = self.update_session(session_id, cast=cast)
+        # The same note, as a relation, for nothing: it already carries who felt it and about whom. Written here
+        # rather than at compaction so the graph is useful before a chat is ever long enough to compact, and so
+        # the relation outlives the prose note that _merge_growth will eventually fold away.
+        self._seed_graph(updated)
+        for member_id, speaker, note, about in added:
+            # Owned by the character it belongs to, never by "" (said aloud). _grow keeps these in that
+            # character's own feelings and growth, and the other characters' prompts do not show them: writing
+            # them as public facts would hand Riya's private view of Tiya straight to Tiya through recall.
+            if about:
+                self._write_fact(updated, member_id, speaker, "feels_toward", about, f"{speaker} on {about}: {note}")
+            else:
+                self._write_fact(updated, member_id, speaker, "status_of", speaker, f"{speaker}: {note}")
+        for _, speaker, note, about in added:
             content = {"text": note, "kind": "grow", "speaker": speaker}
             if about:
                 content["about"] = about
@@ -1801,7 +2288,7 @@ class AgentService:
         request = [{"role": "system", "content": MERGE_GROWTH_PROMPT.format(limit=limit)},
                    {"role": "user", "content": f"Character: {name}. Persona: {member.get('persona', '')}{about}\n\nGrowth notes, oldest first:\n{listing}"}]
         text = None
-        for model in dict.fromkeys((self.summary_model, session["model"])):
+        for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
                 text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=3000, temperature=0.2, max_retries=1)
             except AtlasError as exc:
@@ -1860,9 +2347,10 @@ class AgentService:
         elif persona:
             facts.append("You have no avatar yet. When the user asks to see you, generate_image a picture of your persona, "
                          "then set_avatar with it.")
-        grown = self._growth_text(cast_of(session)[0]).replace("they have", "you have")
-        if grown:
-            facts.append(grown)
+        # Growth is deliberately NOT here. It changes almost every turn, and anything inside the persona block
+        # sits near the top of a ~6k prompt that is otherwise identical between calls: one word of growth moving
+        # invalidates the provider's cache for everything after it. It goes in the CHARACTER STATE message that
+        # _build_messages puts below the stable prefix instead.
         text = f"{persona}\n\n{' '.join(facts)}".strip() if persona or facts else ""
         return text + self._adaptive_rules(False) if session.get("adaptive") else text
 
@@ -1872,11 +2360,9 @@ class AgentService:
         for member in view["cast"]:
             face = (f"Avatar: asset {member['avatar_asset_id']}." if member["avatar_url"]
                     else "No avatar yet (when the user asks to see them, generate_image a picture, then set_avatar with speaker).")
-            grown = self._growth_text(member)
-            felt = "; ".join(f"about {self._about_name(cast, key)}: " + " ".join(notes)
-                             for key, notes in clean_feelings(member.get("feelings")).items())
-            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}" + (f" {grown}" if grown else "")
-                          + (f" Private feelings ({member['display_name']} only): {felt}." if felt else ""))
+            # Growth and private feelings are not here on purpose: see _state_text. They change nearly every
+            # turn in an adaptive chat, and this block is the part of the prompt worth keeping byte-identical.
+            people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}")
         names = ", ".join(member["display_name"] for member in view["cast"])
         return (
             f"This chat is a group conversation. You voice a cast of {len(cast)} characters: {names}. The user talks to all of them.\n"
@@ -1897,6 +2383,50 @@ class AgentService:
             + (self._adaptive_rules(True) if session.get("adaptive") else "")
         )
 
+    def _recent_text(self, session: dict) -> str:
+        """The last few messages as plain words, only to decide which names this turn is about."""
+        parts = []
+        for message in self.store.messages(session["id"])[-4:]:
+            content = message["content"]
+            if isinstance(content, dict):
+                parts.append(str(content.get("text") or content.get("say") or ""))
+                for line in content.get("lines") or []:
+                    parts.append(str((line or {}).get("say") or ""))
+        return " ".join(part for part in parts if part)[-4000:]
+
+    def _state_text(self, session: dict) -> str:
+        """How the characters have grown and what they privately feel, as its own block.
+
+        This used to live inside {{PERSONA}}, at the top of a prompt that is otherwise the same on every call of
+        a chat. Providers cache a prompt by its leading bytes and stop at the first one that differs, so a single
+        growth note landing there threw away the cached ~6k prefix and the whole instruction block was re-read at
+        full price -- up to eight times per user message. Below the stable prefix it invalidates nothing above it.
+        """
+        cast = cast_of(session)
+        group = len(cast) > 1
+        blocks: list[str] = []
+        if group:
+            view = self.public(session)
+            for member, raw in zip(view["cast"], cast):
+                grown = self._growth_text(raw)
+                felt = "; ".join(f"about {self._about_name(cast, key)}: " + " ".join(notes)
+                                 for key, notes in clean_feelings(raw.get("feelings")).items())
+                if not grown and not felt:
+                    continue
+                line = f"- {member['display_name']}:"
+                if grown:
+                    line += f" {grown}"
+                if felt:
+                    line += f" Private feelings ({member['display_name']} only): {felt}."
+                blocks.append(line)
+        else:
+            grown = self._growth_text(cast[0]).replace("they have", "you have")
+            if grown:
+                blocks.append(grown)
+        if not blocks:
+            return ""
+        return "CHARACTER STATE (the newest part of who they are; it changes as the chat goes on)\n" + "\n".join(blocks)
+
     async def _build_messages(self, session: dict) -> list[dict]:
         system = render_agent_prompt(
             self.service.prompts.get("agent"),
@@ -1916,9 +2446,16 @@ class AgentService:
                 "Never reply with \"say\" here: every spoken word belongs to a named character, and a reply with no "
                 "\"lines\" reaches the user with no name on it."
             )
+        # The order is the whole point: [0] never changes between calls, [1] changes only at a compaction, [2]
+        # changes every turn. Each one sits below everything more stable than it, so the cached prefix survives.
         messages = [{"role": "system", "content": system}]
         if session.get("summary"):
             messages.append({"role": "system", "content": f"SUMMARY OF THE EARLIER CONVERSATION:\n{session['summary']}"})
+        state = self._state_text(session)
+        recall = self._recall_text(session, "", self._recent_text(session))
+        block = "\n\n".join(part for part in (state, recall) if part)
+        if block:
+            messages.append({"role": "system", "content": block})
         history = self._history_messages(session)
         if history and history[0]["role"] == "assistant":
             history.insert(0, {"role": "user", "content": "(continuing the conversation)"})
@@ -1949,11 +2486,14 @@ class AgentService:
                 lines.append(f"{m['role'].upper()}: {json.dumps(content, ensure_ascii=False)}")
         transcript = "\n".join(lines)
         previous = f"Earlier summary:\n{session['summary']}\n\n" if session.get("summary") else ""
-        request = [{"role": "system", "content": SUMMARY_PROMPT}, {"role": "user", "content": previous + transcript[-400_000:]}]
+        # The same single call now also returns the facts for the graph. json_mode is on, but nothing depends on
+        # it: read_summary_and_facts treats an unparseable reply as the prose summary it always was.
+        request = [{"role": "system", "content": SUMMARY_PROMPT + facts_tail()},
+                   {"role": "user", "content": previous + transcript[-400_000:]}]
         text = usage = model = None
-        for model in dict.fromkeys((self.summary_model, session["model"])):
+        for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
                 break
             except AtlasError as exc:
                 log.warning("summary with %s failed: %s", model, exc)
@@ -1962,11 +2502,17 @@ class AgentService:
                 raise RequestError("Could not summarise the chat right now; try again in a moment.")
             return False
         await self._add_usage(session["id"], model, usage)
+        summary, facts = read_summary_and_facts(text)
         fresh = self.get_session(session["id"])
-        fresh["summary"] = text.strip()
+        fresh["summary"] = summary
         fresh["summary_upto"] = older[-1]["id"]
         self.store.save_session(fresh)
         session.update(summary=fresh["summary"], summary_upto=fresh["summary_upto"])
+        # owner "" : this is the conversation as everyone heard it, which is what the director knows.
+        self._seed_graph(fresh)
+        for fact in facts:
+            self._write_fact(fresh, "", fact.get("s"), fact.get("r"), fact.get("o"),
+                             fact.get("f"), fact.get("v", 1.0), fresh["summary_upto"])
         return True
 
     async def context_tokens(self, session: dict) -> int:

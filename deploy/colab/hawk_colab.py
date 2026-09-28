@@ -489,15 +489,12 @@ def _start_comfyui(session: Session) -> None:
     if _http_status(f"{base}/queue", timeout=3) == 200:
         if _http_json(f"{base}/object_info/HawkH3Director"):
             session.procs["comfyui"] = None
-            print(
-                f"Reusing the ComfyUI already running on port {COMFY_PORT}. For LLM planning it must have been "
-                "started with ATLAS_API_KEY in its environment."
-            )
+            print(f"Reusing the ComfyUI already running on port {COMFY_PORT}.")
             return
         raise RuntimeError(
             f"A ComfyUI is already running on port {COMFY_PORT} without the Hawk H3 nodes (it was started before "
             "they were installed). Stop it -- interrupt your ComfyUI cell, or run `!pkill -f 'ComfyUI/main.py'` -- "
-            "then run this cell again so ComfyUI restarts with the nodes and your Atlas key."
+            "then run this cell again so ComfyUI restarts with the nodes."
         )
     # --reserve-vram: the VAE decode at the very end of an otherwise finished render is what usually OOMs.
     cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048",
@@ -656,7 +653,7 @@ def start(
     for key, value in models.items():
         print(f"  {key:11} {value or '(none)'}")
     if not atlas_api_key and not openrouter_api_key:
-        print("Note: no ATLAS_API_KEY or OPENROUTER_API_KEY secret, so planning (plan_film / story) will fail. "
+        print("Note: no ATLAS_API_KEY or OPENROUTER_API_KEY secret, so planning and chats will fail. "
               "Scripts still render.")
     if not token:
         token = secrets.token_hex(24)

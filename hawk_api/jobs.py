@@ -24,10 +24,11 @@ import uuid
 
 import httpx
 
-from hawk_h3.script import ScriptError, build_jobs, parse_script
+from hawk_h3.script import ScriptError, build_jobs, parse_script, reference_counts_line
 
 from . import graph as graphs
 from . import image_engines
+from . import models_llm
 from .atlas import AtlasClient, AtlasError, routing_block as atlas_routing
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
@@ -130,6 +131,13 @@ THUMB_WIDTHS = (160, 320, 640, 1280, 2048)  # 1280 / 2048: the full-screen viewe
 #: folder -- and those are narrower models: 4096 wide against the 32B's 5120. Offering one to a render does
 #: not fail in the loader, it fails deep in the first matmul with "mat1 and mat2 shapes cannot be
 #: multiplied", which names no file. This is the same pair hawk_colab's own detection has always required.
+#: Longest side of an image handed to the planner. The node uses 1024; a bigger picture costs tokens without
+#: telling the planner anything new about a shot it only has to describe.
+PLANNER_IMAGE_SIDE = 1024
+#: Seconds into a video clip to sample, so the planner sees how a reference clip starts, sits and ends.
+PLANNER_VIDEO_STAMPS = (0.0, 1.5, 3.0)
+PLANNER_MAX_TOKENS = 8192
+
 MODEL_FAMILIES = {"diffusion_models": (("ref2va",), "Base model"),
                   "text_encoders": (("qwen3vl", "minimax"), "Text encoder")}
 
@@ -390,6 +398,9 @@ class HawkService:
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
         self._llm_clients: dict[tuple[str, str, str], AtlasClient] = {}  # per url+key+routing; see the atlas property
         self._tasks: list[asyncio.Task] = []
+        #: Plans in flight. A plan is written by the gateway rather than queued in ComfyUI, so it runs as a
+        #: task; held here so stop() can cancel one instead of leaving a job stuck at "running".
+        self._plan_tasks: set[asyncio.Task] = set()
 
     # ------------------------------------------------------------ properties
 
@@ -398,8 +409,51 @@ class HawkService:
         return self.llm_settings.resolve(self.settings.llm_overrides)
 
     def planner_model(self) -> str:
-        """The model plan_film uses when a request does not name one."""
+        """The planner's configured chain, as written. Comma-separated, best first; see models_llm.chain."""
         return self.llm().planner_model_override or self.settings.planner_model
+
+    async def model_catalogue(self) -> list[dict]:
+        """The chat models the provider in force serves, or [] when it cannot be asked.
+
+        [] means "do not second-guess the setting" to models_llm, so a /models call that fails leaves every
+        role sending exactly the id it was configured with.
+        """
+        try:
+            return await self.atlas.list_models()
+        except AtlasError as exc:
+            log.warning("hawk_api: model list unavailable, using configured ids as-is: %s", exc)
+            return []
+
+    async def model_for(self, role: str, catalogue: list[dict] | None = None) -> str:
+        """The id to send for one role on whichever provider is switched on. See hawk_api/models_llm.py."""
+        llm = self.llm()
+        configured = {
+            "planner": llm.planner_model_override or self.settings.planner_model,
+            "director": llm.agent_model_override or self.settings.agent_model,
+            "prose": llm.agent_prose_model_override or self.settings.agent_prose_model,
+            "summary": llm.agent_summary_model_override or self.settings.agent_summary_model,
+            "vision": llm.agent_vision_model_override or self.settings.agent_vision_model,
+        }.get(role, "")
+        if catalogue is None:
+            catalogue = await self.model_catalogue()
+        return models_llm.resolve(role, configured, catalogue)
+
+    async def model_report(self, catalogue: list[dict] | None = None) -> dict:
+        """Per role: what is configured, what it resolves to here, and whether that is what was asked for.
+
+        Returned when the LLM settings are saved, because switching provider silently re-points every role and
+        the alternative is finding out from a render that fails much later.
+        """
+        llm = self.llm()
+        if catalogue is None:
+            catalogue = await self.model_catalogue()
+        return models_llm.report({
+            "planner": llm.planner_model_override or self.settings.planner_model,
+            "director": llm.agent_model_override or self.settings.agent_model,
+            "prose": llm.agent_prose_model_override or self.settings.agent_prose_model,
+            "summary": llm.agent_summary_model_override or self.settings.agent_summary_model,
+            "vision": llm.agent_vision_model_override or self.settings.agent_vision_model,
+        }, catalogue)
 
     def forget_llm_clients(self) -> None:
         """Drop the cached clients so the next call is built from the settings just saved."""
@@ -439,6 +493,13 @@ class HawkService:
 
     async def start(self) -> None:
         load_config(self.settings.loras_path)  # create loras.json on first start
+        # A plan runs as a task in this process, so a restart loses it with nothing in ComfyUI to reconcile
+        # against. Left alone the job would poll as "running" for ever; retry re-runs it.
+        for job in self.store.list_jobs(limit=500, statuses=ACTIVE):
+            if job["kind"] == "plan" and not job.get("prompt_id"):
+                job.update(status="failed", resumable=True,
+                           error="The plan was interrupted by a server restart. Retry it.")
+                self.store.save_job(job)
         self._tasks = [
             asyncio.create_task(self.comfy.listen(self.handle_event)),
             asyncio.create_task(self._reconcile_loop()),
@@ -448,6 +509,10 @@ class HawkService:
             log.warning("hawk_api: required default LoRAs missing on the pod: %s", health.get("missing_required_loras"))
 
     async def stop(self) -> None:
+        for task in self._plan_tasks:
+            task.cancel()
+        if self._plan_tasks:
+            await asyncio.gather(*self._plan_tasks, return_exceptions=True)
         for task in self._tasks:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
@@ -579,8 +644,11 @@ class HawkService:
             planner_models = []
         return {
             "planner_models": planner_models,
-            "default_planner_model": self.planner_model(),
-            "default_agent_model": self.llm().agent_model_override or self.settings.agent_model,
+            # The resolved id, not the configured chain: a dropdown has to preselect something it lists.
+            "default_planner_model": await self.model_for("planner", planner_models),
+            "default_agent_model": await self.model_for("director", planner_models),
+            "model_chains": {"planner": self.planner_model(),
+                             "agent": self.llm().agent_model_override or self.settings.agent_model},
             "diffusion_models": model_family("diffusion_models", await self.available_models("diffusion_models", refresh=True)),
             "text_encoders": model_family("text_encoders", await self.available_models("text_encoders", refresh=True)),
             "default_unet": self.render_models.resolve(self.settings.models).unet_name,
@@ -1397,18 +1465,166 @@ class HawkService:
 
     # ------------------------------------------------------------ jobs
 
-    def _planner_args(self, options: PlannerOptions, seed: int) -> dict:
+    async def _planner_args(self, options: PlannerOptions, seed: int) -> dict:
         return {
             "story": options.story,
             "segment_count": options.segment_count,
             "segment_seconds": options.segment_seconds,
             "aspect_ratio": options.aspect_ratio,
-            "model": options.model or self.planner_model(),
+            # Resolved, never the raw chain: the node takes one id, and a comma-separated string reaches the
+            # provider as a model that does not exist.
+            "model": await self._planner_model_id(options.model),
             "seed": seed,
             "temperature": options.temperature,
             # Blank keeps the node's built-in guide; an edited planner prompt gets the platform rules appended.
             "system_prompt": (f"{custom.rstrip()}\n\n{PLATFORM_RULES}" if (custom := self.prompts.custom("planner")) else ""),
         }
+
+    async def _planner_model_id(self, requested: str = "") -> str:
+        """One model id for the planner: what the caller asked for, else the configured chain, resolved here.
+
+        A request naming a model still goes through the resolver, so "xai/grok-4.6" works on a pod switched to
+        OpenRouter, where the same model is spelled "x-ai/grok-4.6".
+        """
+        catalogue = await self.model_catalogue()
+        if str(requested or "").strip():
+            return models_llm.resolve("planner", requested, catalogue) or str(requested).strip()
+        return await self.model_for("planner", catalogue)
+
+    def planner_system_prompt(self) -> str:
+        """The planner's instructions: the user's edited prompt with the platform rules, else the node's own.
+
+        Read from hawk_h3's own prompt file rather than duplicated, so the gateway and the node cannot drift.
+        hawk_h3.planner itself imports ComfyUI, which the gateway has no business importing, but the prompt is
+        just a file.
+        """
+        custom = self.prompts.custom("planner")
+        if custom:
+            return f"{custom.rstrip()}\n\n{PLATFORM_RULES}"
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hawk_h3", "prompts", "planner_system.md")
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return handle.read().strip()
+        except OSError as exc:
+            raise Unavailable(f"The planner's instructions are missing ({path}): {exc}") from None
+
+    async def _planner_message(self, options: PlannerOptions, refs: list) -> tuple[str, list[str]]:
+        """The planner's user message and the images attached to it, in the order the text refers to them.
+
+        This mirrors hawk_h3.planner.build_request, which cannot be reused directly because it works on
+        decoded tensors inside ComfyUI while the gateway has assets on disk.
+        """
+        images: list[str] = []
+        lines: list[str] = []
+        counts = {"picture": 0, "pose": 0, "video": 0, "audio": 0}
+
+        async def attach(asset: dict) -> None:
+            data, mime = await self.asset_file(asset["id"], PLANNER_IMAGE_SIDE)
+            images.append(f"data:{mime};base64," + base64.b64encode(data).decode("ascii"))
+
+        for ref in refs:
+            if ref.role not in counts:
+                continue
+            counts[ref.role] += 1
+            number = counts[ref.role]
+            asset = self.store.get_asset(ref.asset_id) or {}
+            label = f" -- {ref.label}" if ref.label else ""
+            if ref.role in ("picture", "pose"):
+                await attach(asset)
+                kind = ", a POSE reference (body pose only)" if ref.role == "pose" else ""
+                lines.append(f"<{ref.role.capitalize()} {number}> = attached image {len(images)}{kind}{label}")
+            elif ref.role == "video":
+                first = len(images) + 1
+                stamps = []
+                for seconds in PLANNER_VIDEO_STAMPS:
+                    frame = await self._video_frame(asset, seconds, PLANNER_IMAGE_SIDE)
+                    if frame is None:
+                        continue
+                    images.append("data:image/jpeg;base64," + base64.b64encode(frame).decode("ascii"))
+                    stamps.append(f"{seconds:g}s")
+                if stamps:
+                    lines.append(f"<Video {number}> = clip; attached images {first}-{len(images)} are its frames "
+                                 f"at {', '.join(stamps)}{label}")
+                else:
+                    # ffmpeg missing or the clip would not decode. Naming it unattached is honest: the planner
+                    # can still write around a reference it was told about but cannot see.
+                    lines.append(f"<Video {number}> = clip (frames not attached){label}")
+            else:
+                lines.append(f"<Audio {number}> = audio clip (not attached){label}")
+
+        count = (f"exactly {options.segment_count} segment(s)" if options.segment_count > 0
+                 else "as many segments as the story needs (usually 2-8)")
+        available = {"Picture": counts["picture"], "Pose": counts["pose"],
+                     "Video": counts["video"], "Audio": counts["audio"]}
+        text = "\n".join([
+            "BRIEF:", options.story.strip(), "",
+            "REFERENCES (global numbering):", *(lines or ["(none -- this is a text-only film)"]), "",
+            "CONSTRAINTS:",
+            f"- Write {count}.",
+            f"- Target about {options.segment_seconds:g} seconds per segment (each 5-15s).",
+            f"- Frame: {options.aspect_ratio}.",
+            f"- {reference_counts_line(available)}",
+            "- Return only the JSON object described in your instructions.",
+        ])
+        return text, images
+
+    async def _video_frame(self, asset: dict, seconds: float, width: int) -> bytes | None:
+        """One JPEG frame from a video, or None when it cannot be taken. Never raises: a reference the planner
+        cannot see is a weaker plan, not a failed render."""
+        if not asset or not shutil.which("ffmpeg"):
+            return None
+        source = self.local_asset_path(asset)
+        temp = None
+        if source is None:
+            try:
+                temp = tempfile.NamedTemporaryFile(suffix=os.path.splitext(asset.get("filename", ""))[1] or ".mp4", delete=False)
+                temp.write(await self.asset_bytes(asset))
+                temp.close()
+                source = temp.name
+            except (OSError, NotFound):
+                return None
+        out = os.path.join(tempfile.gettempdir(), f"hawk_plan_{asset['id']}_{seconds:g}.jpg")
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", f"{seconds:g}", "-i", source, "-frames:v", "1",
+                "-vf", f"scale={width}:-2", out,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await process.wait()
+            if process.returncode == 0 and os.path.isfile(out):
+                with open(out, "rb") as handle:
+                    return handle.read()
+            return None
+        finally:
+            for path in (temp.name if temp is not None else None, out):
+                if path and os.path.isfile(path):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
+    async def plan_text(self, options: PlannerOptions, refs: list) -> tuple[str, str, dict]:
+        """Write the film's script here in the gateway, on the provider the settings actually name.
+
+        The planner used to run inside ComfyUI, where the graph hardcoded Atlas's URL and an empty key, so the
+        node fell back to ATLAS_API_KEY in ComfyUI's own environment: choosing OpenRouter in Studio set the
+        planner's model and silently left its provider on Atlas, and none of its tokens were ever counted.
+        Calling it from here fixes all three, and keeps the key out of a graph that gets stored in job records
+        and ComfyUI's history.
+        """
+        model = await self._planner_model_id(options.model)
+        if not model:
+            raise Unavailable("No planner model: the provider in force lists none of the configured ids.")
+        text, images = await self._planner_message(options, refs)
+        content: list[dict] = [{"type": "text", "text": text}]
+        for uri in images:
+            content.append({"type": "image_url", "image_url": {"url": uri}})
+        messages = [{"role": "system", "content": self.planner_system_prompt()},
+                    {"role": "user", "content": content if images else text}]
+        reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
+                                            max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature)
+        if not (reply or "").strip():
+            raise Unavailable(f"{model} returned an empty plan.")
+        return reply, model, usage or {}
 
     @staticmethod
     def _validate_script(text: str, available: dict, video_has_audio: list, settings: RenderSettings) -> int:
@@ -1454,29 +1670,77 @@ class HawkService:
         return job
 
     async def create_plan(self, request: PlanRequest) -> dict:
+        """Start a plan. The script is written by the gateway, not by a node inside ComfyUI.
+
+        A plan job therefore has no ComfyUI prompt and never reaches the queue; it runs as a task so the
+        request returns at once and clients keep polling get_job exactly as before.
+        """
         refs = await self._refs(request.references)
         seed = request.seed if request.seed is not None else random.randrange(1, 2**31)
+        # Validated before anything is queued, so a bad wiring is still a 4xx rather than a failed job.
         try:
-            built, wiring = graphs.plan_graph(refs, self._planner_args(request, seed))
+            wiring = graphs.reference_wiring(refs)
         except graphs.GraphError as exc:
             raise RequestError(str(exc)) from None
         job = self._new_job(
             "plan",
             request=request.model_dump(),
             refs=[dataclasses.asdict(ref) for ref in refs],
-            graph=built.prompt,
-            nodes=built.nodes,
+            graph={},
+            nodes={},
             available=wiring.available,
             video_has_audio=wiring.video_has_audio,
             seed=seed,
         )
-        return await self._submit(job)
+        job["status"] = "planning"  # the status a plan has always reported while the LLM is writing
+        job["started_at"] = time.time()
+        self.store.save_job(job)
+        task = asyncio.create_task(self._run_plan(job["id"], request, refs))
+        self._plan_tasks.add(task)
+        task.add_done_callback(self._plan_tasks.discard)
+        return self.store.get_job(job["id"]) or job
+
+    async def _run_plan(self, job_id: str, request: PlanRequest, refs: list) -> None:
+        """Write the script and finish the job. Every failure ends as a failed job, never an unretrieved
+        exception: the caller has already been given a job id and is polling it."""
+        try:
+            script, model, usage = await self.plan_text(request, refs)
+        except asyncio.CancelledError:
+            job = self.store.get_job(job_id)
+            if job and job["status"] not in ("done", "failed"):
+                job.update(status="failed", error="The plan was interrupted by a server restart.", resumable=True)
+                self.store.save_job(job)
+            raise
+        except (AtlasError, RequestError, Unavailable, NotFound) as exc:
+            job = self.store.get_job(job_id)
+            if job:
+                job.update(status="failed", error=str(exc), resumable=True)
+                self.store.save_job(job)
+            return
+        except Exception as exc:  # a planner bug must not leave a job running for ever
+            log.exception("hawk_api: plan %s failed", job_id)
+            job = self.store.get_job(job_id)
+            if job:
+                job.update(status="failed", error=f"The planner failed: {exc}", resumable=True)
+                self.store.save_job(job)
+            return
+        job = self.store.get_job(job_id)
+        if job is None or job["status"] == "failed":
+            return
+        job["script"] = script
+        job["planner_model"] = model
+        # The planner's tokens used to vanish: the call was made inside ComfyUI, where nothing counts them.
+        job["usage"] = {"model": model, "prompt_tokens": (usage or {}).get("prompt_tokens", 0),
+                        "completion_tokens": (usage or {}).get("completion_tokens", 0)}
+        job["status"] = "done"
+        job["updated_at"] = time.time()
+        self.store.save_job(job)
 
     async def create_video(self, request: VideoRequest) -> dict:
         settings = request.settings
         references = request.references
         script_text: str | None = None
-        planner: dict | None = None
+        planner_model, planner_usage = "", {}
 
         if request.plan_job_id:
             plan = self.store.get_job(request.plan_job_id)
@@ -1533,10 +1797,13 @@ class HawkService:
             clip_name=await self.choose_model(settings.clip_name, "text_encoders", defaults.clip_name),
         )
         if request.story is not None:
-            planner = self._planner_args(request.story, seed % 2**31)
+            # Planned here rather than by a node in the graph, so the provider chosen in Studio is the one that
+            # writes the film and its tokens are counted. The render then takes the finished script, which is
+            # the path render_graph already had for a plan the user edited by hand.
+            script_text, planner_model, planner_usage = await self.plan_text(request.story, refs)
 
         try:
-            built, wiring = graphs.render_graph(refs, models, loras, params, script=script_text, planner=planner)
+            built, wiring = graphs.render_graph(refs, models, loras, params, script=script_text)
         except graphs.GraphError as exc:
             raise RequestError(str(exc)) from None
 
@@ -1563,6 +1830,10 @@ class HawkService:
             steps=steps,
             steps_reason=steps_reason,
             warnings=warnings,
+            # Recorded on the render itself when it planned its own script, because the planner is a paid call
+            # made here in the gateway and used to be billed invisibly inside ComfyUI.
+            planner_model=planner_model,
+            planner_usage=planner_usage,
         )
         return await self._submit(job)
 
@@ -1641,6 +1912,18 @@ class HawkService:
             raise Conflict(f"Job {job_id} is still {job['status']}.")
         if job["status"] == "done":
             raise Conflict(f"Job {job_id} already finished.")
+        if job["kind"] == "plan":
+            # A plan has no graph to resubmit: it is an LLM call made here, so retrying means running it again.
+            request = PlanRequest(**job["request"])
+            refs = [graphs.Ref(**ref) for ref in job["refs"]]
+            job.update(status="planning", error=None, resumable=False, script=None, started_at=time.time(),
+                       updated_at=time.time())
+            self.store.save_job(job)
+            task = asyncio.create_task(self._run_plan(job["id"], request, refs))
+            self._plan_tasks.add(task)
+            task.add_done_callback(self._plan_tasks.discard)
+            return self.store.get_job(job["id"]) or job
+        # Only a job recorded before planning moved into the gateway still has a planner node in its graph.
         if job["kind"] == "render" and job.get("script") and job["nodes"].get("planner"):
             # One-call job whose plan already arrived: render that exact script so the
             # Director's resume cache matches instead of asking the LLM for a new plan.
@@ -1872,6 +2155,10 @@ class HawkService:
                 "steps_total": job.get("steps_total"),
             },
             "script": job.get("script"),
+            # The planner is a paid LLM call the gateway makes, so what it cost belongs in the job. It used to
+            # happen inside ComfyUI, where nothing counted it.
+            "planner_model": job.get("planner_model") or None,
+            "usage": job.get("usage") or job.get("planner_usage") or None,
             "error": job.get("error"),
             "resumable": job.get("resumable", False),
             "warnings": job.get("warnings", []),

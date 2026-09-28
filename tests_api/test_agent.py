@@ -36,6 +36,11 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(f"agent test dependencies missing: {exc}")
 
+DEEPSEEK = {"id": "deepseek-ai/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "input_modalities": ["text", "image"],
+            "output_modalities": ["text"], "context_length": 1048576, "pricing": {"prompt": "0.0000003", "completion": "0.0000012"}}
+#: What a provider's /models returns. The pod's own summary default has to be in here, because a role that
+#: names a model the provider does not serve now falls through to the next id in its chain -- correct, but it
+#: would make these tests assert a fallback rather than the behaviour they are about.
 MODELS = [
     {"id": "xai/grok-4.3", "name": "Grok 4.3", "input_modalities": ["text", "image"], "output_modalities": ["text"],
      "context_length": 1000000, "pricing": {"prompt": "0.00000125", "completion": "0.0000025"}},
@@ -43,9 +48,8 @@ MODELS = [
     {"id": "anthropic/claude-opus-4.8-coding", "name": "Opus coding", "input_modalities": ["text"], "output_modalities": ["text"], "pricing": {}},
     {"id": "xai/grok-4.6", "name": "Grok 4.6", "input_modalities": ["text", "image"], "output_modalities": ["text"],
      "context_length": 500000, "pricing": {"prompt": "0.000002", "completion": "0.000006", "input_cache_read": "0.0000005"}},
+    DEEPSEEK,
 ]
-DEEPSEEK = {"id": "deepseek-ai/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash", "input_modalities": ["text", "image"],
-            "output_modalities": ["text"], "context_length": 1048576, "pricing": {"prompt": "0.0000003", "completion": "0.0000012"}}
 
 
 class FakeAtlas:
@@ -113,6 +117,16 @@ def tool_result_text(content: str, tool: str) -> str:
     return match.group(1)
 
 
+def is_summary(body: dict) -> bool:
+    """Whether a recorded call is one of the two summarisers rather than a director or character turn.
+
+    Both summarisers now ask for a JSON object, because the graph's facts ride in the same call they always
+    made, so response_format no longer tells them apart. Their prompts do.
+    """
+    system = str((body.get("messages") or [{}])[0].get("content") or "")
+    return system.startswith("Summarise the conversation") or "Write your own memory of the conversation" in system
+
+
 def assistant_turns(body: dict) -> int:
     return sum(1 for message in body["messages"] if message["role"] == "assistant")
 
@@ -159,7 +173,10 @@ class AGroupShotsReferences(unittest.TestCase):
         self.assertEqual(text, "A street at night.", "nothing to say about references there is none of")
 
 
-class AgentApi(unittest.IsolatedAsyncioTestCase):
+class AgentHarness(unittest.IsolatedAsyncioTestCase):
+    """The fixtures: a fake ComfyUI, a fake chat provider and a running API. No tests of its own, so a
+    test file in another module can subclass it without re-running everything in this one."""
+
     async def asyncSetUp(self):
         self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "MAX_STEPS")}
         agent_module.WAIT_POLL_SECONDS = 0.05
@@ -210,14 +227,36 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
                 self.fail(f"agent still running: {view}")
             await asyncio.sleep(0.05)
 
+    async def planner_system_message(self, body: dict) -> str:
+        """Start a plan, wait for it, and return the system message its LLM call carried."""
+        plan = (await self.http.post("/v1/plans", json=body)).json()
+        deadline = asyncio.get_event_loop().time() + 5
+        while True:
+            job = (await self.http.get(f"/v1/jobs/{plan['id']}")).json()
+            if job["status"] in ("done", "failed"):
+                break
+            if asyncio.get_event_loop().time() > deadline:
+                self.fail(f"plan never finished: {job}")
+            await asyncio.sleep(0.02)
+        planner_calls = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])]
+        self.assertTrue(planner_calls, "the gateway should have made a planner call")
+        return planner_calls[-1]["messages"][0]["content"]
+
+
+class AgentApi(AgentHarness):
     async def test_planner_models_and_model_choice(self):
         options = (await self.http.get("/v1/options")).json()
-        self.assertEqual([m["id"] for m in options["planner_models"]], ["xai/grok-4.6", "xai/grok-4.3"])
+        self.assertEqual([m["id"] for m in options["planner_models"]],
+                         ["xai/grok-4.6", "xai/grok-4.3", "deepseek-ai/deepseek-v4.1-flash"])
         self.assertTrue(options["planner_models"][0]["vision"])
-        self.assertEqual((options["default_planner_model"], options["default_agent_model"]), ("xai/grok-4.3", "xai/grok-4.6"))
-        plan = (await self.http.post("/v1/plans", json={"story": "A walk", "model": "xai/grok-4.6"})).json()
-        planner = next(n for n in self.fake.prompts[plan["id"]].values() if n["class_type"] == "HawkH3StoryPlanner")
-        self.assertEqual(planner["inputs"]["model"], "xai/grok-4.6")
+        # The planner leads with 4.6: 4.3 writes markedly weaker film plans and is the fallback, not the default.
+        self.assertEqual((options["default_planner_model"], options["default_agent_model"]), ("xai/grok-4.6", "xai/grok-4.6"))
+        self.assertEqual(options["model_chains"]["planner"], "xai/grok-4.6, xai/grok-4.3",
+                         "the configured chain is returned beside the resolved id, because that is what the field holds")
+        await self.planner_system_message({"story": "A walk", "model": "xai/grok-4.6"})
+        planner_call = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])][-1]
+        self.assertEqual(planner_call["model"], "xai/grok-4.6",
+                         "the planner call goes to the provider the settings name, with the model asked for")
         listed = (await self.http.get("/v1/agent/models")).json()
         self.assertTrue(listed["configured"])
 
@@ -432,7 +471,12 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "again"})
         view = await self.settle(chat["id"])
         self.assertEqual(view["session"]["cast"][0]["growth"], ["Calls the user 'boss' now."], "repeats are not stored twice")
-        self.assertIn("Calls the user 'boss' now.", self.atlas.requests[-1]["messages"][0]["content"])
+        # Growth reaches the model in the CHARACTER STATE block, not the system prompt: it changes almost every
+        # turn, and inside the prompt it would invalidate the provider's cache for the whole instruction block.
+        sent = self.atlas.requests[-1]["messages"]
+        self.assertIn("Calls the user 'boss' now.", "\n".join(m["content"] for m in sent if m["role"] == "system"))
+        self.assertNotIn("Calls the user 'boss' now.", sent[0]["content"],
+                         "the cacheable prefix must not carry anything that changes turn to turn")
 
         # editing a persona keeps growth; growth [] resets it
         edited = view["session"]["cast"]
@@ -470,7 +514,11 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view["session"]["persona"], "You are Maya.")
         await self.http.post(f"/v1/agent/sessions/{solo}/messages", json={"text": "next"})
         await self.settle(solo)
-        self.assertIn("you have grown in this chat so far", self.atlas.requests[-1]["messages"][0]["content"])
+        systems = [m["content"] for m in self.atlas.requests[-1]["messages"] if m["role"] == "system"]
+        self.assertIn("you have grown in this chat so far", "\n".join(systems),
+                      "a single persona's growth still reaches the model, in the CHARACTER STATE block")
+        self.assertNotIn("you have grown in this chat so far", systems[0],
+                         "but not in the prefix that is meant to be identical between calls")
 
     async def test_let_them_talk(self):
         cast = [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}, {"name": "Zoya", "persona": "poet"}]
@@ -801,7 +849,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         files["diffusion_models"].append("krea2_turbo_fp8_scaled.safetensors")
         files["text_encoders"].append("qwen3vl_4b_fp8_scaled.safetensors")
         files["vae"] = ["qwen_image_vae.safetensors"]
-        self.atlas.model_list = MODELS + [DEEPSEEK]
+        self.atlas.model_list = MODELS  # DEEPSEEK is in it; listing it twice would make its slug ambiguous
         self.atlas.fail_vision = {"deepseek-ai/deepseek-v4.1-flash"}  # e.g. refuses to review adult images
         reviewers = []
 
@@ -1376,16 +1424,17 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(reset["is_default"])
         self.assertEqual(len(reset["history"]), 2)
 
+        # The planner runs in the gateway now, so its prompt reaches the provider in a system message rather
+        # than a node widget. Nothing about a graph is asserted here because a plan no longer builds one.
         planner_text = 'Custom planner guide. Return JSON {"segments": [...]}.'
         self.assertEqual((await self.http.put("/v1/prompts/planner", json={"text": planner_text})).json()["warnings"], [])
-        plan = (await self.http.post("/v1/plans", json={"story": "A walk"})).json()
-        node = next(n for n in self.fake.prompts[plan["id"]].values() if n["class_type"] == "HawkH3StoryPlanner")
-        self.assertTrue(node["inputs"]["system_prompt"].startswith(planner_text))
-        self.assertIn("PLATFORM RULES", node["inputs"]["system_prompt"])
+        system = await self.planner_system_message({"story": "A walk"})
+        self.assertTrue(system.startswith(planner_text), system[:200])
+        self.assertIn("PLATFORM RULES", system, "an edited planner prompt still gets the platform rules appended")
         await self.http.post("/v1/prompts/planner/reset")
-        plan = (await self.http.post("/v1/plans", json={"story": "A walk"})).json()
-        node = next(n for n in self.fake.prompts[plan["id"]].values() if n["class_type"] == "HawkH3StoryPlanner")
-        self.assertEqual(node["inputs"]["system_prompt"], "")
+        system = await self.planner_system_message({"story": "A walk"})
+        self.assertNotIn(planner_text, system, "a reset prompt must not keep sending the edited text")
+        self.assertTrue(system.strip(), "after a reset the planner sends hawk_h3's own instructions, not nothing")
         self.assertEqual((await self.http.get("/v1/prompts/nope")).status_code, 404)
 
     async def test_invalid_json_is_repaired_then_fails(self):
@@ -1423,7 +1472,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.agent.compact_tokens, self.agent.keep_messages = 1, 2
 
         def reply(body):
-            if "response_format" not in body:
+            if is_summary(body):
                 return "SUMMARY: user wants a chai ad"
             return json.dumps({"say": "ok", "actions": [] if assistant_turns(body) else [{"tool": "list_references", "args": {}}], "done": False})
 
@@ -1434,16 +1483,16 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
             view = await self.settle(chat)
         self.assertEqual(view["session"]["summary"], "SUMMARY: user wants a chai ad")
         self.assertGreater(view["session"]["summary_upto"], 0)
-        summaries = [r for r in self.atlas.requests if "response_format" not in r]
+        summaries = [r for r in self.atlas.requests if is_summary(r)]
         self.assertEqual(summaries[0]["model"], "deepseek-ai/deepseek-v4.1-flash", "summaries use the cheap model")
-        last = [r for r in self.atlas.requests if "response_format" in r][-1]
+        last = [r for r in self.atlas.requests if not is_summary(r)][-1]
         self.assertTrue(any("SUMMARY OF THE EARLIER CONVERSATION" in m["content"] for m in last["messages"] if m["role"] == "system"))
 
     async def test_compaction_saves_tokens(self):
         long_prompt = "A very detailed portrait prompt. " * 60
 
         def reply(body):
-            if "response_format" not in body:
+            if is_summary(body):
                 return "SUMMARY: made a portrait of Maya (asset ids in the tool results)."
             turn = assistant_turns(body)
             if turn == 0:
@@ -1477,6 +1526,13 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("sha256", history, "an earlier turn's raw tool details are trimmed")
         self.assertNotIn(long_prompt, history, "an earlier turn's long arguments are cut")
         self.assertNotIn('call describe_tool {"name": "render_film"}', later[0]["content"], "schema shown once described")
+
+        # Enough conversation that a compaction has something to fold: it fires at ~20k tokens in real use, and
+        # the tool catalogue no longer shrinks when it does (that shrinking is what used to throw away the cached
+        # prefix), so on a three-message chat the folding has less to win back than the resident schema costs.
+        for n in range(14):
+            await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": f"aur batao {n} " * 40})
+            await self.settle(chat)
 
         before = self.agent.store.messages(chat)
         self.atlas.reply = reply
@@ -1554,7 +1610,7 @@ class AgentApi(unittest.IsolatedAsyncioTestCase):
         self.agent.compact_tokens, self.agent.keep_messages = 1, 2
 
         def reply(body):
-            if "response_format" not in body:
+            if is_summary(body):
                 return "SUMMARY: talked about the emerald lehenga"
             return json.dumps({"say": "Noted.", "actions": [], "done": True})
 

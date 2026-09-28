@@ -802,8 +802,12 @@
             <input class="agent-title" id="agentTitle" aria-label="Chat title" placeholder="New chat">
             <span class="badge" id="agentStatus" hidden></span>
             <div class="spacer"></div>
-            <label class="sr-only" for="agentModel">Model</label>
-            <select class="select" id="agentModel" style="width:auto;max-width:220px;height:32px"></select>
+            <label class="sr-only" for="agentModel">Director model</label>
+            <select class="select" id="agentModel" style="width:auto;max-width:220px;height:32px"
+                    title="Director: reads your message, calls the tools, writes the image and video prompts"></select>
+            <label class="sr-only" for="agentProseModel">Prose model</label>
+            <select class="select" id="agentProseModel" style="width:auto;max-width:220px;height:32px"
+                    title="Prose: the characters' spoken turns. Must be able to reply with a JSON object."></select>
             <button class="btn btn-sm" id="agentPersonaBtn" type="button" aria-expanded="false">Persona</button>
             <label class="adaptive-toggle" title="Characters grow from your conversation and from talking to each other: new habits, nicknames, memories and feelings. Their core identity and the safety rules never change."><input type="checkbox" id="agentAdaptive"> 🌱 Adaptive</label>
             <span class="row" id="agentTalkBox" hidden style="gap:4px;flex-wrap:wrap">
@@ -830,6 +834,7 @@
             </div>
             <span class="hint">Tip: ask the agent "show me a picture of you". It generates one and makes it its avatar here.</span>
             <div class="growth" id="agentGrowth" hidden></div>
+            <div class="growth" id="agentKnows" hidden></div>
             <div class="cast-extra" id="castExtra"></div>
             <div class="row"><button class="btn btn-sm" id="castAdd" type="button">+ Add character</button><span class="hint">Up to 4 characters in one chat, like a group chat. Talk to one with @Name.</span></div>
             <div class="row" id="personaChips"></div>
@@ -1018,6 +1023,7 @@
             </datalist>
             <div class="field"><label class="label" for="llmRouting">OpenRouter routing</label>
               <select class="select" id="llmRouting">
+                <option value="sticky">Sticky \u2014 one service per model, so a cached prompt stays warm</option>
                 <option value="balanced">Balanced \u2014 cheapest of the bf16/fp16/fp8 services</option>
                 <option value="quality">Quality \u2014 bf16/fp16 only</option>
                 <option value="cheapest">Cheapest \u2014 any weight, including int4</option>
@@ -1026,20 +1032,43 @@
               </select>
               <span class="hint">One model id on OpenRouter is served by many companies at different prices and
                 different weights. An int4 copy is a visibly worse model than the bf16 copy of the same id, so
-                without this two identical calls can come back at two qualities. Ignored on Atlas.</span>
+                without this two identical calls can come back at two qualities. A prompt cache belongs to one
+                service, so anything that moves calls between them — Balanced and Cheapest both do — throws the
+                warm prefix away and re-reads the whole instruction block at full price. Ignored on Atlas.</span>
             </div>
             <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
               <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set">
                 <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
             </div>
-            <div class="field"><label class="label" for="llmPlannerModel">Planner Model</label>
+            <span class="hint">Every box below takes <b>one id or a comma-separated list, best first</b>. A model id
+              belongs to a provider, so the later ids are what run when the provider in force does not serve the
+              earlier ones — that is how one setting works on both Atlas and OpenRouter. What each role will
+              actually send is shown under its box.</span>
+            <div class="field"><label class="label" for="llmPlannerModel">Planner Model — writes the film's segment script</label>
               <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">
+              <span class="hint" id="llmPlannerResolved"></span>
             </div>
-            <div class="field"><label class="label" for="llmAgentModel">Agent Model</label>
+            <div class="field"><label class="label" for="llmAgentModel">Director Model — tools, orchestration, image and video prompts</label>
               <input class="input mono" id="llmAgentModel" list="llmModelList" placeholder="Leave empty for default">
+              <span class="hint" id="llmDirectorResolved"></span>
             </div>
-            <div class="field"><label class="label" for="llmSummaryModel">Summary Model</label>
+            <div class="field"><label class="label" for="llmProseModel">Prose Model — the characters' voices</label>
+              <div class="row"><input class="input mono" id="llmProseModel" list="llmModelList" placeholder="Leave empty to use the chat's own model">
+                <button class="btn btn-sm" type="button" id="llmProseUncensored">Uncensored</button></div>
+              <span class="hint">Must be able to reply with a JSON object; one that will not is retried on the
+                Director's model, and failing that its reply is read as plain speech. Community finetunes are
+                OpenRouter-only, so put a model Atlas serves after it and the same setting works on both.</span>
+              <span class="hint" id="llmProseResolved"></span>
+            </div>
+            <div class="field"><label class="label" for="llmSummaryModel">Summary Model — compaction and per-character memory</label>
               <input class="input mono" id="llmSummaryModel" list="llmModelList" placeholder="Leave empty for default">
+              <span class="hint" id="llmSummaryResolved"></span>
+            </div>
+            <div class="field"><label class="label" for="llmVisionModel">Vision Model — looks at generated images</label>
+              <input class="input mono" id="llmVisionModel" list="llmModelList" placeholder="Leave empty for default">
+              <span class="hint">Used when the chat's own model cannot see, which is every chat on a text-only
+                prose model. Only models the provider lists as accepting images are tried.</span>
+              <span class="hint" id="llmVisionResolved"></span>
             </div>
             <div class="row"><button class="btn btn-sm btn-primary" id="llmSave" type="button">Save</button><span class="hint" id="llmHint"></span></div>
           </div>
@@ -3368,10 +3397,13 @@
   function paintLLMSettings(data) {
     $("llmProvider").value = data.llm_provider || "atlas";
     $("llmOpenrouterUrl").value = data.openrouter_url || "https://openrouter.ai/api/v1";
-    $("llmRouting").value = data.openrouter_routing || "balanced";
+    $("llmRouting").value = data.openrouter_routing || "sticky";
     $("llmPlannerModel").value = data.planner_model_override || "";
     $("llmAgentModel").value = data.agent_model_override || "";
+    $("llmProseModel").value = data.agent_prose_model_override || "";
     $("llmSummaryModel").value = data.agent_summary_model_override || "";
+    $("llmVisionModel").value = data.agent_vision_model_override || "";
+    paintModelReport(data.models || {});
     // A key is never painted into its own box. It used to be, masked, and the next save sent the mask back
     // as the key: the box says whether one is stored, and typing replaces it.
     for (const [field, flag, hint] of [["llmAtlasKey", "atlas_api_key_override_set", "atlas_api_key_override_hint"],
@@ -3383,6 +3415,43 @@
     $("llmHint").textContent = "Keys live on the runtime's disk, which a restart wipes. Put one in a Colab "
       + "secret (OPENROUTER_API_KEY) to keep it across restarts.";
   }
+  //: Which role each hint line belongs to. Switching provider silently re-points all of them, so the panel
+  //: shows what will actually be sent rather than only what was typed.
+  const LLM_ROLE_HINTS = { planner: "llmPlannerResolved", director: "llmDirectorResolved",
+                           prose: "llmProseResolved", summary: "llmSummaryResolved", vision: "llmVisionResolved" };
+  function paintModelReport(report) {
+    for (const [role, id] of Object.entries(LLM_ROLE_HINTS)) {
+      const host = $(id);
+      if (!host) continue;
+      const card = report[role];
+      if (!card) { host.textContent = ""; continue; }
+      if (!card.listed) {
+        host.textContent = "Provider model list unavailable — the id above is sent as written.";
+        host.style.color = "";
+        continue;
+      }
+      const sending = (card.resolved || [])[0];
+      if (!sending) {
+        host.textContent = "⚠ Nothing for this role is served here. This feature will not run.";
+        host.style.color = "var(--bad, #c33)";
+      } else if (card.fallback) {
+        host.textContent = `⚠ Sending ${sending} — nothing you asked for is served here, so the `
+          + `cheapest listed model was used. Pick one from the list.`;
+        host.style.color = "var(--bad, #c33)";
+      } else if (!card.honoured) {
+        host.textContent = `Sending ${sending} — not the first id above, which this provider does not serve.`;
+        host.style.color = "var(--warn, #b80)";
+      } else {
+        host.textContent = `Sending ${sending}.`;
+        host.style.color = "";
+      }
+    }
+  }
+  $("llmProseUncensored").onclick = () => {
+    // Magnum is OpenRouter-only, so a model Atlas serves follows it: the one setting then works on both.
+    $("llmProseModel").value = "anthracite-org/magnum-v4-72b, xai/grok-4.6";
+    toast("Prose chain set", "Save to apply. On Atlas it falls through to Grok, so the chat keeps working.");
+  };
   async function loadLLMSettings() {
     try { paintLLMSettings(await api("/v1/settings/llm")); }
     catch (error) { console.error("Could not load LLM settings:", error); }
@@ -3411,7 +3480,9 @@
       openrouter_routing: $("llmRouting").value,
       planner_model_override: $("llmPlannerModel").value,
       agent_model_override: $("llmAgentModel").value,
-      agent_summary_model_override: $("llmSummaryModel").value
+      agent_prose_model_override: $("llmProseModel").value,
+      agent_summary_model_override: $("llmSummaryModel").value,
+      agent_vision_model_override: $("llmVisionModel").value
     };
     // An empty key box means "leave the stored one alone", so it is left out rather than sent as blank.
     if ($("llmAtlasKey").value.trim()) body.atlas_api_key_override = $("llmAtlasKey").value.trim();
@@ -3588,6 +3659,7 @@
       const data = await api("/v1/agent/models");
       agent.models = data.models || [];
       agent.defaultModel = data.default_agent_model;
+      agent.defaultProseModel = data.default_prose_model || data.default_agent_model;
       agent.modelsLoaded = true;
       if (!data.configured) toast("Agent needs an Atlas key", "Set ATLAS_API_KEY for the API and restart it.", "warn", 8000);
     } catch (error) {
@@ -3617,7 +3689,13 @@
   }
   function fillAgentModels() {
     const session = currentSession();
-    $("agentModel").innerHTML = modelOptions(agent.models, session?.model || agent.defaultModel, session?.model || agent.defaultModel);
+    const director = session?.model || agent.defaultModel;
+    $("agentModel").innerHTML = modelOptions(agent.models, director, director);
+    // An empty first option is the point: a chat with no prose model of its own follows the pod's setting,
+    // which is how every chat behaved before the director and the characters were given separate models.
+    const prose = session?.prose_model || "";
+    const follow = `<option value=""${prose ? "" : " selected"}>Prose: same as the pod (${esc(agent.defaultProseModel || director)})</option>`;
+    $("agentProseModel").innerHTML = follow + modelOptions(agent.models, prose, prose);
   }
 
   const currentSession = () => agent.sessions.find((s) => s.id === agent.current) || null;
@@ -3762,13 +3840,26 @@
     $("agentStop").hidden = !running;
     $("agentStop").disabled = session.status === "stopping";
     const usage = session.usage || {};
-    $("agentUsage").textContent = usage.steps ? `${((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)).toLocaleString()} tokens · $${(usage.cost_usd || 0).toFixed(3)}` : "";
+    // The cached share is shown on the line itself, not only in the tooltip: it is the one number that says
+    // whether the prompt is being re-read at full price on every call, and it is otherwise invisible.
+    const cachedShare = usage.prompt_tokens ? Math.round(100 * (usage.cached_tokens || 0) / usage.prompt_tokens) : 0;
+    $("agentUsage").textContent = usage.steps
+      ? `${((usage.prompt_tokens || 0) + (usage.completion_tokens || 0)).toLocaleString()} tokens · `
+        + `${cachedShare}% cached · $${(usage.cost_usd || 0).toFixed(3)}`
+      : "";
     $("agentUsage").title = `Model tokens and estimated cost for this chat: ${(usage.prompt_tokens || 0).toLocaleString()} in`
-      + `${usage.cached_tokens ? ` (${usage.cached_tokens.toLocaleString()} cached)` : ""}, ${(usage.completion_tokens || 0).toLocaleString()} out, ${usage.steps || 0} calls`;
+      + `${usage.cached_tokens ? ` (${usage.cached_tokens.toLocaleString()} cached, billed at the cache-read price)` : ""}`
+      + `, ${(usage.completion_tokens || 0).toLocaleString()} out`
+      + `${usage.reasoning_tokens ? ` (${usage.reasoning_tokens.toLocaleString()} of it reasoning you never see)` : ""}`
+      + `, ${usage.steps || 0} calls.`
+      + (cachedShare < 20 && usage.steps > 3
+         ? " A low cached share means the prompt is being re-read at full price every call; on OpenRouter check the routing preset."
+         : "");
     $("agentCompact").disabled = running;
     $("agentForgetLast").disabled = running;
     $("agentDelete").disabled = false;
-    if (agent.modelsLoaded && $("agentModel").value !== session.model) fillAgentModels();
+    if (agent.modelsLoaded && ($("agentModel").value !== session.model
+        || $("agentProseModel").value !== (session.prose_model || ""))) fillAgentModels();
     renderAgentSessions();
     const typing = $("agentThread").querySelector(".typing");
     if (running && !typing) $("agentThread").insertAdjacentHTML("beforeend", `<div class="typing" aria-label="Agent is working"><i></i><i></i><i></i></div>`);
@@ -3934,7 +4025,8 @@
   function callCost(usage) {  // this reply's model call: tokens in / out and estimated cost
     if (!usage || !usage.in) return "";
     const title = `This call: ${usage.in.toLocaleString()} tokens in${usage.cached ? ` (${usage.cached.toLocaleString()} cached)` : ""}, `
-      + `${(usage.out || 0).toLocaleString()} out, about $${(usage.cost_usd || 0).toFixed(4)} on ${usage.model || "the chat's model"}`;
+      + `${(usage.out || 0).toLocaleString()} out${usage.reasoning ? ` (${usage.reasoning.toLocaleString()} reasoning)` : ""}`
+      + `, about $${(usage.cost_usd || 0).toFixed(4)} on ${usage.model || "the chat's model"}`;
     return ` · <span title="${esc(title)}">${kTokens(usage.in)} in · ${kTokens(usage.out || 0)} out</span>`;
   }
   // A turn may be all tools and no words. Saying nothing at all would leave a hole in the thread while the
@@ -4111,7 +4203,14 @@
   }
   $("agentTitle").addEventListener("change", () => patchSession({ title: $("agentTitle").value }));
   $("agentTitle").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); $("agentTitle").blur(); } });
-  $("agentModel").addEventListener("change", async () => { if (await patchSession({ model: $("agentModel").value })) toast("Model changed", $("agentModel").selectedOptions[0]?.textContent || "", "ok", 2500); });
+  $("agentModel").addEventListener("change", async () => { if (await patchSession({ model: $("agentModel").value })) toast("Director model changed", $("agentModel").selectedOptions[0]?.textContent || "", "ok", 2500); });
+  $("agentProseModel").addEventListener("change", async () => {
+    const chosen = $("agentProseModel").value;
+    if (await patchSession({ prose_model: chosen })) {
+      toast("Prose model changed", chosen ? ($("agentProseModel").selectedOptions[0]?.textContent || "")
+        : "The characters follow the pod's prose model again.", "ok", 2500);
+    }
+  });
   function togglePersona(open) {
     $("agentPersonaPanel").hidden = !open;
     $("agentPersonaBtn").setAttribute("aria-expanded", String(open));
@@ -4154,7 +4253,42 @@
       + (session?.adaptive ? "" : `<span class="hint">Adaptive is off, so nothing new is added; what's here still shapes the replies.</span>`) : "";
     box.hidden = !grown.length;
     if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+    loadAgentKnows();
   }
+  //: What the chat has worked out, as facts. Read-only apart from deleting one: a cheap summary model will
+  //: occasionally invent a fact, and being able to see and remove it is what makes recall safe to leave on.
+  const REL_WORDS = { feels_toward: "feels about", relation_to: "is to", located_in: "is in", status_of: "is",
+                      wants: "wants", owns: "owns", made: "made", agreed: "agreed with", knows_about: "knows about" };
+  async function loadAgentKnows() {
+    const box = $("agentKnows");
+    if (!agent.current) { box.hidden = true; return; }
+    let data;
+    try { data = await api(`/v1/agent/sessions/${agent.current}/graph`); }
+    catch (error) { box.hidden = true; return; }
+    const live = (data.facts || []).filter((f) => f.state === "live");
+    if (!live.length) { box.hidden = true; box.dataset.html = ""; return; }
+    const row = (f) => `<li><span title="${esc(`${f.src_label} ${REL_WORDS[f.rel] || f.rel} ${f.dst_label}`)}">`
+      + `${f.private_to ? `<span title="Private: only ${esc(f.private_to)} knows this">🔒 </span>` : ""}${esc(f.fact)}</span>`
+      + `<button type="button" title="This is wrong — forget it" aria-label="Forget this fact" data-fact="${f.id}">×</button></li>`;
+    const stale = (data.facts || []).length - live.length;
+    const html = `<div class="row" style="justify-content:space-between"><span class="label" style="margin:0">`
+      + `🧠 What this chat knows</span><span class="hint" style="margin:0">${live.length} fact${live.length === 1 ? "" : "s"}`
+      + `${stale ? `, ${stale} superseded` : ""}${data.recall_on ? "" : " · recall off"}</span></div>`
+      + `<ul>${live.map(row).join("")}</ul>`
+      + `<span class="hint">Written when the chat is compacted and when a character changes, at no extra cost, and `
+      + `recalled only for whoever a turn is about. It survives a restart and a change of model. Delete anything wrong.</span>`;
+    box.hidden = false;
+    if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+  }
+  $("agentKnows").addEventListener("click", async (event) => {
+    const button = event.target.closest("button[data-fact]");
+    if (!button || !agent.current) return;
+    try {
+      await api(`/v1/agent/sessions/${agent.current}/graph/facts/${button.dataset.fact}`, { method: "DELETE" });
+      await loadAgentKnows();
+      toast("Fact forgotten", "It will not be recalled again.", "ok", 2500);
+    } catch (error) { toast("Could not forget it", error.message, "bad"); }
+  });
   function castWithGrowth(edit, feel = () => null) {  // edit / feel return null to keep a character's growth / feelings
     return castOf().map((m) => ({ id: m.id, name: m.name || "", persona: m.persona || "", avatar_asset_id: m.avatar_asset_id || "", growth: edit(m), feelings: feel(m) }));
   }
