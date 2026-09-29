@@ -42,6 +42,8 @@ class TwoModelsOneChat(AgentHarness):
         def reply(body):
             if speaking_character(body):
                 return json.dumps({"say": "arre wah", "to": "all"})
+            if not any(m["role"] == "assistant" for m in body["messages"]):
+                return json.dumps({"say": "Dekhti hoon.", "actions": [{"tool": "list_options", "args": {}}]})
             return json.dumps({"say": "Done.", "actions": [], "done": True})
 
         self.atlas.reply = reply
@@ -57,8 +59,12 @@ class TwoModelsOneChat(AgentHarness):
                          "every character turn should use the prose model")
         director = [r for r in self.atlas.requests if str(r["messages"][0]["content"]).startswith("You are Hawk")]
         self.assertTrue(director, "the director should still have run")
-        self.assertEqual({c["model"] for c in director}, {"xai/grok-4.6"},
-                         "the director needs strict tool JSON and must not follow the characters to a prose model")
+        # The line the characters say through the director is theirs, so it is the prose model's too -- that is
+        # the whole point of the setting, and a chat with one character had no other way to reach it. Reading
+        # back what a tool returned is not anyone speaking, and it needs strict JSON, so it keeps its own model.
+        self.assertEqual(director[0]["model"], PROSE, "the first step is the answer to the user: the cast talking")
+        self.assertEqual({c["model"] for c in director[1:]}, {"xai/grok-4.6"},
+                         "every step after it reads a tool result, and must not follow the characters to a prose model")
 
     async def test_a_chat_made_before_the_split_falls_back_to_the_pods_own_model(self):
         # The migration story: the key is simply absent on every chat that already exists.

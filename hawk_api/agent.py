@@ -49,6 +49,14 @@ MAX_TALK_MAKES_TOTAL = 8  # and across the whole cast, so a big room can't order
 MAKE_STEPS = 8  # model steps the director gets to make one thing
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 TURN_MAX_TOKENS = 4000  # room for reasoning models; a turn itself is short
+#: The director drives tools, where the JSON matters more than the wording, so it stays cool. A chat with a
+#: character is that character talking, and 0.4 is not a temperature to write 800 messages of one scene at:
+#: once two identical replies are in the history they are the strongest pattern in the prompt, and the model
+#: reproduces them word for word whatever is asked next. That is what a stuck chat looks like.
+DIRECTOR_TEMPERATURE = 0.4
+PROSE_TEMPERATURE = 0.8  # the same the characters already use when they talk to each other
+REPEAT_TEMPERATURE = 1.0  # the retry after a reply came back word for word identical to the last one
+REPEAT_LOOKBACK = 20  # messages read back to find the previous reply; a whole chat is not worth loading
 MAX_GROWTH = 12  # hard cap on growth notes per character in an adaptive chat
 MERGE_GROWTH_AT = 8  # at this many notes, the model merges them into a few denser ones
 MERGED_GROWTH = 4
@@ -1381,7 +1389,8 @@ class AgentService:
             return True
         return False
 
-    async def _director_call(self, session_id: str, session: dict, messages: list[dict]) -> tuple[str, str, dict]:
+    async def _director_call(self, session_id: str, session: dict, messages: list[dict], *,
+                             prose: bool = False, temperature: float | None = None) -> tuple[str, str, dict]:
         """One director step, walking down the configured chain when the provider errors.
 
         The director was the only model call on the whole path with no fallback at all: the prose turn, both
@@ -1389,11 +1398,22 @@ class AgentService:
         this one let it escape to _run, which ends the entire turn with "Model error". A single rate limit
         was therefore worth more here than anywhere else -- and it is what makes a free-tier model, which is
         rate limited by definition, unusable for the busiest role in the chat.
+
+        ``prose`` leads with the prose chain instead. A chat with one character never reached _character_turn
+        -- that needs two, because it is the characters talking to each other -- so every word a lone
+        character said came from the director model and the prose setting did nothing at all, though Studio
+        offers it and says it governs "the characters' spoken turns". The director chain still follows, since
+        a model picked for voice may be the worse one at returning the JSON that drives the tools.
         """
-        models = await self.models_for("director", session)
+        models = await self.models_for("prose" if prose else "director", session)
+        if prose:
+            models += [m for m in await self.models_for("director", session) if m not in models]
+        if temperature is None:
+            temperature = PROSE_TEMPERATURE if prose else DIRECTOR_TEMPERATURE
         for position, model in enumerate(models):
             try:
-                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192)
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192,
+                                                    temperature=temperature)
             except AtlasError as exc:
                 if position + 1 >= len(models):
                     raise
@@ -1403,13 +1423,38 @@ class AgentService:
             return model, text, usage
         raise AtlasError("No director model is available: the provider lists none of the configured ids.")
 
+    @staticmethod
+    def _spoken(content: dict) -> str:
+        """Everything a reply actually said, for comparing one turn against the one before it."""
+        lines = content.get("lines") or []
+        return "\n".join(str(line.get("say", "")) for line in lines) if lines else str(content.get("say") or "")
+
+    def _said_before(self, session_id: str, reply: dict) -> bool:
+        """Whether this reply is word for word the one already in the chat.
+
+        Two identical replies are self-reinforcing: the pair is the clearest pattern in the prompt, so the
+        third comes back identical too, and by then nothing the user types changes the answer.
+        """
+        said = self._spoken(reply).strip()
+        if not said:
+            return False
+        # Only the tail: the previous reply is a handful of messages back at most, behind that turn's tool
+        # results and growth notes. Forgotten messages are left out by default, which is right -- a reply the
+        # user hid is not in the prompt, so repeating it is not the trap this is looking for.
+        for message in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)):
+            if message["role"] != "assistant" or message["content"].get("invalid"):
+                continue
+            return self._spoken(message["content"]).strip() == said
+        return False
+
     async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "",
                              subjects: tuple[str, ...] = ()) -> dict | None:
         """The full agent (persona or cast, tools, pipeline) works until it replies without actions. Returns the last
         reply, or None when it stopped. private_to: the user whispered to one character, so the answer is private too.
         asked_by: the character who asked for this while they were talking, so what it makes belongs to them."""
         started = time.monotonic()
-        steps = repairs = 0
+        steps = repairs = repeats = 0
+        answered = False  # this turn has stored a reply, so anything after it is reading tool results
         reply = None
         while True:
             if self._halted(session_id, started, steps, max_steps):
@@ -1417,7 +1462,17 @@ class AgentService:
             session = self.get_session(session_id)
             await self._maybe_summarize(session)
             messages = await self._build_messages(session)
-            model, text, usage = await self._director_call(session_id, session, messages)
+            # The first step of a turn is the answer to the user, and in a chat with a character that answer is
+            # the character talking: it belongs to the prose model. Every step after it is reading a tool
+            # result, which is the director's job whoever the chat is with -- and so is a reply that has to be
+            # asked for again, because that is a model failing at the JSON rather than at the voice.
+            #
+            # Asked of the session rather than of cast_of(), which never comes back empty: a chat with no cast
+            # has its persona as one member. A chat with neither is someone making a video, not a character.
+            speaks = bool(session.get("cast")) or bool(str(session.get("persona") or "").strip())
+            model, text, usage = await self._director_call(
+                session_id, session, messages, prose=speaks and not answered and not repairs,
+                temperature=REPEAT_TEMPERATURE if repeats else None)
             steps += 1
             call = await self._add_usage(session_id, model, usage)
             reply = parse_reply(text)
@@ -1438,6 +1493,14 @@ class AgentService:
                     reply["lines"] = recovered
                 else:
                     reply["narrator"] = True  # nobody is speaking: the UI shows it without a character's name
+            # Word for word the last reply: ask again rather than store it, because storing it is what makes
+            # the next one identical too. Not stored, so the retry sees the conversation it was meant to.
+            if not repeats and not reply["actions"] and self._said_before(session_id, reply):
+                repeats += 1
+                self._note(session_id, "Your last reply repeated the previous one word for word. Answer what was "
+                                       "just said instead, and move the scene on rather than restating it.", "repair")
+                continue
+            repeats, answered = 0, True
             content = {"raw": text[:8000], **reply, "usage": call}
             if private_to:
                 content["private_to"] = private_to

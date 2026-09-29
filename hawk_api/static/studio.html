@@ -847,7 +847,7 @@
                     title="Director: reads your message, calls the tools, writes the image and video prompts"></select>
             <label class="sr-only" for="agentProseModel">Prose model</label>
             <select class="select" id="agentProseModel" style="width:auto;max-width:220px;height:32px"
-                    title="Prose: the characters' spoken turns. Must be able to reply with a JSON object."></select>
+                    title="Prose: what the characters say, in this chat and when they talk to each other. Tool steps stay on the director model, so this one must still be able to reply with a JSON object."></select>
             <button class="btn btn-sm" id="agentPersonaBtn" type="button" aria-expanded="false">Persona</button>
             <label class="adaptive-toggle" title="Characters grow from your conversation and from talking to each other: new habits, nicknames, memories and feelings. Their core identity and the safety rules never change."><input type="checkbox" id="agentAdaptive"> 🌱 Adaptive</label>
             <span class="row" id="agentTalkBox" hidden style="gap:4px;flex-wrap:wrap">
