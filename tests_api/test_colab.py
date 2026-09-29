@@ -175,6 +175,62 @@ class Runtime(unittest.TestCase):
             self.assertFalse(hawk_colab.port_free(port))
         self.assertTrue(hawk_colab.port_free(port))
 
+    def test_a_busy_comfyui_is_not_a_dead_one(self):
+        """watch() force-restarts a ComfyUI it believes has died, and a killed render is unrecoverable.
+
+        With a ComfyUI started by another notebook cell there is no process to poll, so the only question
+        left is over HTTP -- and one deep in a render answers /queue late. A single slow probe used to be
+        enough to restart it and lose a 40-minute render, so it takes several misses in a row now.
+        """
+        probes = iter([None, None, 200, None, None, None])  # two slow, recovers, then genuinely gone
+        seen = []
+
+        def status(url, headers=None, timeout=10.0):
+            seen.append(timeout)
+            return next(probes)
+
+        strikes, restarted, comfy_strikes = 0, [], 3
+        for _ in range(6):
+            answered = status("/queue", timeout=hawk_colab.COMFY_PROBE_SECONDS) == 200
+            strikes = 0 if answered else strikes + 1
+            if strikes >= comfy_strikes:
+                restarted.append(True)
+                strikes = 0
+        self.assertEqual(len(restarted), 1, "only the three misses in a row count as death, not the first two")
+        self.assertTrue(all(t >= 20 for t in seen),
+                        "a five second patience is what made a rendering ComfyUI look dead in the first place")
+
+    def test_the_attention_report_names_a_backend_that_is_not_there(self):
+        # hawk_h3 skips a missing backend with a log line and renders anyway, several times slower, and
+        # nothing about the result looks wrong -- so the launcher has to say it out loud.
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.env = {"HAWK_ATTENTION": "sol scheduled"}
+        saved = hawk_colab._http_json
+        hawk_colab._http_json = lambda *a, **k: None
+        try:
+            report = hawk_colab.attention_report(session)
+        finally:
+            hawk_colab._http_json = saved
+        self.assertIn("MISSING", report, "a mode asking for sol without sol loaded has to be visible")
+        self.assertIn("dense attention", report, "and it has to say what that costs")
+
+    def test_the_attention_report_is_quiet_when_the_backend_is_loaded(self):
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.env = {"HAWK_ATTENTION": "sol scheduled"}
+        saved = hawk_colab._http_json
+        hawk_colab._http_json = lambda url, **k: {"SolAttnPatch": {}} if "SolAttnPatch" in url else None
+        try:
+            report = hawk_colab.attention_report(session)
+        finally:
+            hawk_colab._http_json = saved
+        self.assertIn("loaded", report)
+        self.assertNotIn("MISSING", report, "nothing is wrong, so nothing should look wrong")
+
+    def test_comfy_default_attention_needs_no_backend_at_all(self):
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.env = {"HAWK_ATTENTION": "comfy default"}
+        self.assertIn("no extra backend needed", hawk_colab.attention_report(session))
+
     def test_blackwell_torch_check(self):
         blackwell = {"cap": [12, 0], "arch": ["sm_80", "sm_90", "sm_120"]}
         self.assertFalse(hawk_colab.needs_blackwell_torch(blackwell))

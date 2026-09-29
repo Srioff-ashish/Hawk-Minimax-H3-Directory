@@ -56,6 +56,9 @@ CLIP_PREFERENCE = ["nvfp4", "int8", "bf16"]
 TURBO_PREFERENCE = ["4step_v0.1_comfyui_bf16", "4step", "8step"]
 
 COMFY_PORT = 8188
+#: How long watch() waits for /queue before counting a strike. A ComfyUI mid-render serves its own sampling
+#: loop first, so this is a patience setting, not a liveness one.
+COMFY_PROBE_SECONDS = 20
 API_PORT = 8000
 #: `pkill -f` pattern for this launcher's own tunnel only. A notebook may run a second
 #: quick tunnel for the ComfyUI UI (e.g. `cloudflared tunnel --url http://localhost:8188`);
@@ -489,7 +492,10 @@ def _start_comfyui(session: Session) -> None:
     if _http_status(f"{base}/queue", timeout=3) == 200:
         if _http_json(f"{base}/object_info/HawkH3Director"):
             session.procs["comfyui"] = None
-            print(f"Reusing the ComfyUI already running on port {COMFY_PORT}.")
+            print(f"Reusing the ComfyUI already running on port {COMFY_PORT}. It was started outside this "
+                  "module, so it is not a process this session can poll, and any custom node installed "
+                  "since it started is not loaded in it.")
+            print(attention_report(session))
             return
         raise RuntimeError(
             f"A ComfyUI is already running on port {COMFY_PORT} without the Hawk H3 nodes (it was started before "
@@ -505,6 +511,7 @@ def _start_comfyui(session: Session) -> None:
     if not _http_json(f"{base}/object_info/HawkH3Director"):
         raise RuntimeError(f"ComfyUI started but the Hawk H3 nodes did not load. Log:\n{log_tail(session.log('comfyui'), 80)}")
     print("ComfyUI is up with the Hawk H3 nodes.")
+    print(attention_report(session))
 
 
 def _start_tunnel(session: Session) -> None:
@@ -724,7 +731,7 @@ def status_line(session: Session) -> str:
     return " | ".join(parts)
 
 
-def watch(session: Session, interval: int = 60, comfy_restarts: int = 3) -> None:
+def watch(session: Session, interval: int = 60, comfy_restarts: int = 3, comfy_strikes: int = 3) -> None:
     """Print status every `interval` seconds and restart ComfyUI, the tunnel or the API if they die.
     Stop the cell to stop watching; the services keep running.
 
@@ -732,14 +739,31 @@ def watch(session: Session, interval: int = 60, comfy_restarts: int = 3) -> None
     ComfyUI only printed "run the start cell again" and stopped watching. Because the API kept serving, the
     pod stayed up answering /healthz with comfy unreachable, so Studio showed "GPU unreachable" for as long
     as nobody was looking at the notebook. An OOM in one render is now a couple of minutes, not a dead pod.
+
+    ``comfy_strikes`` is what stops that turning into the opposite problem. A ComfyUI this module started is
+    a process to poll, and a process that has exited is dead beyond argument. One started by another cell is
+    not: ``procs["comfyui"]`` is None, the only question left is over HTTP, and a ComfyUI deep in a render
+    answers /queue late or not at all. One slow probe then read as death and force-restarted a working
+    render -- which is what "ComfyUI no longer knows this job" in a 40-minute render means. It now has to
+    miss several probes in a row, so a busy pod is never mistaken for a dead one.
     """
-    restarts, last_restart = 0, 0.0
+    restarts, last_restart, strikes = 0, 0.0, 0
     try:
         while True:
             comfy = session.procs.get("comfyui")
-            comfy_dead = comfy.poll() is not None if comfy is not None else \
-                _http_status(f"http://127.0.0.1:{COMFY_PORT}/queue", timeout=5) != 200
+            if comfy is not None:
+                comfy_dead = comfy.poll() is not None
+            else:
+                answered = _http_status(f"http://127.0.0.1:{COMFY_PORT}/queue", timeout=COMFY_PROBE_SECONDS) == 200
+                strikes = 0 if answered else strikes + 1
+                comfy_dead = strikes >= comfy_strikes
+                if not answered and not comfy_dead:
+                    print(f"{time.strftime('%H:%M:%S')} ComfyUI did not answer within {COMFY_PROBE_SECONDS}s "
+                          f"({strikes}/{comfy_strikes}) -- probably busy rendering, not gone.", flush=True)
+                    time.sleep(interval)
+                    continue
             if comfy_dead:
+                strikes = 0
                 print("ComfyUI stopped." + (f" Last log lines:\n{log_tail(session.log('comfyui'))}" if comfy else ""))
                 if time.time() - last_restart > 3600:
                     restarts = 0  # healthy for an hour: the budget is for a crash loop, not for the pod's lifetime
@@ -816,6 +840,36 @@ def restart_comfyui(session: Session, extra_args: list[str] | None = None, force
     if not _http_json(f"{base}/object_info/HawkH3Director"):
         raise RuntimeError(f"ComfyUI restarted but the Hawk H3 nodes did not load. Log:\n{log_tail(session.log('comfyui'), 80)}")
     print("ComfyUI is up with the updated Hawk H3 nodes. The first render reloads the models.")
+    print(attention_report(session))
+
+
+def attention_report(session: Session) -> str:
+    """Whether the backends the chosen attention mode needs are actually loaded in the ComfyUI on the port.
+
+    hawk_h3/loader.py skips a missing backend with a log line and renders anyway, which is the right
+    behaviour and the reason this is worth printing: the render is several times slower and nothing about
+    it looks wrong. Custom nodes are only read at ComfyUI start, so a ComfyUI that was already running when
+    install() cloned ComfyUI-SolAttn_triton does not have it, however many times the mode is passed.
+    """
+    mode = session.env.get("HAWK_ATTENTION", "")
+    base, lines = f"http://127.0.0.1:{COMFY_PORT}", []
+    if "sol" in mode:
+        loaded = bool(_http_json(f"{base}/object_info/SolAttnPatch")
+                      or _http_json(f"{base}/object_info/MiniMaxH3ScheduledSolAttentionPatch"))
+        lines.append(f"  sol   {'loaded' if loaded else 'MISSING -- renders fall back to dense attention'}")
+        if not loaded:
+            lines.append("        ComfyUI-SolAttn_triton is not in this ComfyUI. Restart ComfyUI from this "
+                         "module (RESTART_COMFY) so it reads custom_nodes again.")
+    if "sage" in mode:
+        try:
+            import sageattention  # noqa: F401
+            ok = True
+        except Exception:
+            ok = False
+        lines.append(f"  sage  {'installed' if ok else 'MISSING -- pip install sageattention'}")
+    if not lines:
+        return f"attention: {mode or 'default'} (no extra backend needed)"
+    return f"attention: {mode}\n" + "\n".join(lines)
 
 
 def show_logs(session: Session, lines: int = 60) -> None:
