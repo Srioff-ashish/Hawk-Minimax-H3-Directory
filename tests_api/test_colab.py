@@ -200,36 +200,75 @@ class Runtime(unittest.TestCase):
         self.assertTrue(all(t >= 20 for t in seen),
                         "a five second patience is what made a rendering ComfyUI look dead in the first place")
 
+    def test_a_restart_brings_back_the_comfyui_that_was_started(self):
+        """One builder for the argv, because a restart that drops a flag is invisible until a render OOMs.
+
+        --reserve-vram is the one that matters: the VAE decode at the very end of an otherwise finished
+        render is what usually runs out of memory, and losing it there loses the whole render.
+        """
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.comfy_args = ["--preview-method", "auto"]
+        saved = hawk_colab.sage_installed
+        hawk_colab.sage_installed = lambda: True
+        try:
+            started = hawk_colab.comfy_command(session)
+            restarted = hawk_colab.comfy_command(session, ["--enable-triton-backend"])
+        finally:
+            hawk_colab.sage_installed = saved
+        for flag in ("--reserve-vram", "--use-sage-attention", "--preview-method", "--disable-auto-launch"):
+            self.assertIn(flag, started, f"{flag} belongs on every ComfyUI this module starts")
+            self.assertIn(flag, restarted, f"{flag} must survive a restart, not just the first start")
+        self.assertIn("--enable-triton-backend", restarted, "and a restart can still add its own")
+        self.assertNotIn("--enable-triton-backend", started)
+        self.assertEqual(started[started.index("--port") + 1], str(hawk_colab.COMFY_PORT))
+
+    def test_sage_is_left_off_the_command_when_it_is_not_installed(self):
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.comfy_args = []
+        saved = hawk_colab.sage_installed
+        hawk_colab.sage_installed = lambda: False
+        try:
+            self.assertNotIn("--use-sage-attention", hawk_colab.comfy_command(session),
+                             "ComfyUI refuses to start on that flag without the package behind it")
+        finally:
+            hawk_colab.sage_installed = saved
+
+    def _report(self, mode: str, *, sol: bool, sage: bool) -> str:
+        """attention_report with both backends under the test's control, neither on this machine."""
+        session = hawk_colab.Session.__new__(hawk_colab.Session)
+        session.env = {"HAWK_ATTENTION": mode}
+        saved_json, saved_sage = hawk_colab._http_json, hawk_colab.sage_installed
+        hawk_colab._http_json = lambda url, **k: ({"SolAttnPatch": {}} if sol and "SolAttn" in url else None)
+        hawk_colab.sage_installed = lambda: sage
+        try:
+            return hawk_colab.attention_report(session)
+        finally:
+            hawk_colab._http_json, hawk_colab.sage_installed = saved_json, saved_sage
+
     def test_the_attention_report_names_a_backend_that_is_not_there(self):
         # hawk_h3 skips a missing backend with a log line and renders anyway, several times slower, and
         # nothing about the result looks wrong -- so the launcher has to say it out loud.
-        session = hawk_colab.Session.__new__(hawk_colab.Session)
-        session.env = {"HAWK_ATTENTION": "sol scheduled"}
-        saved = hawk_colab._http_json
-        hawk_colab._http_json = lambda *a, **k: None
-        try:
-            report = hawk_colab.attention_report(session)
-        finally:
-            hawk_colab._http_json = saved
+        report = self._report("sol scheduled", sol=False, sage=True)
         self.assertIn("MISSING", report, "a mode asking for sol without sol loaded has to be visible")
         self.assertIn("dense attention", report, "and it has to say what that costs")
 
-    def test_the_attention_report_is_quiet_when_the_backend_is_loaded(self):
-        session = hawk_colab.Session.__new__(hawk_colab.Session)
-        session.env = {"HAWK_ATTENTION": "sol scheduled"}
-        saved = hawk_colab._http_json
-        hawk_colab._http_json = lambda url, **k: {"SolAttnPatch": {}} if "SolAttnPatch" in url else None
-        try:
-            report = hawk_colab.attention_report(session)
-        finally:
-            hawk_colab._http_json = saved
+    def test_the_attention_report_is_quiet_when_both_backends_are_there(self):
+        report = self._report("sol scheduled", sol=True, sage=True)
         self.assertIn("loaded", report)
         self.assertNotIn("MISSING", report, "nothing is wrong, so nothing should look wrong")
 
-    def test_comfy_default_attention_needs_no_backend_at_all(self):
-        session = hawk_colab.Session.__new__(hawk_colab.Session)
-        session.env = {"HAWK_ATTENTION": "comfy default"}
-        self.assertIn("no extra backend needed", hawk_colab.attention_report(session))
+    def test_sage_is_reported_even_when_the_mode_does_not_ask_for_it(self):
+        # --use-sage-attention is ComfyUI's own global backend, so it applies to every render whatever
+        # HAWK_ATTENTION says. Reporting it only when the mode named it hid a real speedup being absent.
+        report = self._report("sol scheduled", sol=True, sage=False)
+        self.assertIn("sage", report)
+        self.assertIn("MISSING", report, "sage missing is worth knowing even under a sol-only mode")
+        self.assertIn("global ComfyUI flag", report, "and it should say why it is listed under this mode")
+
+    def test_comfy_default_attention_still_reports_sage(self):
+        report = self._report("comfy default", sol=False, sage=True)
+        self.assertNotIn("sol", report, "this mode never asks for sol, so sol is not its problem")
+        self.assertIn("installed", report)
 
     def test_blackwell_torch_check(self):
         blackwell = {"cap": [12, 0], "arch": ["sm_80", "sm_90", "sm_120"]}

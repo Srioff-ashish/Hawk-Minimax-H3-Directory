@@ -349,9 +349,14 @@ def resolve_models(
 # ------------------------------------------------------------------ install
 
 
-def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False, comfy_requirements: bool = True) -> None:
+def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False, comfy_requirements: bool = True,
+            sage: bool = True) -> None:
     """Everything the API needs. ``comfy_requirements=False`` skips ComfyUI's own
-    requirements for a ComfyUI that is already installed and working."""
+    requirements for a ComfyUI that is already installed and working.
+
+    ``sol`` and ``sage`` are the two attention backends. Both are only read at ComfyUI start -- the first
+    is a custom node, the second a ComfyUI flag -- so installing either into a ComfyUI that is already
+    running does nothing until it restarts."""
     info = torch_info()
     print(f"GPU: {info.get('name')} (capability {info.get('cap')}), torch {info.get('version')} CUDA {info.get('cuda')}")
     if not info.get("cap"):
@@ -366,6 +371,9 @@ def install(comfy_dir: str, pack_dir: str, sol: bool = True, vfi: bool = False, 
         _pip_requirements(os.path.join(comfy_dir, "requirements.txt"))
     _pip_requirements(os.path.join(pack_dir, "requirements-api.txt"))
 
+    if sage and not sage_installed():
+        print("Installing sageattention")
+        _pip("-q", "sageattention", check=False)
     custom_nodes = os.path.join(comfy_dir, "custom_nodes")
     if sol:
         _clone(EXTRA_NODES["sol"], os.path.join(custom_nodes, "ComfyUI-SolAttn_triton"))
@@ -439,6 +447,8 @@ class Session:
     env: dict
     log_dir: str
     public_url: str = ""
+    #: Extra ComfyUI arguments, so restart_comfyui brings back the one that was started, not a default one.
+    comfy_args: list = field(default_factory=list)
     #: name -> Popen; "comfyui" is None when an already-running ComfyUI is reused.
     procs: dict = field(default_factory=dict)
 
@@ -482,6 +492,28 @@ class Session:
         ])
 
 
+def sage_installed() -> bool:
+    try:
+        import sageattention  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]:
+    """ComfyUI's argv, built in one place so a restart cannot quietly drop a flag the start had.
+
+    --reserve-vram: the VAE decode at the very end of an otherwise finished render is what usually OOMs,
+    and an OOM there loses the whole render. --use-sage-attention is ComfyUI's own global backend, which is
+    separate from the per-model patching hawk_h3 does and worth having whichever attention mode is set.
+    """
+    args = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
+            "--max-upload-size", "2048", "--reserve-vram", "2", "--disable-auto-launch"]
+    if sage_installed():
+        args.append("--use-sage-attention")
+    return args + list(session.comfy_args) + list(extra or [])
+
+
 def _popen(cmd: list[str], cwd: str, env: dict, log_path: str) -> subprocess.Popen:
     handle = open(log_path, "a", encoding="utf-8")
     return subprocess.Popen(cmd, cwd=cwd, env=env, stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
@@ -502,9 +534,7 @@ def _start_comfyui(session: Session) -> None:
             "they were installed). Stop it -- interrupt your ComfyUI cell, or run `!pkill -f 'ComfyUI/main.py'` -- "
             "then run this cell again so ComfyUI restarts with the nodes."
         )
-    # --reserve-vram: the VAE decode at the very end of an otherwise finished render is what usually OOMs.
-    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048",
-           "--reserve-vram", "2"]
+    cmd = comfy_command(session)
     session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
     print("Starting ComfyUI (first start loads nodes; a few minutes)...", flush=True)
     _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
@@ -647,6 +677,7 @@ def start(
     atlas_api_key: str | None = None,
     openrouter_api_key: str | None = None,
     llm_routing: str = "balanced",
+    comfy_args: list[str] | None = None,
     log_dir: str = "/content/hawk_logs",
 ) -> Session:
     """Start ComfyUI (or reuse it), the tunnel and the API. Model names left out are
@@ -686,6 +717,9 @@ def start(
         "HAWK_VIDEO_VAE": models["video_vae"],
         "HAWK_AUDIO_VAE": models["audio_vae"],
         "HAWK_ATTENTION": attention,
+        # A long render allocates and frees in very uneven shapes; without this the allocator fragments
+        # and the VAE decode at the end fails on a card that has the memory for it.
+        "PYTORCH_CUDA_ALLOC_CONF": os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True"),
     })
     if atlas_api_key:
         env["ATLAS_API_KEY"] = atlas_api_key
@@ -698,7 +732,7 @@ def start(
             env["HAWK_LLM_PROVIDER"] = "openrouter"
             print(f"Planning and chats go to OpenRouter ({llm_routing} routing).")
 
-    session = Session(comfy_dir, pack_dir, token, env, log_dir)
+    session = Session(comfy_dir, pack_dir, token, env, log_dir, comfy_args=list(comfy_args or []))
     _start_comfyui(session)
     # API tunnels from an earlier run of this cell would keep serving old URLs.
     # Only ours: a ComfyUI UI tunnel started by the notebook keeps running.
@@ -832,8 +866,7 @@ def restart_comfyui(session: Session, extra_args: list[str] | None = None, force
         time.sleep(1)
     if not port_free(COMFY_PORT):
         raise RuntimeError(f"Port {COMFY_PORT} is still in use. Stop ComfyUI yourself (`!fuser -k {COMFY_PORT}/tcp`) and retry.")
-    cmd = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT), "--max-upload-size", "2048",
-           "--reserve-vram", "2", *(extra_args or [])]
+    cmd = comfy_command(session, extra_args)
     session.procs["comfyui"] = _popen(cmd, session.comfy_dir, session.env, session.log("comfyui"))
     print("Restarting ComfyUI...", flush=True)
     _wait_http(f"{base}/queue", session.procs["comfyui"], session.log("comfyui"), 900, "ComfyUI")
@@ -860,16 +893,11 @@ def attention_report(session: Session) -> str:
         if not loaded:
             lines.append("        ComfyUI-SolAttn_triton is not in this ComfyUI. Restart ComfyUI from this "
                          "module (RESTART_COMFY) so it reads custom_nodes again.")
-    if "sage" in mode:
-        try:
-            import sageattention  # noqa: F401
-            ok = True
-        except Exception:
-            ok = False
-        lines.append(f"  sage  {'installed' if ok else 'MISSING -- pip install sageattention'}")
-    if not lines:
-        return f"attention: {mode or 'default'} (no extra backend needed)"
-    return f"attention: {mode}\n" + "\n".join(lines)
+    # Reported whether or not the mode asks for it: --use-sage-attention is ComfyUI's own global backend,
+    # so it applies to every render regardless of what HAWK_ATTENTION says, and its absence is felt the same.
+    lines.append(f"  sage  {'installed' if sage_installed() else 'MISSING -- pip install sageattention'}"
+                 f"{'' if 'sage' in mode else ' (global ComfyUI flag, not part of this mode)'}")
+    return f"attention: {mode or 'comfy default'}\n" + "\n".join(lines)
 
 
 def show_logs(session: Session, lines: int = 60) -> None:
