@@ -109,6 +109,56 @@ class WhichServiceAnswers(unittest.IsolatedAsyncioTestCase):
         self.assertIs(service.atlas, service.atlas, "a client per call would drop every cache each time")
 
 
+class WhichServiceDrawsTheImages(unittest.IsolatedAsyncioTestCase):
+    """HawkService.image_atlas, which does not follow the chat provider.
+
+    Seedream and z-image/turbo are Atlas models reached over an Atlas-only path
+    (/api/v1/model/generateImage), so ``where="atlas"`` describes the engine rather than a preference.
+    One client served both, and choosing OpenRouter for chat used to re-point every paid image at a
+    service with no such endpoint: the 404 came back to the agent, which explained it to the user as
+    image models being available only through Atlas.
+    """
+
+    def service(self, **over):
+        from hawk_api.jobs import HawkService
+
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        return HawkService(Settings(token=TOKEN, data_dir=self.dir, **over), store=object(), comfy=object())
+
+    def test_images_stay_on_atlas_when_chat_moves_to_openrouter(self):
+        service = self.service(atlas_api_key="atlas-key")
+        service.llm_settings.save({"llm_provider": "openrouter", "openrouter_api_key": "sk-or-1"})
+        self.assertIn("openrouter", service.atlas.base_url, "chat goes where the user sent it")
+        self.assertIn("atlascloud", service.image_atlas.base_url, "the image endpoint stays where it exists")
+        self.assertEqual(service.image_atlas.api_key, "atlas-key", "and it is paid for with the Atlas key")
+
+    def test_an_atlas_key_saved_in_studio_reaches_the_image_client(self):
+        service = self.service()
+        service.llm_settings.save({"llm_provider": "openrouter", "openrouter_api_key": "sk-or-1",
+                                   "atlas_api_key_override": "typed-into-studio"})
+        self.assertEqual(service.image_atlas.api_key, "typed-into-studio",
+                         "the override is the key for images too, not only for chat")
+
+    def test_an_openrouter_key_never_stands_in_for_an_atlas_one(self):
+        # configured is bool(api_key), so on an OpenRouter-only pod the paid engines used to report
+        # themselves ready against a key that cannot buy them, and only failed once a request was made.
+        service = self.service(openrouter_api_key="sk-or-2")
+        self.assertTrue(service.atlas.configured, "chat has a key and can answer")
+        self.assertFalse(service.image_atlas.configured, "images have none, and saying otherwise is the bug")
+
+    async def test_a_pod_with_no_atlas_key_offers_no_paid_engine(self):
+        service = self.service(openrouter_api_key="sk-or-2")
+        self.assertEqual(await service.ready_image_engines("generate"), [],
+                         "nothing here can draw: the local engines have no ComfyUI and Atlas has no key")
+
+    async def test_the_paid_engines_come_back_once_atlas_has_a_key(self):
+        service = self.service(atlas_api_key="atlas-key", openrouter_api_key="sk-or-2")
+        service.llm_settings.save({"llm_provider": "openrouter"})
+        self.assertEqual(await service.ready_image_engines("generate"), ["turbo", "seedream"],
+                         "chat on OpenRouter, images on Atlas, and both of them usable")
+
+
 class TheModelListFromEitherProvider(unittest.IsolatedAsyncioTestCase):
     """list_models reads one shape for Atlas and another for OpenRouter, and must not lose either."""
 

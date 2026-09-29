@@ -386,6 +386,10 @@
   .forgotten-tag { font-style: italic; }
   .bubble.forgotten { opacity: .5; border: 1px dashed var(--muted); box-shadow: none; }
   .bubble.narration { font-style: italic; background: var(--surface-2); }
+  /* Narration is the scene, so it is italic -- but it is still the user talking, so it keeps their colour
+     rather than taking the assistant surface .bubble.narration would otherwise paint on it. */
+  .bubble.user.narration { background: var(--brand); opacity: .92; }
+  #agentNarrate[aria-pressed="true"] { background: var(--surface-2); color: var(--ink); box-shadow: inset 0 0 0 1px var(--line); }
   .who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--ink-2); }
   .who svg { width: 18px; height: 18px; border-radius: 5px; }
   .avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex: none; background: var(--surface-2); border: 1px solid var(--line); }
@@ -883,8 +887,9 @@
             <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
               <label class="icon-btn" title="Upload images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
               <button class="icon-btn" type="button" id="agentFromLibrary" title="Attach from media" aria-label="Attach from media" style="flex:none;width:36px;height:36px"><svg><use href="#i-assets"/></svg></button>
+              <button class="icon-btn" type="button" id="agentNarrate" aria-pressed="false" title="Narrate: something that happened in the scene, not a line spoken to the characters. Wrapping the message in *asterisks* does the same." aria-label="Narrate this message" style="flex:none;width:36px;height:36px"><svg><use href="#i-film"/></svg></button>
               <label class="sr-only" for="agentInput">Message</label>
-              <textarea class="textarea" id="agentInput" rows="1" placeholder="Tell the agent what to make… (Enter to send, Shift+Enter for a new line)"></textarea>
+              <textarea class="textarea" id="agentInput" rows="1" placeholder="Tell the agent what to make… (Enter to send, Shift+Enter for a new line; *asterisks* narrate)"></textarea>
               <button class="btn btn-primary" id="agentSend" type="button">Send</button>
               <button class="btn btn-danger" id="agentStop" type="button" hidden>Stop</button>
             </div>
@@ -4101,24 +4106,41 @@
   }
 
   // Inspection rejected a take. Rather than let the agent spend another minute of GPU -- or real money --
-  // on its own opinion, the takes are put up for the user to pick from. Each button just writes the reply they
-  // would have typed, so the answer travels the ordinary message path: it can be forgotten, compacted, re-read.
+  // on its own opinion, the takes are put up for the user to pick from. Every answer just writes the reply they
+  // would have typed, so it travels the ordinary message path: it can be forgotten, compacted, re-read.
+  //
+  // Clicking a take keeps it, in that one click. Choosing used to be two steps, and the first of them only
+  // moved a highlight -- so on a rejected single take, already highlighted as the model's own best, the click
+  // did nothing at all. It read as having chosen and being asked to type the answer anyway.
   function chooseCard(messageId, choose) {
     const best = choose.best || choose.assets?.[0]?.asset_id || "";
+    const keep = (choose.options || []).find((o) => o.id === "keep");
     const picks = (choose.assets || []).filter((a) => a.thumb_url).map((a) => {
       const issues = (a.issues || []).join("; ");
       const zoom = a.file_url
         ? `<a class="zoom" href="${esc(a.file_url)}" target="_blank" rel="noopener" title="Open full size">\u{1F50D}</a>` : "";
       return `<div class="pick-wrap">${zoom}<button type="button" class="pick" data-pick="${esc(a.asset_id)}" aria-pressed="${a.asset_id === best}"
-        title="${esc(issues || "no issues listed")}"><img src="${esc(a.thumb_url)}" alt="${esc(a.asset_id)}" loading="lazy">
-        <span>${a.score != null ? `${esc(a.score)}/10 · ` : ""}${esc(a.asset_id.slice(0, 8))}</span></button></div>`;
+        title="Keep this one${issues ? ` \u00b7 ${esc(issues)}` : ""}"><img src="${esc(a.thumb_url)}" alt="${esc(a.asset_id)}" loading="lazy">
+        <span>${a.score != null ? `${esc(a.score)}/10 \u00b7 ` : ""}${esc(a.asset_id.slice(0, 8))}</span></button></div>`;
     }).join("");
-    const acts = (choose.options || []).map((o) =>
+    // "Use this one" is what a click on a take now does, so it stays a button only where there are no takes
+    // to click: an asset with no thumbnail still has to be keepable.
+    const acts = (choose.options || []).filter((o) => o.id !== "keep" || !picks).map((o) =>
       `<button type="button" class="btn ${o.id === "keep" ? "btn-primary" : ""}" data-choose="${esc(o.id)}"
         data-reply="${esc(o.reply || "")}">${esc(o.label)}</button>`).join("");
-    return `<div class="choose" data-choice="${esc(String(messageId))}"><h4>Your call</h4>
-      <div class="hint">These didn't pass inspection. Pick one to keep, or say what to try next — nothing is generated until you do.</div>
+    return `<div class="choose" data-choice="${esc(String(messageId))}" data-keep="${esc(keep?.reply || "")}"><h4>Your call</h4>
+      <div class="hint">These didn't pass inspection. ${picks ? "Click a take to keep it" : "Pick one to keep"}, or say what to try next \u2014 nothing is generated until you do.</div>
       ${picks ? `<div class="picks">${picks}</div>` : ""}<div class="acts">${acts}</div></div>`;
+  }
+
+  // An answer, written out as the sentence the user would have typed, and sent the ordinary way.
+  async function answerChoice(card, template, chosen) {
+    const every = [...card.querySelectorAll("[data-pick]")].map((b) => b.dataset.pick).join(", ");
+    card.classList.add("done");
+    setNarrating(false);  // answering the card is an instruction, never the scene
+    $("agentInput").value = (template || "").replace("{asset_ids}", every)
+                                            .replace("{asset_id}", chosen || "the one you showed");
+    await sendAgentMessage();
   }
   $("agentThread").addEventListener("click", async (event) => {
     const pick = event.target.closest("[data-pick]");
@@ -4128,16 +4150,12 @@
     if (event.target.closest("a")) return;  // the zoom link opens the file; it never changes the choice
     if (pick) {
       card.querySelectorAll("[data-pick]").forEach((b) => b.setAttribute("aria-pressed", String(b === pick)));
+      await answerChoice(card, card.dataset.keep, pick.dataset.pick);
       return;
     }
     if (!act) return;
     const chosen = card.querySelector('[data-pick][aria-pressed="true"]')?.dataset.pick || "";
-    const every = [...card.querySelectorAll("[data-pick]")].map((b) => b.dataset.pick).join(", ");
-    const text = (act.dataset.reply || "").replace("{asset_ids}", every)
-                                          .replace("{asset_id}", chosen || "the one you showed");
-    card.classList.add("done");
-    $("agentInput").value = text;
-    await sendAgentMessage();
+    await answerChoice(card, act.dataset.reply, chosen);
   });
 
   function renderAgentMessage(message) {
@@ -4168,7 +4186,8 @@
       const images = attachments.filter((f) => f.thumb_url).map((f) => `<a href="${esc(f.file_url || f.thumb_url)}" target="_blank" rel="noopener" title="${esc(f.filename)} · ${esc(f.asset_id)}"><img class="att-thumb" src="${esc(f.thumb_url)}" alt="${esc(f.filename)}" loading="lazy"></a>`).join("");
       const others = attachments.filter((f) => !f.thumb_url).map((f) => `<span class="chip" style="background:rgba(255,255,255,.18);color:inherit;border-color:transparent">${esc(f.kind)} · ${esc(f.filename)}</span>`).join(" ");
       const whisperTo = c.private_to ? castOf().find((m) => m.id === c.private_to)?.display_name || "one character" : "";
-      add(`<div class="msg-meta user">${whisperTo ? `<span class="whisper-tag">🤫 whispered to ${esc(whisperTo)}</span> · ` : ""}You · ${time}${actions("user")}</div><div class="bubble user${whisperTo ? " private" : ""}${forgotten}">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
+      const scene = c.narration ? `<span class="whisper-tag">🎬 narration</span> · ` : "";
+      add(`<div class="msg-meta user">${scene}${whisperTo ? `<span class="whisper-tag">🤫 whispered to ${esc(whisperTo)}</span> · ` : ""}You · ${time}${actions("user")}</div><div class="bubble user${whisperTo ? " private" : ""}${c.narration ? " narration" : ""}${forgotten}">${linkify(c.text || "")}${images ? `<div class="att-thumbs">${images}</div>` : ""}${others ? `<div class="row" style="margin-top:6px">${others}</div>` : ""}</div>`);
     } else if (message.role === "assistant") {
       if (c.invalid) { add(`<div class="note-line">The model's reply wasn't in the expected format; asking it again…</div>`); return; }
       const secret = c.private_to ? `<span class="whisper-tag"> · 🤫 private</span>` : "";
@@ -4501,7 +4520,8 @@
     }
     $("agentSend").disabled = true;
     try {
-      await post(`/v1/agent/sessions/${agent.current}/messages`, { text, attachments });
+      await post(`/v1/agent/sessions/${agent.current}/messages`, { text, attachments, narration: narrating() });
+      setNarrating(false);  // narration is occasional: it never carries over to the next message
       $("agentInput").value = ""; autoGrow();
       agent.attachments = []; renderAttachments();
       clearAgentDraft(agent.current);
@@ -4512,6 +4532,11 @@
       $("agentSend").disabled = false;
     }
   }
+  // The scene, rather than a line spoken to the characters. The server reads *asterisks* as the same thing,
+  // so a message typed that way and one sent with this on are stored identically.
+  const narrating = () => $("agentNarrate").getAttribute("aria-pressed") === "true";
+  const setNarrating = (on) => $("agentNarrate").setAttribute("aria-pressed", String(on));
+  $("agentNarrate").onclick = () => { setNarrating(!narrating()); $("agentInput").focus(); };
   $("agentSend").onclick = sendAgentMessage;
   $("agentCompact").onclick = async () => {
     const button = $("agentCompact");

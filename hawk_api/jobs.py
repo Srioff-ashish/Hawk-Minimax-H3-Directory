@@ -486,7 +486,24 @@ class HawkService:
             url, key, routing = llm.openrouter_url, openrouter_key, atlas_routing(llm.openrouter_routing)
         else:
             url, key, routing = self.settings.atlas_url, atlas_key, None
-        cache_key = (url, key, llm.openrouter_routing if routing else "")
+        return self._llm_client(url, key, routing, llm.openrouter_routing if routing else "")
+
+    @property
+    def image_atlas(self) -> AtlasClient:
+        """The Atlas client the paid image engines use, whatever service is answering chat.
+
+        Seedream and z-image/turbo are Atlas models reached over an Atlas-only endpoint
+        (/api/v1/model/generateImage), so ``where="atlas"`` describes the engine, not a preference.
+        Choosing OpenRouter for chat used to re-point these calls there too, where that path does not
+        exist: every paid image came back as a 404 body for the agent to explain in prose.
+        """
+        llm = self.llm()
+        return self._llm_client(self.settings.atlas_url, llm.atlas_api_key_override or self.settings.atlas_api_key,
+                                None, "")
+
+    def _llm_client(self, url: str, key: str, routing: dict | None, routing_key: str) -> AtlasClient:
+        """One client per (url, key, routing), kept because a client carries a cached model list."""
+        cache_key = (url, key, routing_key)
         found = self._llm_clients.get(cache_key)
         if found is None:
             found = self._llm_clients[cache_key] = AtlasClient(url, key, routing=routing)
@@ -1149,6 +1166,17 @@ class HawkService:
                 notes.append(image_engines.MOVED[raw])
             ladder = [pinned]
 
+        # Every rung is on Atlas and the pod has no Atlas key: say so here rather than letting the request
+        # reach an endpoint it cannot answer and come back as a status code for the agent to interpret.
+        rungs = [spec for spec in (image_engines.get(rung) for rung in ladder) if spec]
+        if rungs and not any(spec.local for spec in rungs) and not self.image_atlas.configured:
+            named = ", ".join(spec.label for spec in rungs)
+            here = await self.ready_image_engines(action)
+            raise RequestError(
+                f"{named} runs on Atlas Cloud, and this pod has no Atlas key. Add one under Settings -> Connect, "
+                + (f"or use an engine on this GPU: {', '.join(here)}." if here
+                   else "or install an image engine on this GPU."))
+
         # An engine that only makes images from text still has somewhere to go when given references.
         # A pinned local engine steps sideways to another local one: sending it to Seedream instead would
         # spend the user's money on an engine they didn't ask for. A pinned Atlas engine is already paid for.
@@ -1279,7 +1307,7 @@ class HawkService:
         for engine_id in self.image_ladder(action):
             spec = image_engines.get(engine_id)
             if not spec.local:
-                if self.atlas.configured:
+                if self.image_atlas.configured:
                     ready.append(engine_id)
                 continue
             if spec.id not in local_images.WIRED_ENGINES:
@@ -1326,7 +1354,9 @@ class HawkService:
         for row in settings[action]:
             spec = image_engines.get(row["engine"])
             if not spec.local:
-                ready, why = self.atlas.configured, "" if self.atlas.configured else "No Atlas API key on this pod."
+                ready, why = self.image_atlas.configured, "" if self.image_atlas.configured else (
+                    f"{spec.label} runs on Atlas Cloud, whichever service answers chat. This pod has no Atlas key: "
+                    "add one under Settings -> Connect, or use one of the engines on this GPU.")
             elif spec.id not in local_images.WIRED_ENGINES:
                 ready, why = False, f"{spec.label} has no graph on this build yet."
             else:
@@ -1366,7 +1396,7 @@ class HawkService:
             "engine_warnings": engines["warnings"],
             "system": await self.comfy.system_stats(),
             "local": local,
-            "atlas": {"configured": self.atlas.configured, "text_to_image": self.settings.image_model,
+            "atlas": {"configured": self.image_atlas.configured, "text_to_image": self.settings.image_model,
                       "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,
                       "prices_usd": {"z-image/turbo": IMAGE_PRICES["z-image"], "seedream 1.5K (up to 2.36 MP)": IMAGE_PRICES["pro-1.5k"],
                                      "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"]}},
@@ -1404,7 +1434,7 @@ class HawkService:
             if size and payload["size"] != _star_size_loose(size):
                 notes.append(f"Seedream made {payload['size'].replace('*', 'x')} (its nearest preset to {size}).")
         try:
-            batches = await asyncio.gather(*(self.atlas.generate_image(body) for body in payloads))
+            batches = await asyncio.gather(*(self.image_atlas.generate_image(body) for body in payloads))
         except AtlasError as exc:
             raise RequestError(str(exc)) from None
         images = [image for batch in batches for image in batch]

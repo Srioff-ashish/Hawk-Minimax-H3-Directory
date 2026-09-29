@@ -72,6 +72,10 @@ INSPECT_PROMPT = (
 )
 MAX_RUN_SECONDS = 3 * 3600
 MANUAL_KEEP_MESSAGES = 4  # the Compact button keeps this many messages word for word
+#: A whole message wrapped in asterisks is narration: the scene, not a line spoken to the characters.
+#: The wrapper has to enclose the lot with no asterisk inside it, so neither an asterisk used mid-sentence
+#: nor the roleplay habit of starring single words ("*sigh* ok, and you? *smiles*") is read as the scene.
+NARRATION = re.compile(r"\A\*\s*([^*]+?)\s*\*\Z", re.S)
 SUMMARY_MAX_TOKENS = 6000  # room for reasoning models to think before writing the summary
 # Tools whose argument schema is large are listed by description only until the chat uses them (describe_tool shows it).
 BIG_SCHEMA_TOKENS = 250
@@ -1055,7 +1059,8 @@ class AgentService:
 
     # ------------------------------------------------------------ runs
 
-    async def send(self, session_id: str, text: str, attachments: list[str] | None = None) -> dict:
+    async def send(self, session_id: str, text: str, attachments: list[str] | None = None, *,
+                   narration: bool = False) -> dict:
         session = self.get_session(session_id)
         task = self._tasks.get(session_id)
         if task is not None and session.get("talking") and (text or "").strip():
@@ -1081,6 +1086,13 @@ class AgentService:
         whisper = self._whisper_target(session, text)
         if whisper:
             content["private_to"] = whisper
+        else:
+            # A whisper wins: "@Name ..." is speech to one character, so it is never the scene.
+            wrapped = NARRATION.match(content["text"])
+            if wrapped and wrapped.group(1).strip():
+                content["text"], narration = wrapped.group(1).strip(), True
+            if narration:
+                content["narration"] = True
         message = self.store.add_message(session_id, "user", content)
         session["status"] = "running"
         self.store.save_session(session)
@@ -1610,6 +1622,8 @@ class AgentService:
             files = content.get("attachments") or []
             if files:
                 text += " [shared " + ", ".join(f"{f['kind']} {f['asset_id']}" for f in files) + "]"
+            if content.get("narration"):
+                return [f"(This happened, and is true from now on: {text})"]
             return [f"User (whispering only to you): {text}" if content.get("private_to") == member_id else f"User: {text}"]
         if role == "assistant" and not content.get("invalid"):
             if content.get("lines"):
@@ -2118,7 +2132,12 @@ class AgentService:
                 files = content.get("attachments") or []
                 note = ("\nAttached assets: " + ", ".join(f"{f['asset_id']} ({f['kind']}: {f['filename']})" for f in files)) if files else ""
                 whisper = content.get("private_to")
-                if whisper:
+                if content.get("narration"):
+                    push("user", "NARRATION (the scene, not speech to you: this has happened and is true from now on. "
+                                 "Do not answer it as though the user said it to you, do not ask whether it happened "
+                                 "and do not repeat it back -- carry on in character from the new situation): "
+                                 f"{content.get('text', '')}{note}")
+                elif whisper:
                     to = self._about_name(cast_of(session), whisper)
                     push("user", f"USER (whispering privately to {to}: only {to} hears this and only {to} answers, in a private "
                                  f"line; the others must not learn it from anyone but {to}): {content.get('text', '')}{note}")
@@ -2243,11 +2262,13 @@ class AgentService:
                            "verdict": item.get("verdict"), "issues": item.get("issues") or [],
                            "thumb_url": shown.get("thumb_url"), "file_url": shown.get("file_url")})
         options = [{"id": "keep", "label": "Use this one",
-                    "reply": "Keep image {asset_id} as it is. Don't take it again."}]
+                    "reply": "Keep image {asset_id} as it is. That is settled: don't take it again, and don't ask "
+                             "me to confirm it."}]
         if len(assets) > 1:
             # Judging a whole batch one take at a time is the tedious part; keeping them all is one answer.
             options.append({"id": "keep_all", "label": f"Keep all {len(assets)}",
-                            "reply": "Keep all of these images as they are: {asset_ids}. Don't take them again."})
+                            "reply": "Keep all of these images as they are: {asset_ids}. That is settled: don't take "
+                                     "them again, and don't ask me to confirm it."})
         if stepped:
             options.append({"id": "retry", "label": f"Try again on {image_engines.get(stepped).label}",
                             "reply": 'Try again with engine "auto".'})

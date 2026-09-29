@@ -571,7 +571,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.post("/v1/agent/sessions/{session_id}/messages", tags=["agent"], status_code=202)
     async def agent_send(session_id: str, body: AgentMessageIn):
-        sent = await agent.send(session_id, body.text, body.attachments)
+        sent = await agent.send(session_id, body.text, body.attachments, narration=body.narration)
         return {**sent, "session": agent.public(sent["session"])}
 
     @app.post("/v1/agent/sessions/{session_id}/talk", tags=["agent"], status_code=202)

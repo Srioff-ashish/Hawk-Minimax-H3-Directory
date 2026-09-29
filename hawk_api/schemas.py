@@ -263,6 +263,8 @@ class AgentSessionIn(BaseModel):
 class AgentMessageIn(BaseModel):
     text: str = Field("", description="Your message.")
     attachments: list[str] = Field(default_factory=list, description="Asset ids uploaded with this message.")
+    narration: bool = Field(False, description="This is the scene, not speech: something that has happened and is "
+                                               "true from now on. Wrapping the message in *asterisks* does the same.")
 
 
 class UrlAssetRequest(BaseModel):

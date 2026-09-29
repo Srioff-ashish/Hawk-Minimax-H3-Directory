@@ -182,7 +182,9 @@ class AtlasClient:
         """Submit to ``/api/v1/model/generateImage``, poll the prediction, return image bytes.
         Edit models take ``images``: a list of data URIs."""
         if not self.configured:
-            raise AtlasError("No Atlas API key on the server. Set ATLAS_API_KEY and restart the API.")
+            raise AtlasError("No Atlas API key on this pod, and the paid image engines run on Atlas Cloud "
+                             "whichever service answers chat. Add one under Settings -> Connect, or use an "
+                             "engine on this GPU.")
         base = self.image_base
         deadline = time.monotonic() + timeout
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0), follow_redirects=True) as http:
