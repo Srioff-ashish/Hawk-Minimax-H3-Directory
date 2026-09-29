@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -134,6 +135,39 @@ class Detection(unittest.TestCase):
         with tempfile.TemporaryDirectory() as empty:
             with self.assertRaisesRegex(RuntimeError, "unet_name, clip_name, video_vae, audio_vae"):
                 hawk_colab.resolve_models(empty)
+
+    def test_an_explicit_model_name_that_is_not_on_disk_is_used_but_reported(self):
+        """The cell that started this pod named two files it did not have.
+
+        A saved render_models.json happened to override both, so nothing broke and nothing was said. With
+        no such override the API starts on a name ComfyUI has never heard of and every render dies at the
+        loader, a failure with no visible connection to the cell that set it.
+        """
+        import contextlib
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as comfy:
+            for folder, names in self.FILES.items():
+                for name in names:
+                    path = os.path.join(comfy, "models", folder, name)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    open(path, "wb").close()
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                chosen = hawk_colab.resolve_models(
+                    comfy, unet_name="minimax_h3_ref2va_pruned_fp8_scaled.safetensors")
+            self.assertEqual(chosen["unet_name"], "minimax_h3_ref2va_pruned_fp8_scaled.safetensors",
+                             "an explicit name must still win: ComfyUI can reach roots this listing cannot")
+            self.assertIn("is not in models/diffusion_models", said.getvalue(),
+                          "naming a file that is absent has to say so, or the render fails far from here")
+            self.assertIn("minimax_h3_ref2va_pruned_int8_convrot.safetensors", said.getvalue(),
+                          "the note should list what is on disk, so the right name is one glance away")
+
+            quiet = io.StringIO()
+            with contextlib.redirect_stdout(quiet):
+                hawk_colab.resolve_models(comfy, unet_name="minimax_h3_ref2va_pruned_int8_convrot.safetensors")
+            self.assertEqual(quiet.getvalue(), "",
+                             "a name that is on disk is ordinary and must print nothing at all")
 
     def test_lora_config_uses_the_turbo_file_on_disk(self):
         with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:

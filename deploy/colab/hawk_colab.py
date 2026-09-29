@@ -329,12 +329,24 @@ def resolve_models(
                   f"Using {os.path.basename(chosen[key])} instead.")
         else:
             chosen[key] = wanted  # nothing to fall back on; the check below reports it properly
+    folder_for = {"unet_name": "diffusion_models", "clip_name": "text_encoders", "video_vae": "vae", "audio_vae": "vae"}
+    # An explicit name still wins, because ComfyUI can reach files this listing never sees -- a symlinked
+    # folder, or another root added through extra_model_paths.yaml. What it must not do is pass in silence:
+    # a name for a file that is really absent configures the API perfectly and then fails at the loader on
+    # the first render, which is a long way from the cell that caused it. The label branch above already
+    # says so; explicit names were the one way left to set a name nothing had checked.
     for key, value in (("unet_name", unet_name), ("clip_name", clip_name), ("video_vae", video_vae),
                        ("audio_vae", audio_vae), ("turbo_lora", turbo_lora)):
-        if value:
-            chosen[key] = value
+        if not value:
+            continue
+        folder = folder_for.get(key, "loras")
+        if not any(os.path.basename(name) == os.path.basename(value) for name in files[folder]):
+            there = ", ".join(sorted(os.path.basename(name) for name in files[folder])) or "(empty)"
+            print(f"Note: {os.path.basename(value)} is not in models/{folder}; using it anyway. If ComfyUI "
+                  f"cannot reach it either, every render fails at the loader with \"Value not in list\".\n"
+                  f"      models/{folder} has: {there}")
+        chosen[key] = value
 
-    folder_for = {"unet_name": "diffusion_models", "clip_name": "text_encoders", "video_vae": "vae", "audio_vae": "vae"}
     missing = [key for key in folder_for if not chosen[key]]
     if missing:
         found = "\n".join(f"  models/{folder}: {', '.join(names) or '(empty)'}" for folder, names in files.items())
