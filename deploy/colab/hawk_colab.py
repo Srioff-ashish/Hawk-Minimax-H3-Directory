@@ -512,6 +512,13 @@ def sage_installed() -> bool:
         return False
 
 
+# ComfyUI's attn_group: passing two of these together is an argparse error, not a preference.
+COMFY_ATTENTION_FLAGS = frozenset({
+    "--use-split-cross-attention", "--use-quad-cross-attention", "--use-pytorch-cross-attention",
+    "--use-sage-attention", "--use-flash-attention", "--use-ck-attention",
+})
+
+
 def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]:
     """ComfyUI's argv, built in one place so a restart cannot quietly drop a flag the start had.
 
@@ -521,9 +528,13 @@ def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]
     """
     args = [sys.executable, "main.py", "--listen", "127.0.0.1", "--port", str(COMFY_PORT),
             "--max-upload-size", "2048", "--reserve-vram", "2", "--disable-auto-launch"]
-    if sage_installed():
+    # ComfyUI puts every --use-*-attention flag in one mutually exclusive group, so adding sage next to a
+    # caller's own choice is not a redundant flag but an argparse error, and ComfyUI then never starts.
+    # Trying --use-ck-attention should cost one comparison, not a pod with no ComfyUI on it.
+    caller = list(session.comfy_args) + list(extra or [])
+    if sage_installed() and not any(arg in COMFY_ATTENTION_FLAGS for arg in caller):
         args.append("--use-sage-attention")
-    return args + list(session.comfy_args) + list(extra or [])
+    return args + caller
 
 
 def _popen(cmd: list[str], cwd: str, env: dict, log_path: str) -> subprocess.Popen:

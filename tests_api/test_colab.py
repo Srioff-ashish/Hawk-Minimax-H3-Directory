@@ -10,6 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "deploy", "colab"))
@@ -168,6 +169,27 @@ class Detection(unittest.TestCase):
                 hawk_colab.resolve_models(comfy, unet_name="minimax_h3_ref2va_pruned_int8_convrot.safetensors")
             self.assertEqual(quiet.getvalue(), "",
                              "a name that is on disk is ordinary and must print nothing at all")
+
+    def test_sage_gives_way_to_an_attention_flag_the_caller_chose(self):
+        """ComfyUI's --use-*-attention flags are one mutually exclusive group.
+
+        Adding sage beside a caller's own choice is an argparse error, so ComfyUI exits at once and the
+        pod is left with none -- an expensive way to find out that two flags cannot be combined.
+        """
+        session = hawk_colab.Session(
+            comfy_dir=".", pack_dir=".", token="t", env={}, log_dir=".",
+            comfy_args=["--use-ck-attention"])
+        with unittest.mock.patch.object(hawk_colab, "sage_installed", lambda: True):
+            chosen = hawk_colab.comfy_command(session)
+            self.assertNotIn("--use-sage-attention", chosen,
+                             "sage must stand down: both flags together stop ComfyUI starting at all")
+            self.assertIn("--use-ck-attention", chosen, "the caller's own choice is the one that survives")
+
+            plain = hawk_colab.Session(comfy_dir=".", pack_dir=".", token="t", env={}, log_dir=".")
+            self.assertIn("--use-sage-attention", hawk_colab.comfy_command(plain),
+                          "with no competing flag sage is still added, as it always was")
+            self.assertNotIn("--use-sage-attention", hawk_colab.comfy_command(plain, ["--use-flash-attention"]),
+                             "a flag passed for one restart collides just as surely as a stored one")
 
     def test_lora_config_uses_the_turbo_file_on_disk(self):
         with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:
