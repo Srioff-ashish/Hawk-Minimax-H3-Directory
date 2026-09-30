@@ -42,10 +42,15 @@ class Role:
 
 
 ROLES: dict[str, Role] = {
-    "director": Role(chain=("xai/grok-4.6", "xai/grok-4.3"), label="Director (tools and orchestration)"),
+    # The tail every chat falls back on, whatever model the chat itself names: a chat set to deepseek-v4-pro
+    # (which can spend its whole budget reasoning and return nothing) tries the same family's flash model
+    # before paying grok's price.
+    "director": Role(chain=("deepseek-ai/deepseek-v4.1-flash", "xai/grok-4.6", "xai/grok-4.3"),
+                     label="Director (tools and orchestration)"),
     # Deliberately the same chain as the director: turning the split on must not, by itself, change any
     # existing chat's behaviour. The uncensored chain is something the user opts into.
-    "prose": Role(chain=("xai/grok-4.6", "xai/grok-4.3"), label="Prose (the characters' voices)"),
+    "prose": Role(chain=("deepseek-ai/deepseek-v4.1-flash", "xai/grok-4.6", "xai/grok-4.3"),
+                  label="Prose (the characters' voices)"),
     "summary": Role(chain=("deepseek-ai/deepseek-v4.1-flash", "xai/grok-4.3"), label="Summary and compaction"),
     "vision": Role(chain=("xai/grok-4.6", "google/gemini-pro-1.5"), vision=True, label="Image inspection"),
     "planner": Role(chain=("xai/grok-4.6", "xai/grok-4.3"), label="Film planner"),

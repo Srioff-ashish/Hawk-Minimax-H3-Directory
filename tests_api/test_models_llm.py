@@ -76,6 +76,15 @@ class AModelIdOnEitherProvider(unittest.TestCase):
         self.assertEqual(models_llm.resolve("director", "xai/grok-4.6, xai/grok-4.3", twins), "xai/grok-4.3",
                          "the ambiguous candidate should be skipped for the next one in the chain")
 
+    def test_a_chat_on_deepseek_pro_falls_back_to_flash_before_grok(self):
+        # A chat stores one id, and the role's own chain is the only fallback it has. v4-pro can return an
+        # empty message (finish_reason=length) on a long reasoning pass; the flash model is the next try.
+        listed = OPENROUTER + [{"id": "deepseek/deepseek-v4-pro", "vision": False, "price_in": 9e-7}]
+        for role in ("director", "prose"):
+            with self.subTest(role=role):
+                self.assertEqual(models_llm.resolve_many(role, "deepseek-ai/deepseek-v4-pro", listed),
+                                 ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4.1-flash", "x-ai/grok-4.6"])
+
     def test_a_single_id_is_read_as_a_one_element_chain(self):
         # Every setting already stored is a single id, so this is the whole backward-compatibility story.
         self.assertEqual(models_llm.chain("xai/grok-4.6"), ["xai/grok-4.6"])
