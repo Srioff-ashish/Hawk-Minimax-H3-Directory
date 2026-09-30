@@ -128,6 +128,113 @@ class Qwen21EditGraph(unittest.TestCase):
         self.assertEqual(encode["resolution"], li.QWEN21_EDIT_RESOLUTION)
 
 
+PE_T2I = "qwen3.5_9b_qwen_image_2.1_pe_t2i.int8_convrot.safetensors"
+PE_I2I = "qwen3.5_9b_qwen_image_2.1_pe_i2i.int8_convrot.safetensors"
+
+
+class Qwen21PromptEnhancer(unittest.TestCase):
+    """The enhancer step both Qwen 2.1 graphs gain when it is switched on, and lose when it is not."""
+
+    def t2i(self, **over) -> dict:
+        return Qwen21Graph.build(self, **over)
+
+    def edit(self, images, **over) -> dict:
+        return Qwen21EditGraph.build(self, images, **over)
+
+    def test_switched_off_the_graphs_are_exactly_what_they_were(self):
+        self.assertEqual(self.t2i(pe=None), self.t2i(), "no enhancer means no change at all")
+        self.assertEqual(self.edit(["a.png"], pe=None), self.edit(["a.png"]))
+        self.assertEqual(nodes_of(self.t2i(), li.PE_NODE), [])
+
+    def test_the_encoder_reads_the_rewrite_not_the_prompt(self):
+        graph = self.t2i(pe={"file": PE_T2I, "kind": "t2i"})
+        self.assertEqual(nodes_of(graph, "CLIPTextEncode")[0]["inputs"]["text"], ["pe", 0])
+        generate = graph["pe"]["inputs"]
+        self.assertEqual(generate["prompt"], "a lamp", "the enhancer is handed the prompt as written")
+        self.assertEqual(generate["system_prompt"], li.pe_system_prompt("t2i"))
+        self.assertTrue(generate["thinking"], "the checkpoint was trained with a reasoning block")
+        self.assertEqual(generate["sampling_mode"], "on")
+        self.assertEqual(generate["sampling_mode.presence_penalty"], 1.5)
+        self.assertNotIn("temperature", generate, "a bare sub-input matches no slot on a DynamicCombo")
+        self.assertEqual(graph["pe_clip"]["inputs"], {"clip_name": PE_T2I, "type": "stable_diffusion", "device": "default"})
+        self.assertEqual(graph["pe_show"]["inputs"]["source"], ["pe", 0], "the rewrite is kept for the result")
+
+    def test_the_shipped_system_prompts_ask_for_plain_text(self):
+        # The Hugging Face card's prompt answers in JSON; that would be encoded, braces and all.
+        self.assertIn("No JSON", li.pe_system_prompt("t2i"))
+        self.assertIn("edit instruction", li.pe_system_prompt("i2i"))
+
+    def test_lora_triggers_are_joined_on_after_the_rewrite(self):
+        graph = self.t2i(pe={"file": PE_T2I, "kind": "t2i", "suffix": "ohwx"})
+        self.assertEqual(graph["pe_join"]["inputs"], {"string_a": ["pe", 0], "string_b": "ohwx", "delimiter": ", "})
+        self.assertEqual(nodes_of(graph, "CLIPTextEncode")[0]["inputs"]["text"], ["pe_join", 0],
+                         "a trigger the enhancer paraphrased away would switch its LoRA off")
+
+    def test_the_edit_enhancer_sees_every_reference_and_keeps_one_seed(self):
+        graph = self.edit(["a.png", "b.png"], seed=7, pe={"file": PE_I2I, "kind": "i2i"}, pe_seed=5)
+        self.assertEqual(graph["pe_batch"]["inputs"], {"images.image0": ["i1", 0], "images.image1": ["i2", 0]},
+                         "BatchImagesNode counts from image0")
+        self.assertEqual(graph["pe"]["inputs"]["image"], ["pe_batch", 0])
+        self.assertEqual(graph["pe"]["inputs"]["sampling_mode.seed"], 5,
+                         "one enhancer seed across an edit's takes, so ComfyUI runs it once")
+        self.assertEqual(graph["pe_clip"]["inputs"]["type"], "qwen_image")
+        self.assertEqual(nodes_of(graph, "TextEncodeQwenImage21")[0]["inputs"]["prompt"], ["pe", 0])
+
+    def test_the_file_patterns_do_not_cross(self):
+        self.assertTrue(li.PE_FILES["t2i"].search(PE_T2I) and not li.PE_FILES["t2i"].search(PE_I2I))
+        self.assertTrue(li.PE_FILES["i2i"].search(PE_I2I) and not li.PE_FILES["i2i"].search(PE_T2I))
+        encoder = li.LOCAL_MODELS["qwen21"]["files"]["clip"][1]
+        self.assertFalse(encoder.search(PE_T2I), "an enhancer must never be loaded as Qwen 2.1's text encoder")
+
+
+class PromptEnhancerSwitch(unittest.IsolatedAsyncioTestCase):
+    """Whether a Qwen 2.1 image gets the enhancer: only when switched on, and never at the cost of the image."""
+
+    class Comfy:
+        def __init__(self, nodes):
+            self.nodes = nodes
+
+        async def object_info(self, name):
+            return {name: {}} if name in self.nodes else None
+
+    def engine(self, encoders, nodes=(li.PE_NODE,)):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        service = StubService(self.dir, [])
+        service.comfy = self.Comfy(set(nodes))
+
+        async def available_models(folder, refresh=False):
+            return list(encoders) if folder == "text_encoders" else []
+        service.available_models = available_models
+        return li.LocalImageEngine(service)
+
+    async def test_off_by_default(self):
+        warnings = []
+        self.assertIsNone(await self.engine([PE_T2I])._pe("t2i", "a lamp", "a lamp", warnings))
+        self.assertEqual(warnings, [])
+
+    async def test_on_with_the_file_it_is_used_with_the_triggers_split_off(self):
+        engine = self.engine(["qwen3vl_8b_bf16.safetensors", PE_T2I, PE_I2I])
+        engine.service.image_engines.save(qwen21_pe=True)
+        pe = await engine._pe("t2i", "a lamp", "a lamp, ohwx", [])
+        self.assertEqual(pe, {"file": PE_T2I, "kind": "t2i", "suffix": "ohwx"})
+        self.assertEqual((await engine._pe("i2i", "x", "x", []))["file"], PE_I2I)
+
+    async def test_on_without_the_file_the_image_is_still_made_and_says_why(self):
+        engine = self.engine([PE_T2I])
+        engine.service.image_engines.save(qwen21_pe=True)
+        warnings = []
+        self.assertIsNone(await engine._pe("i2i", "x", "x", warnings))
+        self.assertIn("pe_i2i", warnings[0])
+
+    async def test_on_without_the_node_the_image_is_still_made_and_says_why(self):
+        engine = self.engine([PE_T2I], nodes=())
+        engine.service.image_engines.save(qwen21_pe=True)
+        warnings = []
+        self.assertIsNone(await engine._pe("t2i", "x", "x", warnings))
+        self.assertIn("TextGenerate", warnings[0])
+
+
 CHROMA_FILES = {"unet": "chroma1_hd_fp8_scaled.safetensors",
                 "clip": "t5xxl_fp8_e4m3fn.safetensors",
                 "vae": "chroma_vae.safetensors"}

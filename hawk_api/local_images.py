@@ -88,6 +88,19 @@ QWEN21_EDIT_RESOLUTION = 1024
 QWEN21_MAX_REFS = 16  # TextEncodeQwenImage21 has image_1 .. image_16 and no more
 QWEN21_EDIT_NODE = "TextEncodeQwenImage21"  # core, ComfyUI 0.36.0+; edits cannot be built without it
 QWEN21_CACHE_NODE = "QwenImage21Cache"  # core, 0.36.0+; a speed-up, so its absence is not an error
+#: Qwen Image 2.1's prompt enhancers: Qwen3.5-9B fine-tunes that rewrite the prompt before the image model
+#: sees it, one for text to image and one for edits. Switched on in Studio (image_engines.json qwen21_pe).
+#: The wiring and every value below come from Comfy-Org's own Qwen 2.1 templates, including the system
+#: prompts in qwen21_pe/, which -- unlike the Hugging Face card's -- ask for the bare paragraph rather than
+#: JSON, so the output can go straight into the encoder.
+PE_NODE = "TextGenerate"  # core; loads the enhancer through a CLIPLoader
+PE_FILES = {"t2i": re.compile(r"qwen[-_ ]?3\.?5.*pe[-_ ]?t2i", re.IGNORECASE),
+            "i2i": re.compile(r"qwen[-_ ]?3\.?5.*pe[-_ ]?i2i", re.IGNORECASE)}
+PE_CLIP_TYPES = {"t2i": "stable_diffusion", "i2i": "qwen_image"}  # what the templates load each one as
+PE_PRESENCE_PENALTY = {"t2i": 1.5, "i2i": 0.0}
+PE_MAX_LENGTH = 4096  # thinking plus the rewrite; the official 16k/24k can run for minutes
+PE_WAIT_SECONDS = 300.0  # on top of WAIT_SECONDS: a thinking pass before the render starts
+PE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qwen21_pe")
 ZIMAGE_STEPS = 8
 #: Chroma1-HD's defaults, from the reference ComfyUI workflow. Chroma is the odd one out here: it samples
 #: at real guidance rather than at cfg 1, so it needs a negative prompt to be any good, and it takes its
@@ -271,6 +284,7 @@ class LocalResult:
     loras: list[dict] = field(default_factory=list)
     seconds: float = 0.0
     warnings: list[str] = field(default_factory=list)
+    enhanced_prompt: str = ""  # what Qwen 2.1's prompt enhancer rewrote the prompt to, when it ran
 
 
 def _names_adult(requested: list[dict], items: list) -> bool:
@@ -558,13 +572,59 @@ def _qwen21_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]],
     return graph, model
 
 
+def pe_system_prompt(kind: str) -> str:
+    with open(os.path.join(PE_DIR, f"{kind}.txt"), "r", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _pe_nodes(graph: dict, prompt: str, pe: dict, seed: int, images: list | None = None) -> list:
+    """Add the prompt enhancer ahead of the encoder and return the link to the text it writes.
+
+    ``pe`` is ``{"file", "kind"}`` plus an optional ``suffix``: LoRA trigger words, joined on after the
+    rewrite because the enhancer would otherwise paraphrase them away. The seed is the image's own, so an
+    edit's per-take loop (seed + index for the image) keeps one seed here and ComfyUI's cache runs the
+    enhancer once rather than once per take.
+
+    "sampling_mode.temperature" and friends are namespaced like "images.image_1": sampling_mode is a
+    DynamicCombo, and its sub-inputs only reach execute() under the combo's own id.
+    """
+    kind = pe["kind"]
+    graph["pe_clip"] = {"class_type": "CLIPLoader",
+                        "inputs": {"clip_name": pe["file"], "type": PE_CLIP_TYPES[kind], "device": "default"}}
+    inputs = {"clip": ["pe_clip", 0], "prompt": prompt, "system_prompt": pe_system_prompt(kind),
+              "max_length": PE_MAX_LENGTH, "thinking": True, "use_default_template": True,
+              "sampling_mode": "on", "sampling_mode.temperature": 1.0, "sampling_mode.top_k": 20,
+              "sampling_mode.top_p": 0.95, "sampling_mode.min_p": 0.0, "sampling_mode.repetition_penalty": 1.0,
+              "sampling_mode.presence_penalty": PE_PRESENCE_PENALTY[kind],
+              "sampling_mode.seed": seed % 0xffffffffffffffff}
+    if images:
+        # BatchImagesNode's Autogrow slots count from zero with no underscore -- image0, image1 -- unlike
+        # TextEncodeQwenImage21's images.image_1.
+        graph["pe_batch"] = {"class_type": "BatchImagesNode",
+                             "inputs": {f"images.image{index}": ref for index, ref in enumerate(images)}}
+        inputs["image"] = ["pe_batch", 0]
+    graph["pe"] = {"class_type": PE_NODE, "inputs": inputs}
+    text = ["pe", 0]
+    if pe.get("suffix"):
+        graph["pe_join"] = {"class_type": "StringConcatenate",
+                            "inputs": {"string_a": text, "string_b": pe["suffix"], "delimiter": ", "}}
+        text = ["pe_join", 0]
+    # an output node, so the rewrite lands in ComfyUI's history where _collect can read it back
+    graph["pe_show"] = {"class_type": "PreviewAny", "inputs": {"source": text}}
+    return text
+
+
 def qwen21_graph(prompt: str, *, width: int, height: int, n: int, seed: int, loras: list[tuple[str, float]],
                  unet: str, clip: str, vae: str, steps: int, cfg: float, sampler: str, scheduler: str,
-                 prefix: str, negative: str = "", cache: bool = False) -> dict:
-    """Qwen Image 2.1 text to image. A plain KSampler, unlike Klein's SamplerCustomAdvanced path."""
+                 prefix: str, negative: str = "", cache: bool = False, pe: dict | None = None) -> dict:
+    """Qwen Image 2.1 text to image. A plain KSampler, unlike Klein's SamplerCustomAdvanced path.
+
+    With ``pe`` the prompt goes through the prompt enhancer first; without it the graph is unchanged.
+    """
     graph, model = _qwen21_base(unet, clip, vae, loras, cache)
+    text = _pe_nodes(graph, prompt, pe, seed) if pe else prompt
     graph.update({
-        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": prompt}},
+        "4": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["2", 0], "text": text}},
         "5": _negative_node(negative, ["4", 0]),
         "6": {"class_type": "EmptyLatentImage", "inputs": {"width": width, "height": height, "batch_size": n}},
         "7": {"class_type": "KSampler", "inputs": {
@@ -579,7 +639,8 @@ def qwen21_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lor
 def qwen21_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
                       loras: list[tuple[str, float]], unet: str, clip: str, vae: str, steps: int, cfg: float,
                       sampler: str, scheduler: str, prefix: str, negative: str = "",
-                      resolution: int = QWEN21_EDIT_RESOLUTION, cache: bool = False) -> dict:
+                      resolution: int = QWEN21_EDIT_RESOLUTION, cache: bool = False,
+                      pe: dict | None = None, pe_seed: int | None = None) -> dict:
     """Qwen Image 2.1 edit, with up to sixteen reference images.
 
     One TextEncodeQwenImage21 node does the whole job: it takes the references on images.image_1 ..
@@ -596,10 +657,14 @@ def qwen21_edit_graph(prompt: str, *, images: list[str], width: int | None, heig
         raise LocalImageError(f"Qwen Image 2.1 edit takes at most {QWEN21_MAX_REFS} reference images; "
                               f"{len(images)} were given.", fatal=True)
     graph, model = _qwen21_base(unet, clip, vae, loras, cache)
-    encode = {"clip": ["2", 0], "vae": ["3", 0], "prompt": prompt, "negative_prompt": negative,
-              "resolution": resolution}
     for index, path in enumerate(images, start=1):
         graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
+    # the edit enhancer looks at the references too, so it can name what is in them
+    text = (_pe_nodes(graph, prompt, pe, seed if pe_seed is None else pe_seed,
+                      images=[[f"i{index}", 0] for index in range(1, len(images) + 1)]) if pe else prompt)
+    encode = {"clip": ["2", 0], "vae": ["3", 0], "prompt": text, "negative_prompt": negative,
+              "resolution": resolution}
+    for index in range(1, len(images) + 1):
         # "images.image_1", not "image_1": the node takes its references through an Autogrow input
         # named "images", and ComfyUI matches the slots by their namespaced id, gathering them into one
         # dict argument. A flat "image_1" matches nothing, survives as a stray keyword and lands as
@@ -883,13 +948,39 @@ class LocalImageEngine:
                 text = f"{text}, {item.trigger}"
         return text
 
-    async def _submit(self, graph: dict, label: str) -> list[bytes]:
+    async def _pe(self, kind: str, prompt: str, text: str, warnings: list[str]) -> dict | None:
+        """The prompt enhancer to put in a Qwen 2.1 graph, or None to leave the graph as it always was.
+
+        Only when it is switched on in Studio. A missing file or node is a warning, never a failure: the
+        enhancer is optional, and an image made without it is still the image that was asked for.
+        ``text`` is ``prompt`` with the LoRA triggers appended; they ride along as a suffix so the rewrite
+        cannot drop them.
+        """
+        store = getattr(self.service, "image_engines", None)
+        if store is None or not store.qwen21_pe():
+            return None
+        what = "edit" if kind == "i2i" else "text-to-image"
+        files = await self.service.available_models("text_encoders")
+        found = next((f for f in files if PE_FILES[kind].search(f.rsplit("/", 1)[-1])), None)
+        if not found:
+            warnings.append(f"The Qwen 2.1 prompt enhancer is on, but its {what} model "
+                            f"(qwen3.5_9b_qwen_image_2.1_pe_{kind}) is not in models/text_encoders, "
+                            "so this image was made from the prompt as written.")
+            return None
+        if not await self.service.comfy.object_info(PE_NODE):
+            warnings.append(f"The Qwen 2.1 prompt enhancer is on, but this ComfyUI has no {PE_NODE} node "
+                            "(update ComfyUI), so this image was made from the prompt as written.")
+            return None
+        return {"file": found, "kind": kind, "suffix": text.strip()[len(prompt.strip()):].lstrip(", ")}
+
+    async def _submit(self, graph: dict, label: str, wait: float = WAIT_SECONDS,
+                      texts: list[str] | None = None) -> list[bytes]:
         prompt_id = str(uuid.uuid4())
         try:
             await self.service.comfy.submit(graph, prompt_id)
         except ComfyError as exc:
             raise LocalImageError(f"ComfyUI rejected the {label} graph: {exc}") from exc
-        return await self._collect(prompt_id, label)
+        return await self._collect(prompt_id, label, wait, texts)
 
     async def generate(self, prompt: str, *, size: str | None = None, n: int = 1, seed: int | None = None,
                        loras: list[dict] | None = None, steps: int | None = None,
@@ -909,15 +1000,16 @@ class LocalImageEngine:
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         batch = max(1, min(4, n))
         started = time.monotonic()
+        pe = await self._pe("t2i", prompt, text, warnings) if engine == "qwen21" else None
         if engine == "qwen21":
-            graph = qwen21_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
+            graph = qwen21_graph(prompt if pe else text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                  unet=files["unet"], clip=files["clip"], vae=files["vae"],
                                  steps=steps or (hint.steps if hint and hint.steps else QWEN21_STEPS),
                                  cfg=cfg if cfg is not None else (hint.cfg if hint and hint.cfg is not None else QWEN21_CFG),
                                  sampler=(hint.sampler if hint and hint.sampler else QWEN21_SAMPLER),
                                  scheduler=(hint.scheduler if hint and hint.scheduler else QWEN21_SCHEDULER),
                                  prefix="hawk_images/qwen21", negative=negative,
-                                 cache=await self._has_cache_node())
+                                 cache=await self._has_cache_node(), pe=pe)
         elif engine == "zimage":
             graph = zimage_graph(text, width=width, height=height, n=batch, seed=seed, loras=chosen,
                                  unet=files["unet"], clip=files["clip"], vae=files["vae"],
@@ -941,8 +1033,10 @@ class LocalImageEngine:
                                scheduler=(hint.scheduler if hint and hint.scheduler else "simple"),
                                prefix="hawk_images/krea2", negative=negative,
                                cfg=cfg if cfg is not None else 1.0)
-        images = await self._submit(graph, spec.label)
-        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
+        texts: list[str] = []
+        images = await self._submit(graph, spec.label, WAIT_SECONDS + (PE_WAIT_SECONDS if pe else 0), texts)
+        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1),
+                           warnings, enhanced_prompt=texts[0] if texts else "")
 
     async def edit_qwen21(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
                           seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
@@ -968,18 +1062,22 @@ class LocalImageEngine:
         cache = await self._has_cache_node()
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         paths = await self._reference_paths(sources)
-        started, images = time.monotonic(), []
+        pe = await self._pe("i2i", prompt, text, warnings)
+        started, images, texts = time.monotonic(), [], []
         for index in range(max(1, min(4, n))):
-            graph = qwen21_edit_graph(text, images=paths, width=width, height=height,
+            graph = qwen21_edit_graph(prompt if pe else text, images=paths, width=width, height=height,
                                       seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
                                       vae=files["vae"],
                                       steps=steps or (hint.steps if hint and hint.steps else QWEN21_STEPS),
                                       cfg=cfg if cfg is not None else (hint.cfg if hint and hint.cfg is not None else QWEN21_CFG),
                                       sampler=(hint.sampler if hint and hint.sampler else QWEN21_SAMPLER),
                                       scheduler=(hint.scheduler if hint and hint.scheduler else QWEN21_SCHEDULER),
-                                      prefix="hawk_images/qwen21_edit", negative=negative, cache=cache)
-            images += await self._submit(graph, "Qwen Image 2.1 edit")
-        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1), warnings)
+                                      prefix="hawk_images/qwen21_edit", negative=negative, cache=cache,
+                                      pe=pe, pe_seed=seed)
+            images += await self._submit(graph, "Qwen Image 2.1 edit",
+                                         WAIT_SECONDS + (PE_WAIT_SECONDS if pe else 0), texts)
+        return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1),
+                           warnings, enhanced_prompt=texts[0] if texts else "")
 
     async def edit(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1, seed: int | None = None,
                    loras: list[dict] | None = None, steps: int | None = None, ref_boost: float | None = None,
@@ -1052,8 +1150,10 @@ class LocalImageEngine:
         )
         return await self._submit(graph, "Krea 2 edit")
 
-    async def _collect(self, prompt_id: str, label: str) -> list[bytes]:
-        deadline = time.monotonic() + WAIT_SECONDS
+    async def _collect(self, prompt_id: str, label: str, wait: float = WAIT_SECONDS,
+                       texts: list[str] | None = None) -> list[bytes]:
+        """The images a prompt saved. ``texts`` collects what the prompt enhancer's preview node showed."""
+        deadline = time.monotonic() + wait
         while True:
             try:
                 history = await self.service.comfy.history(prompt_id)
@@ -1066,8 +1166,11 @@ class LocalImageEngine:
                     message = str(error.get("exception_message") or "ComfyUI reported an error.").strip()
                     where = f" in {error['node_type']} (node {error.get('node_id')})" if error.get("node_type") else ""
                     raise LocalImageError(f"{label} failed{where}: {message}")
-                files = [image for output in (history.get("outputs") or {}).values() for image in output.get("images") or []]
+                outputs = history.get("outputs") or {}
+                files = [image for output in outputs.values() for image in output.get("images") or []]
                 if files:
+                    if texts is not None:
+                        texts.extend(str(t) for t in (outputs.get("pe_show") or {}).get("text") or [])
                     return [await self._read(image) for image in files]
                 if status.get("completed"):
                     raise LocalImageError("Krea 2 finished without images.")
@@ -1076,7 +1179,7 @@ class LocalImageEngine:
                     await self.service.comfy.cancel(prompt_id)
                 except ComfyError:
                     pass
-                raise LocalImageError(f"Krea 2 did not finish within {int(WAIT_SECONDS)} s.")
+                raise LocalImageError(f"Krea 2 did not finish within {int(wait)} s.")
             await asyncio.sleep(POLL_SECONDS)
 
     async def _read(self, image: dict) -> bytes:

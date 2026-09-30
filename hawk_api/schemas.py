@@ -208,6 +208,9 @@ class ImageEngineSettings(BaseModel):
         None, description="Ask before a failed take retries on a paid engine, instead of spending automatically.")
     pick_takes: bool | None = Field(
         None, description="Show a rejected take and wait for your choice, instead of letting the agent take it again.")
+    qwen21_pe: bool | None = Field(
+        None, description="Run Qwen Image 2.1's prompt enhancer (a local Qwen3.5-9B) over the prompt first. Slower; "
+                          "needs the qwen3.5_9b_qwen_image_2.1_pe_t2i / _pe_i2i files in models/text_encoders.")
     defaults: dict[str, list[ImageLoraDefault]] | None = Field(
         None, description='LoRAs a family attaches on its own, keyed by family (krea2, qwen21, zit). An empty list switches them off.')
 

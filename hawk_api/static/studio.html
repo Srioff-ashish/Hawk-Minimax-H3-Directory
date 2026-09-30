@@ -1169,6 +1169,7 @@
               <input class="input" id="engineMaxWait" type="number" min="0" max="300" step="10" style="max-width:140px"></div>
             <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
             <label class="check"><input type="checkbox" id="enginePickTakes"> Show me a rejected take and let me choose before it is made again</label>
+            <label class="check"><input type="checkbox" id="engineQwen21Pe"> Run Qwen Image 2.1's prompt enhancer first (slower; rewrites the prompt, needs the qwen3.5_9b …_pe_t2i / _pe_i2i files)</label>
             <div class="field"><label class="label">LoRAs each model attaches on its own</label>
               <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
               <div class="grid grid-2" style="margin-top:8px;align-items:start">
@@ -3591,6 +3592,7 @@
     $("engineWaitRow").hidden = data.busy.mode !== "wait";
     $("engineConfirmPaid").checked = data.confirm_paid !== false;
     $("enginePickTakes").checked = data.pick_takes !== false;
+    $("engineQwen21Pe").checked = data.qwen21_pe === true;
     $("engineWarnings").innerHTML = (data.warnings || []).map((w) => `<div class="engine-note">${w}</div>`).join("");
   }
   async function loadImageEngines() {
@@ -3622,6 +3624,7 @@
         body: JSON.stringify({ generate: engineState.generate, edit: engineState.edit,
           busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
           confirm_paid: $("engineConfirmPaid").checked, pick_takes: $("enginePickTakes").checked,
+          qwen21_pe: $("engineQwen21Pe").checked,
           defaults: engineState.defaults }) }));
       if (engineState.video.length) {
         // video defaults live in loras.json, with its own rules, so they save separately

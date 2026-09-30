@@ -1245,7 +1245,9 @@ class HawkService:
                 notes.extend(local.warnings)
                 return await self._image_result(prompt, local.images, used, spec.tag_for(action), notes, tried,
                                                 reference_asset_ids, engine_id=engine_id,
-                                                extra={"loras": local.loras, "seconds": local.seconds})
+                                                extra={"loras": local.loras, "seconds": local.seconds,
+                                                       **({"enhanced_prompt": local.enhanced_prompt}
+                                                          if local.enhanced_prompt else {})})
 
             if loras and not said_loras:
                 notes.append("Image LoRAs only apply to the local engines; ignored here.")

@@ -227,6 +227,16 @@ class Store(unittest.TestCase):
             self.store.save(edit=[{"engine": "qwen21"}, {"engine": "chroma"}])
         self.assertIn("Chroma1-HD", str(caught.exception), "say which one, do not silently drop it")
 
+    def test_the_qwen21_prompt_enhancer_is_off_until_switched_on(self):
+        self.assertFalse(self.store.qwen21_pe(), "it is on trial, so a pod that never set it runs without it")
+        self.store.save(qwen21_pe=True)
+        self.assertTrue(ie.ImageEngineStore(self.dir).qwen21_pe(), "the switch should survive a reload")
+        self.assertTrue(self.store.settings()["qwen21_pe"], "and Studio should see it")
+        self.store.save(pick_takes=False)
+        self.assertTrue(self.store.qwen21_pe(), "saving another setting must not reset it")
+        self.store.save(qwen21_pe=False)
+        self.assertFalse(self.store.qwen21_pe())
+
     def test_saving_an_order_survives_a_reload(self):
         self.store.save(generate=[{"engine": "qwen21"}, {"engine": "krea2"}, {"engine": "zimage"}, {"engine": "seedream"}])
         self.assertEqual(ie.ImageEngineStore(self.dir).order("generate"), ["qwen21", "krea2", "zimage", "seedream"])

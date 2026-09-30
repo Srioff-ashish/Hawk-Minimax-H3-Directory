@@ -295,6 +295,10 @@ DEFAULTS = {
     "confirm_paid": True,
     #: Inspection rejecting a take stops and shows it, instead of the agent silently taking it again.
     "pick_takes": True,
+    #: Qwen Image 2.1's own prompt enhancer (a Qwen3.5-9B) rewrites the prompt before the image model sees
+    #: it. Off by default: it is on trial, costs a thinking pass per image, and the agent already writes
+    #: prompts in the shape the enhancer produces.
+    "qwen21_pe": False,
 }
 BUSY_MODES = ("wait", "fall_through")
 MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
@@ -349,6 +353,7 @@ class ImageEngineStore:
             "busy": busy,
             "confirm_paid": self.confirm_paid(),
             "pick_takes": self.pick_takes(),
+            "qwen21_pe": self.qwen21_pe(),
         }
 
     def confirm_paid(self) -> bool:
@@ -360,6 +365,11 @@ class ImageEngineStore:
         """Whether a rejected take is put to the user before anything is generated again."""
         stored = self._load().get("pick_takes")
         return DEFAULTS["pick_takes"] if not isinstance(stored, bool) else stored
+
+    def qwen21_pe(self) -> bool:
+        """Whether Qwen Image 2.1 runs its prompt enhancer before generating or editing."""
+        stored = self._load().get("qwen21_pe")
+        return DEFAULTS["qwen21_pe"] if not isinstance(stored, bool) else stored
 
     def defaults(self, family: str) -> list[dict] | None:
         """LoRAs this family attaches on its own, or None when the user has never set them.
@@ -470,7 +480,7 @@ class ImageEngineStore:
         return cleaned
 
     def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None,
-             confirm_paid=None, pick_takes=None) -> dict:
+             confirm_paid=None, pick_takes=None, qwen21_pe=None) -> dict:
         """Update the parts that were given. Anything left as None keeps its current value."""
         with self._lock:
             current = self.settings()
@@ -490,6 +500,8 @@ class ImageEngineStore:
                 current["confirm_paid"] = bool(confirm_paid)
             if pick_takes is not None:
                 current["pick_takes"] = bool(pick_takes)
+            if qwen21_pe is not None:
+                current["qwen21_pe"] = bool(qwen21_pe)
             stored_defaults = dict(self._load().get("defaults") or {})
             for family, entries in (defaults or {}).items():
                 stored_defaults[family] = self._clean_defaults(family, entries or [])
