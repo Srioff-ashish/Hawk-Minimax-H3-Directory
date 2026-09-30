@@ -197,12 +197,15 @@ class Settings:
     #: $1.911, and the director re-sends the whole prompt on every step of a chain, so this one setting moves
     #: the bill more than anything else here. deepseek-v4-pro drove a full generate -> inspect -> report chain
     #: correctly on that pod; grok stays behind it for anyone who wants it back.
-    agent_model: str = "deepseek/deepseek-v4-pro, x-ai/grok-4.6, xai/grok-4.3"
+    #: deepseek-v4.1-flash is the first fallback: v4-pro can spend its whole token budget reasoning and come
+    #: back empty (finish_reason=length), and the same family's flash model answers the same prompt at a
+    #: fraction of grok's price.
+    agent_model: str = "deepseek/deepseek-v4-pro, deepseek/deepseek-v4.1-flash, x-ai/grok-4.6, xai/grok-4.3"
     #: The characters' voices. The same chain as agent_model on purpose: turning the prose split on must not by
     #: itself change how any existing chat sounds. An uncensored prose model is something to opt into -- and
     #: note that magnum-v4-72b bills its cached tokens at full price, so on a group chat, where nearly every
     #: token is a re-sent prompt, it costs more than grok-4.6 does.
-    agent_prose_model: str = "deepseek/deepseek-v4-pro, x-ai/grok-4.6, xai/grok-4.3"
+    agent_prose_model: str = "deepseek/deepseek-v4-pro, deepseek/deepseek-v4.1-flash, x-ai/grok-4.6, xai/grok-4.3"
     #: Writes chat summaries whatever the chat's model is: cheap, and good enough to condense. Its cached
     #: tokens bill at $0.001/M, which is what makes compaction almost free.
     agent_summary_model: str = "deepseek/deepseek-v4.1-flash, deepseek-ai/deepseek-v4.1-flash, xai/grok-4.3"
