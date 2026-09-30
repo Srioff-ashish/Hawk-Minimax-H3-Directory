@@ -48,7 +48,11 @@ MAX_TALK_MAKES = 5  # things any one character may have made during one "let the
 MAX_TALK_MAKES_TOTAL = 8  # and across the whole cast, so a big room can't order a dozen renders at once
 MAKE_STEPS = 8  # model steps the director gets to make one thing
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
-TURN_MAX_TOKENS = 4000  # room for reasoning models; a turn itself is short
+#: Output caps, reasoning included: a reasoning model (deepseek-v4-pro) thinks against the same cap and, when
+#: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
+#: so a higher cap costs nothing on an ordinary turn; at v4-pro's $3.38/M out, a full 15k step is about $0.05.
+DIRECTOR_MAX_TOKENS = 15_000
+TURN_MAX_TOKENS = 8000  # a turn itself is short; the rest is room to think
 #: The director drives tools, where the JSON matters more than the wording, so it stays cool. A chat with a
 #: character is that character talking, and 0.4 is not a temperature to write 800 messages of one scene at:
 #: once two identical replies are in the history they are the strongest pattern in the prompt, and the model
@@ -1412,7 +1416,7 @@ class AgentService:
             temperature = PROSE_TEMPERATURE if prose else DIRECTOR_TEMPERATURE
         for position, model in enumerate(models):
             try:
-                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=8192,
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=DIRECTOR_MAX_TOKENS,
                                                     temperature=temperature)
             except AtlasError as exc:
                 if position + 1 >= len(models):
