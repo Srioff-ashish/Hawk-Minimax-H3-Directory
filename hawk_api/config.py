@@ -211,7 +211,11 @@ class Settings:
     agent_summary_model: str = "deepseek/deepseek-v4.1-flash, deepseek-ai/deepseek-v4.1-flash, xai/grok-4.3"
     #: Looks at images for inspect_image when the chat's own model cannot see. Inspection sends pictures, so it
     #: is token-heavy: a model built for vision at $0.104/M beats a general one at $2.00/M.
-    agent_vision_model: str = "qwen/qwen3-vl-32b-instruct, x-ai/grok-4.6, xai/grok-4.6, google/gemini-pro-1.5"
+    #: Measured on Atlas with a mismatched brief and with an adult nude: none of these refused, and
+    #: qwen3.6-35b-a3b caught the same framing flaw grok-4.6 did, at about 1/7 the cost and 4x the speed
+    #: (grok-4.3 and qwen3.5-flash passed it). qwen3-vl-32b is not on Atlas; it stays for OpenRouter.
+    #: Only three candidates are tried per check, and a refusal still bills, so order matters.
+    agent_vision_model: str = "qwen/qwen3.6-35b-a3b, xai/grok-4.3, xai/grok-4.6, qwen/qwen3-vl-32b-instruct"
     #: Summarise older messages once the conversation sent with each call passes this many tokens (estimated).
     agent_compact_tokens: int = 20_000
     #: Messages kept word for word after an automatic summary.
