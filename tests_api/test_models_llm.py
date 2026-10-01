@@ -85,6 +85,19 @@ class AModelIdOnEitherProvider(unittest.TestCase):
                 self.assertEqual(models_llm.resolve_many(role, "deepseek-ai/deepseek-v4-pro", listed),
                                  ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4.1-flash", "x-ai/grok-4.6"])
 
+    def test_a_model_beside_its_own_variant_resolves_to_the_plain_id(self):
+        # OpenRouter lists x-ai/grok-4.3 and x-ai/grok-4.3:batch; read as a clash, grok-4.3 vanished from
+        # every chain there and the vision ladder jumped straight to grok-4.6.
+        listed = [{"id": "x-ai/grok-4.3", "vision": True, "price_in": 1.25e-6},
+                  {"id": "x-ai/grok-4.3:batch", "vision": True, "price_in": 1e-6}]
+        self.assertEqual(models_llm.resolve("director", "xai/grok-4.3", listed), "x-ai/grok-4.3")
+        self.assertEqual(models_llm.resolve("director", "x-ai/grok-4.3:batch", listed), "x-ai/grok-4.3:batch",
+                         "a chain that names the variant still gets the variant")
+        only_variants = [{"id": "x-ai/grok-4.3:batch", "vision": True}, {"id": "x-ai/grok-4.3:free", "vision": True},
+                         {"id": "x-ai/grok-4.6", "vision": True}]
+        self.assertEqual(models_llm.resolve("director", "xai/grok-4.3, xai/grok-4.6", only_variants), "x-ai/grok-4.6",
+                         "two variants and no plain id is still a clash, so the chain moves on")
+
     def test_a_single_id_is_read_as_a_one_element_chain(self):
         # Every setting already stored is a single id, so this is the whole backward-compatibility story.
         self.assertEqual(models_llm.chain("xai/grok-4.6"), ["xai/grok-4.6"])

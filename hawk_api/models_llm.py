@@ -135,6 +135,12 @@ def resolve_many(role: str, setting, catalogue: list[dict] | None, *, vision: bo
         matches = by_slug.get(slug(candidate)) or []
         # Two listed models sharing a slug name neither: the same rule cast_talk.mentioned_all uses for a
         # first name two characters share. A wrong model is worse than falling through to the next candidate.
+        # A model beside its own ":batch" or ":free" variant is not that kind of clash, though: OpenRouter lists
+        # x-ai/grok-4.3 and x-ai/grok-4.3:batch, and calling that ambiguous dropped grok-4.3 from every chain.
+        # The plain id is the one a chain written without a suffix means.
+        if len(matches) > 1 and ":" not in candidate:
+            plain = [model_id for model_id in matches if ":" not in model_id]
+            matches = plain if len(plain) == 1 else matches
         if len(matches) == 1:
             found.append(matches[0])
 
