@@ -886,13 +886,38 @@ def restart_api(session: Session) -> None:
     print(session.summary())
 
 
+def render_in_progress(session: Session) -> str:
+    """Why a restart now would kill a render, or "" when nothing is running.
+
+    ComfyUI's /queue alone is not enough. A ComfyUI loading a 26 GB encoder may not answer it within the
+    timeout, and that silence used to read as "idle": rerunning the start cell mid-render then restarted
+    ComfyUI under the render ("ComfyUI no longer knows this job"). The API also knows about a render it has
+    accepted but not yet handed to ComfyUI, which /queue cannot show at all."""
+    if not port_free(COMFY_PORT):
+        queue = _http_json(f"http://127.0.0.1:{COMFY_PORT}/queue", timeout=15)
+        if queue is None:
+            return "ComfyUI did not answer /queue -- it is probably busy loading or rendering"
+        if queue.get("queue_running"):
+            return "ComfyUI is rendering"
+    try:
+        request = urllib.request.Request(f"http://127.0.0.1:{API_PORT}/v1/jobs?limit=20",
+                                         headers={"Authorization": f"Bearer {session.token}"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            jobs = json.load(response).get("jobs", [])
+    except Exception:  # API down: ComfyUI's own answer above is all there is
+        return ""
+    active = [job["id"][:8] for job in jobs if job.get("status") in ("queued", "rendering", "planning")]
+    return f"The API has {len(active)} job(s) in progress ({', '.join(active)})" if active else ""
+
+
 def restart_comfyui(session: Session, extra_args: list[str] | None = None, force: bool = False) -> None:
     """Reload the Hawk H3 node code (e.g. after `git pull`): stop ComfyUI and start it again.
     Models load again on the next render. Refuses while a prompt is running unless force=True."""
     base = f"http://127.0.0.1:{COMFY_PORT}"
-    queue = _http_json(f"{base}/queue", timeout=5) or {}
-    if queue.get("queue_running") and not force:
-        raise RuntimeError("ComfyUI is rendering. Wait for it to finish (or cancel it), or pass force=True.")
+    if not force:
+        busy = render_in_progress(session)
+        if busy:
+            raise RuntimeError(f"{busy}. Wait for it to finish (or cancel it), or pass force=True.")
     proc = session.procs.get("comfyui")
     if proc is not None and proc.poll() is None:
         proc.terminate()

@@ -225,6 +225,35 @@ class Detection(unittest.TestCase):
             self.assertEqual(hawk_colab.comfy_command(session, ["--disable-comfy-compiler"]).count(
                 "--disable-comfy-compiler"), 1, "a caller's own copy is not doubled")
 
+    def test_a_restart_waits_for_a_render_comfyui_is_too_busy_to_report(self):
+        """Rerunning the start cell mid-render killed it: a ComfyUI loading the encoder did not answer /queue
+        in time and silence read as idle. Silence, and any job the API still has running, now mean busy."""
+        session = hawk_colab.Session(comfy_dir=".", pack_dir=".", token="t", env={}, log_dir=".")
+        patch = unittest.mock.patch.object
+        with patch(hawk_colab, "port_free", lambda port: False), patch(hawk_colab, "_http_json", lambda *a, **k: None):
+            self.assertIn("did not answer", hawk_colab.render_in_progress(session))
+            with self.assertRaisesRegex(RuntimeError, "did not answer"):
+                hawk_colab.restart_comfyui(session)
+
+        class Reply(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        jobs = json.dumps({"jobs": [{"id": "ebc51ece-1", "status": "rendering"}, {"id": "x", "status": "done"}]})
+        with patch(hawk_colab, "port_free", lambda port: False), \
+                patch(hawk_colab, "_http_json", lambda *a, **k: {"queue_running": []}), \
+                patch(hawk_colab.urllib.request, "urlopen", lambda *a, **k: Reply(jobs.encode())):
+            self.assertIn("ebc51ece", hawk_colab.render_in_progress(session),
+                          "a render the API holds is in progress even when ComfyUI's queue is empty")
+        idle = json.dumps({"jobs": [{"id": "x", "status": "done"}]})
+        with patch(hawk_colab, "port_free", lambda port: False), \
+                patch(hawk_colab, "_http_json", lambda *a, **k: {"queue_running": []}), \
+                patch(hawk_colab.urllib.request, "urlopen", lambda *a, **k: Reply(idle.encode())):
+            self.assertEqual(hawk_colab.render_in_progress(session), "")
+
     def test_lora_config_uses_the_turbo_file_on_disk(self):
         with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:
             example = json.load(handle)
