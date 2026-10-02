@@ -1549,11 +1549,20 @@ class HawkService:
         per role: a plan with no references is still free to use the cheaper text-only model at the head of the
         chain. This is how a chain like "deepseek-v4-pro, xai/grok-4.6" does the right thing in both cases.
         """
+        return (await self._planner_model_ids(requested, needs_vision=needs_vision) or [""])[0]
+
+    async def _planner_model_ids(self, requested: str = "", *, needs_vision: bool = False) -> list[str]:
+        """Every planner id worth trying, best first. A model the caller named is tried alone; the configured
+        chain is tried in full, so one model rate-limited upstream no longer fails the plan while the next
+        candidate is free."""
         catalogue = await self.model_catalogue()
         if str(requested or "").strip():
-            return (models_llm.resolve("planner", requested, catalogue, vision=needs_vision)
-                    or ("" if needs_vision else str(requested).strip()))
-        return await self.model_for("planner", catalogue, vision=needs_vision)
+            one = (models_llm.resolve("planner", requested, catalogue, vision=needs_vision)
+                   or ("" if needs_vision else str(requested).strip()))
+            return [one] if one else []
+        llm = self.llm()
+        configured = llm.planner_model_override or self.settings.planner_model
+        return [m for m in models_llm.resolve_many("planner", configured, catalogue, vision=needs_vision) if m]
 
     def planner_system_prompt(self) -> str:
         """The planner's instructions: the user's edited prompt with the platform rules, else the node's own.
@@ -1683,8 +1692,8 @@ class HawkService:
         # The message is built first because whether it carries photos is what decides which models can serve
         # it: with references this call is multimodal, and a text-only model is rejected outright.
         text, images = await self._planner_message(options, refs)
-        model = await self._planner_model_id(options.model, needs_vision=bool(images))
-        if not model:
+        models = await self._planner_model_ids(options.model, needs_vision=bool(images))
+        if not models:
             raise Unavailable(
                 "No planner model that can read reference photos: the provider in force lists none of the "
                 "configured planner ids with image support. Put a model that can see at the head of the "
@@ -1696,19 +1705,29 @@ class HawkService:
             content.append({"type": "image_url", "image_url": {"url": uri}})
         messages = [{"role": "system", "content": self.planner_system_prompt()},
                     {"role": "user", "content": content if images else text}]
-        reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
-                                            max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature)
-        if not (reply or "").strip():
-            raise Unavailable(f"{model} returned an empty plan.")
-        # "Not empty" was the only thing ever checked here, so a plan cut off mid-sentence was stored as a
-        # finished one: the job said done with no error, Studio drew a half-written script, and the first
-        # thing to actually parse it was the render, at _validate_script, minutes later. Parsing it here
-        # turns that into a failed plan the caller can simply run again.
-        try:
-            parse_script(reply)
-        except ScriptError as exc:
-            raise Unavailable(f"{model} returned a plan that does not parse: {exc}") from None
-        return reply, model, usage or {}
+        failures: list[str] = []
+        for model in models:
+            try:
+                reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
+                                                    max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature)
+                if not (reply or "").strip():
+                    raise Unavailable(f"{model} returned an empty plan.")
+                # "Not empty" was the only thing ever checked here, so a plan cut off mid-sentence was stored as
+                # a finished one: the job said done with no error, Studio drew a half-written script, and the
+                # first thing to actually parse it was the render, at _validate_script, minutes later. Parsing it
+                # here turns that into a failure the next model in the chain gets to fix.
+                try:
+                    parse_script(reply)
+                except ScriptError as exc:
+                    raise Unavailable(f"{model} returned a plan that does not parse: {exc}") from None
+                return reply, model, usage or {}
+            except (AtlasError, Unavailable) as exc:
+                failures.append(str(exc))
+                if model != models[-1]:
+                    log.warning("Planner %s failed (%s); trying the next model in the chain.", model, str(exc)[:200])
+        if len(failures) == 1:
+            raise Unavailable(failures[0])
+        raise Unavailable("Every planner model failed: " + " | ".join(f[:300] for f in failures))
 
     @staticmethod
     def _validate_script(text: str, available: dict, video_has_audio: list, settings: RenderSettings) -> int:

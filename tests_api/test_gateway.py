@@ -93,6 +93,7 @@ class FakeComfy:
         self.chat_reply = PLAN_SCRIPT
         self.chat_status = 200
         self.chat_finish_reason = "stop"  # "length" is a reply the model ran out of room to finish
+        self.chat_status_by_model: dict[str, int] = {}  # one model rate-limited while the rest answer
         self.app = web.Application(client_max_size=64 * 1024 * 1024)
         self.app.add_routes([
             web.get("/v1/models", self.llm_models),
@@ -113,9 +114,11 @@ class FakeComfy:
         return web.json_response({"data": self.llm_models_data})
 
     async def chat(self, request):
-        self.chat_requests.append(await request.json())
-        if self.chat_status != 200:
-            return web.json_response({"error": {"message": "no"}}, status=self.chat_status)
+        body = await request.json()
+        self.chat_requests.append(body)
+        status = self.chat_status_by_model.get(body.get("model"), self.chat_status)
+        if status != 200:
+            return web.json_response({"error": {"message": "no"}}, status=status)
         return web.json_response({"choices": [{"message": {"content": self.chat_reply},
                                                "finish_reason": self.chat_finish_reason}],
                                   "usage": {"prompt_tokens": 900, "completion_tokens": 120}})
@@ -419,6 +422,15 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(plan["error"], "a failed plan must say why: the caller is holding a job id and polling")
         retried = (await self.http.post(f"/v1/jobs/{plan['id']}/retry")).json()
         self.assertIn(retried["status"], ("planning", "queued"), "a plan retries by running the call again")
+
+    async def test_a_rate_limited_planner_hands_the_plan_to_the_next_model_in_the_chain(self):
+        # The chain used to be resolved to one id up front, so a model rate-limited upstream failed the plan
+        # with a 429 while the next candidate was free.
+        self.fake.chat_status_by_model = {"xai/grok-4.6": 429}
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertEqual(plan["status"], "done", plan)
+        self.assertEqual(plan.get("planner_model"), "xai/grok-4.3")
+        self.assertEqual([c["model"] for c in self.fake.chat_requests][-1], "xai/grok-4.3")
 
     async def test_a_plan_with_reference_photos_uses_a_model_that_can_read_them(self):
         # The planner sends references as image parts, so with photos attached this call is multimodal. The
