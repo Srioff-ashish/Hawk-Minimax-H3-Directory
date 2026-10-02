@@ -757,7 +757,7 @@ class AgentApi(AgentHarness):
     async def test_the_engine_order_is_a_setting(self):
         view = (await self.http.get("/v1/images/engines")).json()
         self.assertEqual([r["engine"] for r in view["generate"] if r["enabled"]],
-                         ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
+                         ["qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["engine"] for r in view["edit"] if r["enabled"]], ["qwen21", "krea2", "seedream"])
         self.assertEqual(view["busy"]["mode"], "fall_through", "unchanged until the user says otherwise")
 
@@ -769,7 +769,7 @@ class AgentApi(AgentHarness):
         ready = [r["engine"] for r in options["generate_ladder"] if r["ready"] and r["enabled"]]
         self.assertEqual(ready, ["turbo", "seedream"], "the disabled lite engine is ready but not in play")
         self.assertEqual([r["engine"] for r in options["generate_ladder"] if r["enabled"]],
-                         ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
+                         ["qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual([r["cost_usd"] for r in options["generate_ladder"] if r["engine"] == "turbo"], [0.01])
 
         # put Seedream first and the next image goes straight there, with no local attempt to skip past

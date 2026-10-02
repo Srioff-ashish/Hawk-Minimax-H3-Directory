@@ -73,9 +73,14 @@ class Resolve(unittest.TestCase):
         # and the change is announced rather than silent
         self.assertIn("local", ie.MOVED["z-image"])
 
-    def test_chroma_answers_to_the_ways_it_is_written(self):
+    def test_chroma_was_removed_and_its_names_run_qwen(self):
+        # Chroma1-HD did not run on the pod. A pinned engine, a saved ladder or an agent memory that still
+        # names it must keep working, and say what ran instead.
+        self.assertNotIn("chroma", ie.ENGINES)
+        self.assertNotIn("chroma", ie.IMAGE_FAMILIES, "its LoRAs are no longer offered for images")
         for name in ("chroma", "Chroma1", "chroma1-hd", "CHROMA-HD", "chroma1hd"):
-            self.assertEqual(ie.resolve(name), "chroma", name)
+            self.assertEqual(ie.resolve(name), "qwen21", name)
+            self.assertIn("removed", ie.MOVED[name.lower()], name)
 
     def test_auto_and_nonsense_resolve_to_nothing(self):
         self.assertEqual(ie.resolve("auto"), "")
@@ -209,23 +214,27 @@ class Store(unittest.TestCase):
         self.store = ie.ImageEngineStore(self.dir)
 
     def test_an_unconfigured_pod_puts_the_local_engines_first(self):
-        self.assertEqual(self.store.order("generate"), ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
         self.assertEqual(self.store.order("edit"), ["qwen21", "krea2", "seedream"],
-                         "zimage, chroma and turbo cannot edit")
+                         "zimage and turbo cannot edit")
         order = self.store.order("generate")
         self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
-    def test_chroma_leads_the_generate_order_and_stays_out_of_the_edit_one(self):
-        self.assertEqual(self.store.order("generate")[0], "chroma",
-                         "the shipped preference is Chroma first; Studio can reorder it")
-        self.assertNotIn("chroma", [r["engine"] for r in self.store.settings()["edit"]],
-                         "Chroma takes no reference images, so it has no place in the edit order")
+    def test_a_stored_ladder_that_still_leads_with_chroma_loads_as_qwen(self):
+        # Every pod saved its ladder while Chroma led it; that file has to keep loading, with Qwen in its place
+        # and no engine listed twice.
+        with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
+            json.dump({"generate": [{"engine": "chroma", "enabled": True}, {"engine": "qwen21", "enabled": True},
+                                    {"engine": "krea2", "enabled": True}, {"engine": "seedream", "enabled": True}]}, handle)
+        self.assertEqual(self.store.order("generate")[:2], ["qwen21", "krea2"])
+        self.store.save(pick_takes=False)  # and saving it back from Studio is not refused as a duplicate
+        self.assertNotIn("chroma", [r["engine"] for r in self.store.settings()["generate"]])
 
-    def test_putting_chroma_in_the_edit_order_is_refused_by_name(self):
+    def test_putting_a_text_only_engine_in_the_edit_order_is_refused_by_name(self):
         with self.assertRaises(ie.SettingsError) as caught:
-            self.store.save(edit=[{"engine": "qwen21"}, {"engine": "chroma"}])
-        self.assertIn("Chroma1-HD", str(caught.exception), "say which one, do not silently drop it")
+            self.store.save(edit=[{"engine": "qwen21"}, {"engine": "zimage"}])
+        self.assertIn("Z-Image", str(caught.exception), "say which one, do not silently drop it")
 
     def test_the_qwen21_prompt_enhancer_is_off_until_switched_on(self):
         self.assertFalse(self.store.qwen21_pe(), "it is on trial, so a pod that never set it runs without it")
@@ -305,7 +314,7 @@ class Store(unittest.TestCase):
     def test_a_corrupt_file_falls_back_to_the_defaults(self):
         with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
             handle.write("{ not json")
-        self.assertEqual(self.store.order("generate"), ["chroma", "qwen21", "krea2", "zimage", "turbo", "seedream"])
+        self.assertEqual(self.store.order("generate"), ["qwen21", "krea2", "zimage", "turbo", "seedream"])
 
     def test_a_family_with_no_stored_defaults_falls_back_to_the_shipped_pair(self):
         self.assertIsNone(self.store.defaults("qwen21"), "never set is not the same as empty")

@@ -75,10 +75,6 @@ ENGINES: dict[str, ImageEngine] = {
         id="zimage", label="Z-Image Turbo", where="local", generate=True, edit=False, max_refs=0,
         lora_family="zit", checks=True, tag="zimage",
     ),
-    "chroma": ImageEngine(
-        id="chroma", label="Chroma1-HD", where="local", generate=True, edit=False, max_refs=0,
-        lora_family="chroma", checks=True, tag="chroma",
-    ),
     "turbo": ImageEngine(
         id="turbo", label="z-image/turbo (Atlas)", where="atlas", generate=True, edit=False, max_refs=0,
         lora_family="", checks=False, atlas_model=IMAGE_FAST_MODEL, price_key="z-image", tag="z-image",
@@ -108,8 +104,9 @@ ALIASES = {
     # before the swap still resolve; MOVED says so out loud rather than letting it look like Klein ran.
     "klein": "qwen21", "flux": "qwen21", "flux2": "qwen21", "flux-2": "qwen21",
     "z-image": "zimage", "zimage": "zimage", "zit": "zimage", "z-image-local": "zimage",
-    "chroma": "chroma", "chroma1": "chroma", "chroma1-hd": "chroma", "chroma-hd": "chroma",
-    "chroma1hd": "chroma", "chroma1_hd": "chroma",
+    # Chroma1-HD was removed (it did not run on the pod); its names point at the engine that now leads.
+    "chroma": "qwen21", "chroma1": "qwen21", "chroma1-hd": "qwen21", "chroma-hd": "qwen21",
+    "chroma1hd": "qwen21", "chroma1_hd": "qwen21",
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
@@ -123,6 +120,8 @@ MOVED = {
     "flux": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux' now runs Qwen.",
     "flux2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux2' now runs Qwen.",
     "flux-2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux-2' now runs Qwen.",
+    **{name: f"Chroma1-HD has been removed; engine '{name}' now runs Qwen Image 2.1."
+       for name in ("chroma", "chroma1", "chroma1-hd", "chroma-hd", "chroma1hd", "chroma1_hd")},
 }
 
 #: LoRA families: one ComfyUI models/loras folder holds all of them, and a file from the wrong family
@@ -136,8 +135,8 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "qwen21": ("Qwen Image 2.1", ("qwen21_", "qwen_image_2.1", "qwen-image-2.1", "qwen2.1", "qwen image2.1",
                                   "lenovo_qwen21", "pornmaster_qi2.1", "elusarcas-qwen2-1")),
     "zit": ("Z-Image Turbo", ("zit_",)),
-    # Chroma LoRAs are published under a dozen different names; the "chroma" prefix covers the ones that
-    # carry it and models/loras/chroma covers the rest, the same arrangement Qwen 2.1 needs.
+    # Chroma1-HD is no longer an engine, but its LoRAs may still be on the pod: classifying them keeps them
+    # out of the image lists (not in IMAGE_FAMILIES) and out of renders, where an unknown name is video.
     "chroma": ("Chroma1-HD", ("chroma",)),
 }
 
@@ -158,7 +157,7 @@ BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = {
 }
 
 #: The families that belong to images; everything else is a video LoRA.
-IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit", "chroma"})
+IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
 _TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream"}
@@ -271,10 +270,6 @@ def full_order(stored: list[dict] | None, action: str = "generate") -> list[dict
 #: skipped by the walk, so listing all three local engines here costs a pod that lacks one nothing.
 DEFAULTS = {
     "generate": [
-        # Chroma leads: it is slower than Qwen (26 steps at cfg 3.8) and has an aesthetic of its own, and
-        # that aesthetic is the reason it is here. Reordering this in Studio is a two-second job, so the
-        # shipped order is a starting preference rather than a claim about which engine is better.
-        {"engine": "chroma", "enabled": True},
         {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},

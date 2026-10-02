@@ -1284,8 +1284,8 @@ class HawkService:
 
         Naming a LoRA names the engine in all but words: an engine that does not have the file refuses the
         request outright instead of stepping aside, which is right for a typo and wrong when the file
-        belongs to the rung below. The lead engine having no LoRAs of its own at all -- Chroma, today --
-        would otherwise turn every LoRA request into a refusal.
+        belongs to the rung below. A lead engine with no LoRAs of its own would otherwise turn every LoRA
+        request into a refusal.
 
         Narrowed only when an engine that qualifies is also installed. Otherwise the ladder is left exactly
         as it was, so the walk still reaches an engine that can explain itself -- the alternative is a
@@ -1335,8 +1335,7 @@ class HawkService:
 
     #: Reported as the result's "model". Deliberately not "z-image/..." -- that prefix means the Atlas engine
     #: to _text_only_image_model, and a local id must never be mistaken for it.
-    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo",
-                         "chroma": "chroma/1-hd"}
+    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo"}
 
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""

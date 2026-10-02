@@ -235,84 +235,11 @@ class PromptEnhancerSwitch(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TextGenerate", warnings[0])
 
 
-CHROMA_FILES = {"unet": "chroma1_hd_fp8_scaled.safetensors",
-                "clip": "t5xxl_fp8_e4m3fn.safetensors",
-                "vae": "chroma_vae.safetensors"}
-
-
-class ChromaGraph(unittest.TestCase):
-    """Text to image. Chroma is the odd engine out: real guidance, its own sigmas, a live negative."""
-
-    def build(self, **over) -> dict:
-        args = dict(width=1152, height=1152, n=1, seed=7, loras=[], steps=li.CHROMA_STEPS,
-                    cfg=li.CHROMA_CFG, sampler="euler", prefix="p", **CHROMA_FILES)
-        return li.chroma_graph("a lamp", **{**args, **over})
-
-    def test_the_text_encoder_loads_as_chroma(self):
-        # The quiet failure the other engines have too: a Qwen or lumina2 type here loads and draws
-        # nonsense rather than raising.
-        self.assertEqual(nodes_of(self.build(), "CLIPLoader")[0]["inputs"]["type"], "chroma",
-                         "Chroma needs the chroma encoder type over its T5, not a Qwen one")
-
-    def test_both_prompts_are_encoded_through_the_tokenizer_options(self):
-        graph = self.build()
-        encodes = [n for n in graph.values() if n["class_type"] == "CLIPTextEncode"]
-        self.assertEqual(len(encodes), 2, "Chroma encodes a positive and a real negative")
-        for node in encodes:
-            self.assertEqual(node["inputs"]["clip"], ["tok", 0],
-                             "the padding options must be in the path, not bypassed by reading the loader")
-
-    def test_a_blank_negative_falls_back_to_chromas_own(self):
-        # Every other engine zeroes an empty negative out. At cfg 3.8 that is a visibly worse image,
-        # so the blank case has to land on real text instead.
-        graph = self.build(negative="   ")
-        self.assertEqual(nodes_of(graph, "ConditioningZeroOut"), [],
-                         "Chroma never zeroes its negative out")
-        self.assertEqual(graph["6"]["inputs"]["text"], li.CHROMA_NEGATIVE,
-                         "a blank negative should become the tuned default, not an empty string")
-
-    def test_a_written_negative_replaces_it(self):
-        self.assertEqual(self.build(negative="extra fingers")["6"]["inputs"]["text"], "extra fingers",
-                         "what the caller wrote wins over the default")
-
-    def test_the_sigmas_come_from_the_beta_scheduler_and_not_from_a_named_schedule(self):
-        graph = self.build(steps=26)
-        self.assertEqual(nodes_of(graph, "KSampler"), [],
-                         "Chroma samples through SamplerCustomAdvanced; a KSampler would lose its alpha/beta")
-        beta = nodes_of(graph, "BetaSamplingScheduler")[0]["inputs"]
-        self.assertEqual((beta["steps"], beta["alpha"], beta["beta"]),
-                         (26, li.CHROMA_BETA_ALPHA, li.CHROMA_BETA_BETA))
-        self.assertEqual(nodes_of(graph, "SamplerCustomAdvanced")[0]["inputs"]["sigmas"], ["8", 0],
-                         "the sampler must read those sigmas")
-
-    def test_guidance_reaches_the_guider(self):
-        graph = self.build(cfg=3.8)
-        guider = nodes_of(graph, "CFGGuider")[0]["inputs"]
-        self.assertEqual(guider["cfg"], 3.8)
-        self.assertEqual((guider["positive"], guider["negative"]), (["5", 0], ["6", 0]),
-                         "the negative must reach the guider, or guidance has nothing to push away from")
-
-    def test_the_whole_model_path_runs_through_every_lora(self):
-        graph = self.build(loras=[("a.safetensors", 1.0), ("b.safetensors", 0.5)])
-        self.assertEqual(len(nodes_of(graph, "LoraLoaderModelOnly")), 2)
-        self.assertEqual(graph["4"]["inputs"]["model"], ["l1", 0],
-                         "shift must be applied on top of the LoRAs, not on the bare UNET")
-        # Both the guider and the scheduler read the shifted model: a scheduler reading the unshifted
-        # one would hand out sigmas for a different model than the one being sampled.
-        self.assertEqual(nodes_of(graph, "CFGGuider")[0]["inputs"]["model"], ["4", 0])
-        self.assertEqual(nodes_of(graph, "BetaSamplingScheduler")[0]["inputs"]["model"], ["4", 0])
-
-    def test_the_seed_batch_and_size_reach_their_nodes(self):
-        graph = self.build(seed=99, n=3, width=1024, height=1536)
-        self.assertEqual(nodes_of(graph, "RandomNoise")[0]["inputs"]["noise_seed"], 99)
-        latent = nodes_of(graph, "EmptySD3LatentImage")[0]["inputs"]
-        self.assertEqual((latent["width"], latent["height"], latent["batch_size"]), (1024, 1536, 3))
-
-
 class TheLocalModelPatterns(unittest.TestCase):
     """One ComfyUI folder holds every engine's files, so each engine's pattern has to pick its own."""
 
-    #: What a pod running all four engines has on disk, plus the video encoder that shares text_encoders.
+    #: What a pod running all three engines has on disk, plus the video encoder that shares text_encoders and
+    #: the files a removed engine (Chroma1-HD) left behind, which none of the three may pick up.
     LISTING = {
         "diffusion_models": ["krea2_turbo_nvfp4.safetensors", "qwen_image_2.1_int8_convrot.safetensors",
                              "z_image_turbo_nvfp4.safetensors", "chroma1_hd_fp8_scaled.safetensors",
@@ -329,7 +256,6 @@ class TheLocalModelPatterns(unittest.TestCase):
         "qwen21": ("qwen_image_2.1_int8_convrot.safetensors", "qwen3vl_8b_bf16.safetensors",
                    "qwen_image_2.1_vae_bf16.safetensors"),
         "zimage": ("z_image_turbo_nvfp4.safetensors", "qwen_3_4b_fp4_mixed.safetensors", "z_image_ae.safetensors"),
-        "chroma": ("chroma1_hd_fp8_scaled.safetensors", "t5xxl_fp8_e4m3fn.safetensors", "chroma_vae.safetensors"),
     }
 
     def test_each_engine_finds_its_own_three_files_with_nothing_configured(self):
@@ -340,25 +266,6 @@ class TheLocalModelPatterns(unittest.TestCase):
                               for folder, pattern in (spec["files"][key] for key in ("unet", "clip", "vae")))
                 self.assertEqual(found, expected,
                                  f"{engine} must pick its own files out of the shared folders")
-
-    def test_chroma_does_not_mistake_the_video_encoder_for_its_own(self):
-        # umt5_xxl is Wan's encoder and lives in the same folder; a bare "t5xxl" pattern would take it,
-        # and a wrong encoder loads and draws nonsense rather than raising.
-        pattern = li.LOCAL_MODELS["chroma"]["files"]["clip"][1]
-        self.assertIsNone(pattern.search("umt5_xxl.safetensors"),
-                          "umt5_xxl belongs to video, not to Chroma")
-        self.assertTrue(pattern.search("t5xxl_fp16.safetensors"), "a plain t5xxl is Chroma's")
-
-    def test_the_names_chroma_is_published_under_are_all_recognised(self):
-        # Chroma ships from several repackagers, and the VAE is Flux's, so it arrives under the bare
-        # "ae.safetensors" as often as under a chroma name. None of these should need a setting.
-        spec = li.LOCAL_MODELS["chroma"]["files"]
-        for key, name in (("unet", "Chroma1-HD-fp8_scaled_rev2.safetensors"), ("unet", "Chroma1-HD.safetensors"),
-                          ("clip", "flan-t5-xxl-fp16.safetensors"),
-                          ("clip", "t5xxl_flan_latest_float8_e4m3fn_scaled_stochastic.safetensors"),
-                          ("vae", "ae.safetensors"), ("vae", "chroma_vae.safetensors")):
-            with self.subTest(name=name):
-                self.assertTrue(spec[key][1].search(name), f"{name} should be recognised as Chroma's {key}")
 
     def test_every_wired_engine_has_a_model_entry_and_a_descriptor(self):
         for engine in li.WIRED_ENGINES:
@@ -587,9 +494,9 @@ class WhichEngineCanLoadTheseLoras(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.images.families_for_loras(["snofs"]), {"krea2"})
 
     async def test_an_engine_with_nothing_installed_never_qualifies(self):
-        # Chroma leads the generate ladder and has no catalogue on this pod. Without this the walk would
-        # hand it every LoRA request and every one of them would be refused outright.
-        self.assertNotIn("chroma", await self.images.families_for_loras(["snofs"]))
+        # Z-Image has no catalogue on this pod. Without this the walk would hand it every LoRA request it
+        # reached first, and every one of them would be refused outright.
+        self.assertNotIn("zit", await self.images.families_for_loras(["snofs"]))
 
     async def test_names_from_two_families_leave_no_engine_able(self):
         # Nothing can load both, so the ladder is left alone and the request fails with its own reason.
