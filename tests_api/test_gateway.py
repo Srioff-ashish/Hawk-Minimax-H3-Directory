@@ -385,6 +385,16 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertIn("BRIEF:", json.dumps(call["messages"][-1]["content"]))
         self.assertNotIn("test-key", json.dumps(call["messages"]), "the key belongs in a header, never in the prompt")
 
+    async def test_a_sexual_brief_reaches_the_planner_with_the_position_guide(self):
+        # H3 knows no position names: a plan that says "standing full nelson" and nothing more gets a guess.
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "Standing full nelson, anal"})).json()["id"])
+        brief = json.dumps(self.fake.chat_requests[-1]["messages"][-1]["content"])
+        self.assertIn("POSITION GUIDE", brief, plan)
+        self.assertIn("Standing full nelson", brief)
+        self.assertNotIn("Butterfly", brief, "only the position the brief names, not the whole guide")
+        await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        self.assertNotIn("POSITION GUIDE", json.dumps(self.fake.chat_requests[-1]["messages"][-1]["content"]))
+
     async def test_a_plan_records_what_its_llm_call_cost(self):
         plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
         usage = plan.get("usage") or {}
@@ -666,6 +676,10 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
                 if result.structured_content is not None:
                     return result.structured_content
                 return json.loads(result.content[0].text)
+
+            guide = await call("pose_guide", {"pose": "standing full nelson"})
+            self.assertEqual([p["key"] for p in guide["positions"]], ["full-nelson-standing"])
+            self.assertIn("feet off the floor", guide["positions"][0]["guide"])
 
             link = (await call("upload_page_link"))["upload_url"]
             async with httpx.AsyncClient() as browser:

@@ -12,6 +12,7 @@ import json
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from . import pose_guide as pose_guides
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .schemas import ImageLoraIn, LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
@@ -30,9 +31,10 @@ Script rules: segments separated by a line '---'; optional headers title:, durat
 - Dialogue: every line names who says it, the person's short description plus a stable speaker ID in order of first speaking, then the words in a <d> tag with a language: the woman in the red saree (S1) says, <d>[Hindi] यार, आज का weather एकदम perfect है।</d> Describe each speaker's voice once, on their first line (age, gender, pitch, pace, accent). After each line say what the speaker does next and that their lips close; one speaker per sentence. About 2 spoken words per second of the segment.
 - Hinglish (the default): Hindi words in Devanagari, English words in Latin letters as spelled in English, tag [Hindi]. Never Hindi in Roman letters ("hai", "nahi"): H3 reads those as English and mispronounces them. Keep any words the user wrote for a line exactly as written.
 - Sound: end each segment with one main ambient sound, then an exclusion sentence naming the language: "Only their Hindi lines; no other voices, no background chatter, no other language at any point." A segment without dialogue says "No speech, no voices; all lips stay closed." Fill silent gaps with visible actions. Music N/A unless asked; with dialogue, music very low or N/A.
+Sex scenes (adults only): before writing any explicit prompt -- a video segment or an image -- call pose_guide with the position (no argument lists them all) and write the bodies the way it does. The models know no position names: spell out where each body is, what holds it up, where all four limbs of each and both pairs of hands go, where the faces point, the camera angle that shows the contact, and the motion. One position per segment; vaginal or anal stated plainly. plan_film already gets the guide on its own.
 LoRAs: the server adds its default LoRAs (usually the turbo LoRA) automatically. list_loras shows every LoRA file on the pod, the defaults and the presets. To use one, pass settings.loras=[{"name": "<file name or a unique part of it>", "strength": 0.6}] in render_film (or lora_preset); get_job's loras_applied confirms what was applied. strength 0 switches a default off.
 Music: H3 composes new music in every segment, so a multi-segment film jumps at each cut. For one continuous track, upload it (upload page or add_reference_from_url) and pass settings.music_asset_id; the Director mixes it under the whole film (settings.music_volume_db, scene_volume_db, music_fade_seconds) and turns off each segment's own music. Do not also list the track in references.
-Planner: plan_film takes model, any id from list_options.planner_models (default xai/grok-4.6, falling back to xai/grok-4.3); pick a vision model when references are attached. The call is made by the gateway on whichever provider its settings name, so an id from another provider is matched by name where it can be.
+Planner: plan_film takes model, any id from list_options.planner_models (default: the server's planner chain, list_options.model_chains.planner); pick a vision model when references are attached. The call is made by the gateway on whichever provider its settings name, so an id from another provider is matched by name where it can be.
 Models: list_options shows diffusion_models (ref2va base models), text_encoders and the defaults. settings.unet_name / settings.clip_name pick others for one render, by file name or a unique part such as "bf16". bf16 gives the best quality but is slowest; int8 / fp8 / nvfp4 are faster. Omit them to use the defaults.
 Renders take many minutes. Never wait inside a tool call; poll get_job instead.
 """ + """
@@ -208,6 +210,15 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
     async def list_loras() -> dict:
         options = await run(service.options())
         return {key: options[key] for key in ("available_loras", "default_loras", "lora_presets")}
+
+    @mcp.tool(description=(
+        "Sex-position guide for explicit scenes between adults: for a position (e.g. 'standing full nelson', "
+        "'cowgirl', 'doggy'), how to write it so a video or image model draws it -- each body's placement and "
+        "support, hands, faces, the camera angle that shows it, the motion, what models usually get wrong, and a "
+        "ready prompt sentence -- plus the rules every position shares. No argument lists every position. Call it "
+        "before writing any explicit prompt."))
+    async def pose_guide(pose: str | None = None) -> dict:
+        return pose_guides.lookup(pose)
 
     @mcp.tool(description="Start an LLM plan: turns a brief plus references into a segment script. Returns a job; poll get_job until done, then read its script.")
     async def plan_film(

@@ -29,6 +29,7 @@ from hawk_h3.script import ScriptError, build_jobs, parse_script, reference_coun
 from . import graph as graphs
 from . import image_engines
 from . import models_llm
+from . import pose_guide
 from .atlas import AtlasClient, AtlasError, routing_block as atlas_routing
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
@@ -1629,6 +1630,11 @@ class HawkService:
             f"- {reference_counts_line(available)}",
             "- Return only the JSON object described in your instructions.",
         ])
+        # A sexual brief gets the position guide: the planner otherwise writes "they have sex in the full nelson"
+        # and H3, which knows no position names, draws whatever it guesses.
+        note = pose_guide.planner_note(options.story)
+        if note:
+            text = f"{text}\n\n{note}"
         return text, images
 
     async def _video_frame(self, asset: dict, seconds: float, width: int) -> bytes | None:
