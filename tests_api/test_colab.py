@@ -170,6 +170,25 @@ class Detection(unittest.TestCase):
             self.assertEqual(quiet.getvalue(), "",
                              "a name that is on disk is ordinary and must print nothing at all")
 
+    def test_encoders_kept_in_subfolders_are_named_as_comfyui_lists_them(self):
+        """Encoders sorted into text_encoders/h3/, krea2/, qwen/... are "h3/qwen3vl_..." to ComfyUI's loader,
+        which refuses the bare file name. A label or explicit name must come back as that subfolder path."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as comfy:
+            files = dict(self.FILES, text_encoders=["h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                                                    "krea2/qwen3vl_4b_fp8_scaled.safetensors"])
+            for folder, names in files.items():
+                for name in names:
+                    path = os.path.join(comfy, "models", folder, name)
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    open(path, "wb").close()
+            want = "h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
+            self.assertEqual(hawk_colab.resolve_models(comfy)["clip_name"], want)
+            self.assertEqual(hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB)")["clip_name"], want)
+            self.assertEqual(hawk_colab.resolve_models(
+                comfy, clip_name="qwen3vl_32b_minimax_h3_int8_convrot.safetensors")["clip_name"], want)
+
     def test_sage_gives_way_to_an_attention_flag_the_caller_chose(self):
         """ComfyUI's --use-*-attention flags are one mutually exclusive group.
 

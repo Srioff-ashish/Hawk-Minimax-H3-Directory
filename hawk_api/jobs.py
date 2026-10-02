@@ -568,10 +568,24 @@ class HawkService:
         image_files = await self.local_images.lora_basenames()
         return [f for f in files if os.path.basename(f).lower() not in image_files]
 
+    async def listed_name(self, folder: str, name: str) -> str:
+        """`name` as ComfyUI lists it. A configured bare file name becomes its subfolder path -- an encoder kept
+        in text_encoders/h3/ is "h3/qwen3vl_..." to the loader, which refuses the bare name as "not in list"."""
+        if not name or "/" in name:
+            return name
+        for refresh in (False, True):  # a file may have been moved since the cached listing
+            files = await self.available_models(folder, refresh=refresh)
+            if name in files:
+                return name
+            match = next((f for f in files if f.rsplit("/", 1)[-1] == name), None)
+            if match:
+                return match
+        return name
+
     async def choose_model(self, requested: str | None, folder: str, default: str) -> str:
         """A per-render base model or text encoder, matched like LoRA names."""
         if not requested or not requested.strip():
-            return default
+            return await self.listed_name(folder, default)
         _, label = MODEL_FAMILIES[folder]
         for refresh in (False, True):  # a file may have been added since the cached listing
             files = await self.available_models(folder, refresh=refresh)
@@ -1824,6 +1838,8 @@ class HawkService:
             attention=settings.attention or defaults.attention,
             unet_name=await self.choose_model(settings.unet_name, "diffusion_models", defaults.unet_name),
             clip_name=await self.choose_model(settings.clip_name, "text_encoders", defaults.clip_name),
+            video_vae=await self.listed_name("vae", defaults.video_vae),
+            audio_vae=await self.listed_name("vae", defaults.audio_vae),
         )
         loras, warnings = await self.resolve_loras(settings)
         loras, baked = drop_baked_turbo(loras, models.unet_name)

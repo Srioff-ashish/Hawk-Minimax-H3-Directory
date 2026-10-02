@@ -324,8 +324,9 @@ def resolve_models(
             continue
         wanted = os.path.basename(table[label][0])
         folder = "diffusion_models" if key == "unet_name" else "text_encoders"
-        if any(os.path.basename(name) == wanted for name in files[folder]):
-            chosen[key] = wanted
+        listed = next((name for name in files[folder] if os.path.basename(name) == wanted), None)
+        if listed:
+            chosen[key] = listed  # as ComfyUI names it: "h3/qwen3vl_..." when it sits in a subfolder
         elif chosen[key]:
             print(f"Note: {wanted} is not in models/{folder} (run the download cell for {label!r} to get it). "
                   f"Using {os.path.basename(chosen[key])} instead.")
@@ -342,7 +343,10 @@ def resolve_models(
         if not value:
             continue
         folder = folder_for.get(key, "loras")
-        if not any(os.path.basename(name) == os.path.basename(value) for name in files[folder]):
+        listed = next((name for name in files[folder] if os.path.basename(name) == os.path.basename(value)), None)
+        if listed and "/" not in value:
+            value = listed  # a bare name for a file kept in a subfolder: ComfyUI only knows the subfolder path
+        if not listed:
             there = ", ".join(sorted(os.path.basename(name) for name in files[folder])) or "(empty)"
             print(f"Note: {os.path.basename(value)} is not in models/{folder}; using it anyway. If ComfyUI "
                   f"cannot reach it either, every render fails at the loader with \"Value not in list\".\n"
