@@ -287,6 +287,7 @@ PROMPT_RECORD_LIMIT = 4000
 class Store:
     _SCHEMA = """
     CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS asset_history (id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, prompt_id TEXT,
         data TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
@@ -337,10 +338,49 @@ class Store:
             rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC").fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    #: What a deleted asset leaves behind: enough to say where it came from, nothing to show.
+    HISTORY_FIELDS = ("id", "filename", "kind", "sha256", "created_at", "source")
+
     def delete_asset(self, asset_id: str) -> None:
+        """Delete an asset, keeping its history. Images made from it name it as a reference, and a reference
+        with no record counts as an upload -- so deleting one generated image used to put every image made from
+        it under the upload rules for good."""
         with self._lock:
+            row = self._db.execute("SELECT data FROM assets WHERE id = ?", (asset_id,)).fetchone()
+            if row:
+                data = json.loads(row[0])
+                kept = {key: data.get(key) for key in self.HISTORY_FIELDS if key in data}
+                self._db.execute("INSERT OR REPLACE INTO asset_history VALUES (?, ?, ?)",
+                                 (asset_id, json.dumps(kept), time.time()))
             self._db.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
             self._db.commit()
+
+    def get_history(self, asset_id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute("SELECT data, deleted_at FROM asset_history WHERE id = ?", (asset_id,)).fetchone()
+        return dict(json.loads(row[0]), deleted_at=row[1]) if row else None
+
+    def put_history(self, record: dict) -> None:
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO asset_history VALUES (?, ?, ?)",
+                             (record["id"], json.dumps(record), time.time()))
+            self._db.commit()
+
+    def drop_history(self, asset_id: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM asset_history WHERE id = ?", (asset_id,))
+            self._db.commit()
+
+    def lineage(self, asset_id: str) -> dict | None:
+        """An asset for the purpose of tracing where an image came from: live, or deleted with its history."""
+        return self.get_asset(asset_id) or self.get_history(asset_id)
+
+    def referenced_by(self, asset_id: str) -> list[str]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id FROM assets WHERE EXISTS (SELECT 1 FROM json_each(data, '$.source.references') "
+                "WHERE json_each.value = ?)", (asset_id,)).fetchall()
+        return [row[0] for row in rows]
 
     def save_job(self, job: dict) -> None:
         job["updated_at"] = time.time()
@@ -846,16 +886,17 @@ class HawkService:
             source = current.get("source") or {}
             chain.append({"id": current["id"], "filename": current.get("filename", ""),
                           "type": source.get("type", ""), "generator": source.get("generator", ""),
-                          "corrected": bool(source.get("corrected_at"))})
+                          "corrected": bool(source.get("corrected_at")),
+                          "deleted": "deleted_at" in current, "restored": bool(source.get("restored_at"))})
             for ref_id in source.get("references") or []:
-                ref = self.store.get_asset(str(ref_id))
+                ref = self.store.lineage(str(ref_id))
                 if ref is None:
                     chain.append({"id": str(ref_id), "filename": "", "type": "missing", "generator": "",
                                   "corrected": False})
                 else:
                     queue.append(ref)
         return {"id": asset["id"],
-                "from_upload": local_images.from_upload(asset, self.store.get_asset),
+                "from_upload": local_images.from_upload(asset, self.store.lineage),
                 # what the refusal is actually pointing at, which the message never used to name
                 "upload_roots": [row["id"] for row in chain if row["type"] in ("upload", "missing")],
                 "corrected_from": ((asset.get("source") or {}).get("corrected_from") or None),
@@ -886,7 +927,7 @@ class HawkService:
             raise RequestError(f"Unknown generated_from {source_id!r}; it must be an asset in this library.")
         if origin["id"] == asset["id"]:
             raise RequestError("An asset cannot be a copy of itself.")
-        if local_images.from_upload(origin, self.store.get_asset):
+        if local_images.from_upload(origin, self.store.lineage):
             # Otherwise the correction launders the very thing it is meant to undo: pointing at an asset that
             # is itself an upload, or descends from one, only moves the upload one step further away.
             raise RequestError(
@@ -910,7 +951,7 @@ class HawkService:
         for ref_id in (asset.get("source") or {}).get("references") or []:
             if str(ref_id) == ancestor_id:
                 return True
-            ref = self.store.get_asset(str(ref_id))
+            ref = self.store.lineage(str(ref_id))
             if ref is not None and self._descends_from(ref, ancestor_id, depth + 1):
                 return True
         return False
@@ -936,6 +977,53 @@ class HawkService:
             for name in os.listdir(thumbs):
                 if name.startswith(f"{asset_id}_"):
                     os.remove(os.path.join(thumbs, name))
+
+    def restore_record(self, asset_id: str, undo: bool = False) -> dict:
+        """Rebuild the history of a generated image that was deleted before deletes kept one.
+
+        Its descendants still name it, and with no record it counts as an upload. It is restored only on the
+        evidence this server itself left: an asset that still references it, and its copy in the Drive image
+        export, which only ever receives images generated here and names them by id. What it was made from is
+        not known, so the record says so; this is a content-guardrail override and leaves a trail like
+        generated_from does. ``undo`` removes a record restored this way.
+        """
+        asset_id = str(asset_id or "").strip()
+        if undo:
+            record = self.store.get_history(asset_id)
+            if not record or not (record.get("source") or {}).get("restored_at"):
+                raise RequestError(f"{asset_id} has no restored record to undo.")
+            self.store.drop_history(asset_id)
+            log.warning("hawk_api: restored record of deleted asset %s removed", asset_id)
+            return {"id": asset_id, "restored": False}
+        if self.store.get_asset(asset_id) is not None:
+            raise RequestError(f"{asset_id} is still in the library; nothing to restore.")
+        if self.store.get_history(asset_id) is not None:
+            raise RequestError(f"{asset_id} already has a record.")
+        children = self.store.referenced_by(asset_id)
+        if not children:
+            raise RequestError(f"No asset in the library was made from {asset_id}, so there is nothing to restore.")
+        exporter = self.drive_exporter
+        if exporter is None or not exporter.browser.available:
+            raise Unavailable("Google Drive is not mounted, and the record is restored from the Drive image export.")
+        root = os.path.join(exporter.browser.root, exporter.settings()["image_folder"])
+        found = sorted(glob.glob(os.path.join(root, "*", f"*_{asset_id[:8]}.*")))
+        if len(found) != 1:
+            raise RequestError(f"Expected one copy of {asset_id} in the Drive image export, found {len(found)}.")
+        path = found[0]
+        with open(path, "rb") as handle:
+            digest = _hash_file(handle)
+        relative = exporter.browser.relative(path)
+        record = {"id": asset_id, "filename": os.path.basename(path), "kind": "image", "sha256": digest,
+                  "created_at": os.path.getmtime(path),
+                  "source": {"type": "generated", "engine": "", "generator": "", "references": [],
+                             "restored_at": time.time(), "restored_from": relative,
+                             "note": "Deleted before deletes kept history; rebuilt from this server's own Drive "
+                                     "export. What it was made from is unknown."}}
+        self.store.put_history(record)
+        log.warning("hawk_api: record of deleted asset %s restored as generated from Drive export %s "
+                    "(referenced by %s) -- upload rules no longer apply to images made from it",
+                    asset_id, relative, ", ".join(children))
+        return {"id": asset_id, "restored": True, "from": relative, "referenced_by": children}
 
     async def add_asset_from_url(self, url: str, filename: str | None = None) -> dict:
         if not re.match(r"^https?://", url):

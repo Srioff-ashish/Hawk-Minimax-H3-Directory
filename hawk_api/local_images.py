@@ -975,10 +975,10 @@ class LocalImageEngine:
         check_prompt(prompt)
         status = await self.status("qwen21")
         await self._ready(status, "qwen21", "edit", wait_seconds=wait_seconds)
-        photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
+        photo = any(from_upload(asset, self.service.store.lineage) for asset in sources)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
                                                           adult_default=self.adult_default and not photo, family="qwen21")
-        check_edit(prompt, sources, used, self.service.store.get_asset)
+        check_edit(prompt, sources, used, self.service.store.lineage)
         text = self._with_triggers(prompt, used)
         width, height = parse_size(size) if size else (None, None)
         files = status["files"]
@@ -1025,10 +1025,10 @@ class LocalImageEngine:
         # Editing a picture made here means a fictional character, so the go-to adult pair applies as it does to
         # generation. Anything tracing back to an uploaded photo may be a real person and never gets them; check_edit
         # refuses them there anyway, and would fail every ordinary photo edit if they were attached blindly.
-        photo = any(from_upload(asset, self.service.store.get_asset) for asset in sources)
+        photo = any(from_upload(asset, self.service.store.lineage) for asset in sources)
         chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
                                                           adult_default=self.adult_default and not photo, family="krea2")
-        check_edit(prompt, sources, used, self.service.store.get_asset)
+        check_edit(prompt, sources, used, self.service.store.lineage)
         if size:
             width, height = parse_size(size)
         else:

@@ -417,7 +417,8 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_plan_that_the_provider_refuses_fails_the_job_rather_than_hanging(self):
         self.fake.chat_status = 503
-        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        # Every model in the chain is tried, each with its own backoff, hence the longer wait.
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"], timeout=60)
         self.assertEqual(plan["status"], "failed", plan)
         self.assertTrue(plan["error"], "a failed plan must say why: the caller is holding a job id and polling")
         retried = (await self.http.post(f"/v1/jobs/{plan['id']}/retry")).json()
@@ -461,7 +462,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         # to actually parse it was the render, minutes later.
         self.fake.chat_finish_reason = "length"
         self.fake.chat_reply = PLAN_SCRIPT[: len(PLAN_SCRIPT) // 2]
-        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"])
+        plan = await self.wait((await self.http.post("/v1/plans", json={"story": "A walk"})).json()["id"], timeout=60)
 
         self.assertEqual(plan["status"], "failed", "a plan that cannot be parsed is not a finished plan")
         self.assertFalse(plan.get("script"), "a half-written script must not be offered as the plan")

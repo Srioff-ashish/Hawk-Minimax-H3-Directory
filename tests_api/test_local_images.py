@@ -435,6 +435,8 @@ class EditService(StubService):
     def get_asset(self, asset_id):
         return self._assets.get(asset_id)
 
+    lineage = get_asset
+
 
 class EditGuardrails(unittest.IsolatedAsyncioTestCase):
     """check_edit on the Qwen 2.1 edit path. It moved from edit_klein to edit_qwen21 with the engine swap,
@@ -556,6 +558,7 @@ class CorrectingWhereAFileCameFrom(unittest.IsolatedAsyncioTestCase):
         })()
         service.store = type("Store", (), {
             "get_asset": staticmethod(lambda i: self.assets.get(i)),
+            "lineage": staticmethod(lambda i: self.assets.get(i)),
             "add_asset": staticmethod(lambda a: self.assets.__setitem__(a["id"], a)),
         })()
         self.service = service
@@ -635,6 +638,86 @@ class CorrectingWhereAFileCameFrom(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(RequestError):
             self.service.update_asset("made", generated_from="")
+
+
+class DeletingKeepsWhereImagesCameFrom(unittest.TestCase):
+    """Deleting an image used to delete its history too. Images made from it still name it, and a reference
+    with no record counts as an upload, so one delete put a whole chain of generated images under the upload
+    rules for good."""
+
+    def setUp(self):
+        import tempfile
+
+        from hawk_api.jobs import HawkService, Store
+        from hawk_api.library import DriveBrowser
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(os.path.join(self.tmp.name, "jobs.sqlite3"))
+        for asset in ({"id": "root", "kind": "image", "filename": "a.png", "path": "x", "created_at": 1.0,
+                       "sha256": "aa", "source": {"type": "generated", "engine": "zimage"}},
+                      {"id": "child", "kind": "image", "filename": "b.png", "path": "x", "created_at": 2.0,
+                       "source": {"type": "generated", "engine": "qwen21", "references": ["root"]}}):
+            self.store.add_asset(asset)
+        drive = os.path.join(self.tmp.name, "drive")
+        os.makedirs(os.path.join(drive, "Hawk H3", "Images", "2026-10-01"))
+        exporter = type("Exporter", (), {"browser": DriveBrowser(drive),
+                                         "settings": staticmethod(lambda: {"image_folder": "Hawk H3/Images"})})()
+        self.drive = drive
+        self.service = type("Service", (), {
+            "provenance": HawkService.provenance, "restore_record": HawkService.restore_record,
+            "store": self.store, "drive_exporter": exporter})()
+
+    def tearDown(self):
+        self.store._db.close()
+        self.tmp.cleanup()
+
+    def test_a_deleted_generated_image_keeps_its_children_generated(self):
+        self.store.delete_asset("root")
+        self.assertIsNone(self.store.get_asset("root"), "gone from the library")
+        self.assertFalse(li.from_upload(self.store.get_asset("child"), self.store.lineage))
+        report = self.service.provenance("child")
+        self.assertFalse(report["from_upload"])
+        self.assertTrue(report["chain"][1]["deleted"])
+
+    def test_a_deleted_upload_still_counts_as_one(self):
+        self.store.add_asset({"id": "photo", "kind": "image", "path": "x", "created_at": 3.0, "source": {"type": "upload"}})
+        self.store.add_asset({"id": "edit", "kind": "image", "path": "x", "created_at": 4.0,
+                              "source": {"type": "generated", "references": ["photo"]}})
+        self.store.delete_asset("photo")
+        self.assertTrue(li.from_upload(self.store.get_asset("edit"), self.store.lineage))
+
+    def lose_root(self):
+        # The old delete: no history kept.
+        with self.store._lock:
+            self.store._db.execute("DELETE FROM assets WHERE id = 'root'")
+            self.store._db.commit()
+
+    def test_a_lost_record_is_restored_from_the_drive_export(self):
+        from hawk_api.jobs import RequestError
+
+        self.lose_root()
+        self.assertTrue(li.from_upload(self.store.get_asset("child"), self.store.lineage))
+        with self.assertRaises(RequestError, msg="no Drive copy, no restore"):
+            self.service.restore_record("root")
+        with open(os.path.join(self.drive, "Hawk H3", "Images", "2026-10-01", "gen_a_photo_1_root.png"), "wb") as f:
+            f.write(b"pixels")
+        result = self.service.restore_record("root")
+        self.assertEqual(result["referenced_by"], ["child"])
+        self.assertFalse(li.from_upload(self.store.get_asset("child"), self.store.lineage))
+        self.assertTrue(self.service.provenance("child")["chain"][1]["restored"], "the override stays visible")
+        self.service.restore_record("root", undo=True)
+        self.assertTrue(li.from_upload(self.store.get_asset("child"), self.store.lineage), "undone")
+
+    def test_only_a_referenced_missing_image_can_be_restored(self):
+        from hawk_api.jobs import RequestError
+
+        with self.assertRaises(RequestError):
+            self.service.restore_record("root")  # still in the library
+        with self.assertRaises(RequestError):
+            self.service.restore_record("nobody_made_anything_from_this")
+        self.store.delete_asset("root")
+        with self.assertRaises(RequestError):
+            self.service.restore_record("root")  # deleted with its history: nothing lost
 
 
 class MirroredConstants(unittest.TestCase):

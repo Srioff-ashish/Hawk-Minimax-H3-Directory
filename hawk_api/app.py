@@ -215,6 +215,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         which ancestors make it one, and whether its origin has been corrected."""
         return service.provenance(asset_id)
 
+    @app.post("/v1/assets/{asset_id}/restore-record", tags=["assets"])
+    async def restore_asset_record(asset_id: str, undo: bool = False):
+        """Rebuild the history of a generated image deleted before deletes kept one, from its copy in the
+        Drive image export, so images made from it stop counting as uploads. ?undo=true removes it again."""
+        return service.restore_record(asset_id, undo=undo)
+
     @app.delete("/v1/assets/{asset_id}", tags=["assets"])
     async def delete_asset(asset_id: str):
         service.delete_asset(asset_id)
