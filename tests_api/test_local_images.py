@@ -238,17 +238,16 @@ class PromptEnhancerSwitch(unittest.IsolatedAsyncioTestCase):
 class TheLocalModelPatterns(unittest.TestCase):
     """One ComfyUI folder holds every engine's files, so each engine's pattern has to pick its own."""
 
-    #: What a pod running all three engines has on disk, plus the video encoder that shares text_encoders and
-    #: the files a removed engine (Chroma1-HD) left behind, which none of the three may pick up.
+    #: What a pod running all three engines has on disk, plus the video files that share these folders.
     LISTING = {
         "diffusion_models": ["krea2_turbo_nvfp4.safetensors", "qwen_image_2.1_int8_convrot.safetensors",
-                             "z_image_turbo_nvfp4.safetensors", "chroma1_hd_fp8_scaled.safetensors",
+                             "z_image_turbo_nvfp4.safetensors",
                              "minimax_h3_ref2va_pruned_int8_convrot.safetensors"],
         "text_encoders": ["qwen3vl_4b_fp8_scaled.safetensors", "qwen3vl_8b_bf16.safetensors",
                           "qwen_3_4b_fp4_mixed.safetensors", "umt5_xxl.safetensors",
-                          "qwen3vl_32b_minimax_h3_int8_convrot.safetensors", "t5xxl_fp8_e4m3fn.safetensors"],
+                          "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"],
         "vae": ["qwen_image_vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors",
-                "z_image_ae.safetensors", "chroma_vae.safetensors",
+                "z_image_ae.safetensors",
                 "minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"],
     }
     EXPECTED = {

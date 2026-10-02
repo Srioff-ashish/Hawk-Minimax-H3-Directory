@@ -104,9 +104,6 @@ ALIASES = {
     # before the swap still resolve; MOVED says so out loud rather than letting it look like Klein ran.
     "klein": "qwen21", "flux": "qwen21", "flux2": "qwen21", "flux-2": "qwen21",
     "z-image": "zimage", "zimage": "zimage", "zit": "zimage", "z-image-local": "zimage",
-    # Chroma1-HD was removed (it did not run on the pod); its names point at the engine that now leads.
-    "chroma": "qwen21", "chroma1": "qwen21", "chroma1-hd": "qwen21", "chroma-hd": "qwen21",
-    "chroma1hd": "qwen21", "chroma1_hd": "qwen21",
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
@@ -120,8 +117,6 @@ MOVED = {
     "flux": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux' now runs Qwen.",
     "flux2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux2' now runs Qwen.",
     "flux-2": "FLUX.2 Klein has been replaced by Qwen Image 2.1; engine 'flux-2' now runs Qwen.",
-    **{name: f"Chroma1-HD has been removed; engine '{name}' now runs Qwen Image 2.1."
-       for name in ("chroma", "chroma1", "chroma1-hd", "chroma-hd", "chroma1hd", "chroma1_hd")},
 }
 
 #: LoRA families: one ComfyUI models/loras folder holds all of them, and a file from the wrong family
@@ -135,9 +130,6 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "qwen21": ("Qwen Image 2.1", ("qwen21_", "qwen_image_2.1", "qwen-image-2.1", "qwen2.1", "qwen image2.1",
                                   "lenovo_qwen21", "pornmaster_qi2.1", "elusarcas-qwen2-1")),
     "zit": ("Z-Image Turbo", ("zit_",)),
-    # Chroma1-HD is no longer an engine, but its LoRAs may still be on the pod: classifying them keeps them
-    # out of the image lists (not in IMAGE_FAMILIES) and out of renders, where an unknown name is video.
-    "chroma": ("Chroma1-HD", ("chroma",)),
 }
 
 #: Mirrors local_images.DEFAULT_ADULT_LORAS so view() can show what a family falls back to. Kept here as
@@ -181,7 +173,6 @@ FAMILY_FOLDERS: dict[str, tuple[str, ...]] = {
     # "qwen2.1角色卡-4.safetensors" -- gets classified without being renamed first.
     "qwen21": ("qwen-image-2.1", "qwen_image_2.1", "qwenimage21", "qwen2.1", "qwen"),
     "zit": ("zimage", "z_image", "z-image"),
-    "chroma": ("chroma1", "chroma1-hd", "chroma1_hd", "chroma-hd", "chroma1hd"),
 }
 
 

@@ -112,7 +112,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         "Generate or edit images. engine 'auto' (default) tries local Qwen Image 2.1 on this GPU (free; used when "
         "installed and ComfyUI is idle), then local Krea 2, then Atlas z-image/turbo (about $0.01), then Seedream "
         "v5.0 Pro; with reference images it edits with Qwen Image 2.1, then Krea 2, then Seedream. engine 'qwen21', "
-        "'krea2', 'zimage', 'local', 'turbo', 'seedream' or 'seedream-lite' picks one ('klein' and 'chroma' still "
+        "'krea2', 'zimage', 'local', 'turbo', 'seedream' or 'seedream-lite' picks one ('klein' still "
         "resolve, to qwen21). Seedream Pro costs about $0.036 an image up to 2.36 MP and $0.072 above (e.g. "
         "2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
         "$0.032, a little below Pro in quality. Results carry cost_usd for Atlas images. The result says which engine "

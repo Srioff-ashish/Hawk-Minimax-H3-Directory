@@ -124,7 +124,7 @@ class ImageRequest(BaseModel):
     engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then "
                                "Krea 2, then Z-Image, then z-image/turbo, then Seedream; with references it starts at Qwen "
                                "Image 2.1), or one of qwen21, krea2, zimage, local, turbo, seedream, seedream-lite. "
-                               "'klein' and 'chroma' still resolve, to qwen21.")
+                               "'klein' still resolves, to qwen21.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "
                                      "engine's family (file name or a unique part, optional strength). Qwen Image 2.1 "
                                      "always adds its repair LoRA on top, whatever is named here.")

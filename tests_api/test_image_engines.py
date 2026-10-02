@@ -73,15 +73,6 @@ class Resolve(unittest.TestCase):
         # and the change is announced rather than silent
         self.assertIn("local", ie.MOVED["z-image"])
 
-    def test_chroma_was_removed_and_its_names_run_qwen(self):
-        # Chroma1-HD did not run on the pod. A pinned engine, a saved ladder or an agent memory that still
-        # names it must keep working, and say what ran instead.
-        self.assertNotIn("chroma", ie.ENGINES)
-        self.assertNotIn("chroma", ie.IMAGE_FAMILIES, "its LoRAs are no longer offered for images")
-        for name in ("chroma", "Chroma1", "chroma1-hd", "CHROMA-HD", "chroma1hd"):
-            self.assertEqual(ie.resolve(name), "qwen21", name)
-            self.assertIn("removed", ie.MOVED[name.lower()], name)
-
     def test_auto_and_nonsense_resolve_to_nothing(self):
         self.assertEqual(ie.resolve("auto"), "")
         self.assertEqual(ie.resolve(""), "")
@@ -221,16 +212,6 @@ class Store(unittest.TestCase):
         self.assertLess(order.index("turbo"), order.index("seedream"), "the cheaper paid engine first")
         self.assertEqual(self.store.wait_seconds(), 0.0, "falling through is still the default")
 
-    def test_a_stored_ladder_that_still_leads_with_chroma_loads_as_qwen(self):
-        # Every pod saved its ladder while Chroma led it; that file has to keep loading, with Qwen in its place
-        # and no engine listed twice.
-        with open(os.path.join(self.dir, "image_engines.json"), "w") as handle:
-            json.dump({"generate": [{"engine": "chroma", "enabled": True}, {"engine": "qwen21", "enabled": True},
-                                    {"engine": "krea2", "enabled": True}, {"engine": "seedream", "enabled": True}]}, handle)
-        self.assertEqual(self.store.order("generate")[:2], ["qwen21", "krea2"])
-        self.store.save(pick_takes=False)  # and saving it back from Studio is not refused as a duplicate
-        self.assertNotIn("chroma", [r["engine"] for r in self.store.settings()["generate"]])
-
     def test_putting_a_text_only_engine_in_the_edit_order_is_refused_by_name(self):
         with self.assertRaises(ie.SettingsError) as caught:
             self.store.save(edit=[{"engine": "qwen21"}, {"engine": "zimage"}])
@@ -368,12 +349,9 @@ class FamilyFolders(unittest.TestCase):
         self.assertEqual(ie.family_of("zit/Hands_v2.1.safetensors"), "zit")
         self.assertEqual(ie.family_of("Krea2/Identity_Edit.safetensors"), "krea2")
         self.assertEqual(ie.family_of("h3/Bouncing_REF2VA.safetensors"), "h3")
-        # Without this the file would fall through to "h3" and show up in the video LoRA list
-        self.assertEqual(ie.family_of("chroma/Analog_Film.safetensors"), "chroma")
 
     def test_an_alias_folder_counts_too(self):
         self.assertEqual(ie.family_of("z-image/whatever.safetensors"), "zit")
-        self.assertEqual(ie.family_of("chroma1-hd/Detail_Booster.safetensors"), "chroma")
         self.assertEqual(ie.family_of("qwen-image-2.1/whatever.safetensors"), "qwen21")
 
     def test_the_file_name_still_beats_the_folder(self):
