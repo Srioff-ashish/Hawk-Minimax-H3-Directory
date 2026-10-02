@@ -36,7 +36,7 @@ class TwoModelsOneChat(AgentHarness):
     async def test_the_characters_speak_with_the_prose_model_and_the_director_keeps_its_own(self):
         chat = (await self.http.post("/v1/agent/sessions", json={
             "cast": [{"name": "Maya", "persona": "stylist"}, {"name": "Riya", "persona": "director"}],
-            "prose_model": PROSE})).json()
+            "prose_model": PROSE, "model": "xai/grok-4.6, xai/grok-4.3"})).json()
         self.assertEqual(chat["prose_model"], PROSE, "the chat should remember the model its characters speak with")
 
         def reply(body):
@@ -79,8 +79,9 @@ class TwoModelsOneChat(AgentHarness):
 
         self.atlas.reply = reply
         await self.talk_once(chat["id"])
-        self.assertEqual({c["model"] for c in self.character_calls()}, {"xai/grok-4.6"},
-                         "with nothing set anywhere the characters use what they always used")
+        self.assertEqual({c["model"] for c in self.character_calls()}, {"deepseek-ai/deepseek-v4.1-flash"},
+                         "with nothing set anywhere the characters use the pod's prose chain: no v4-pro on this "
+                         "provider, so its flash fallback")
 
     async def test_a_prose_model_that_writes_no_json_still_says_something(self):
         # The risk the whole split creates: a model chosen for its voice is often worse at formatting, and a
@@ -312,7 +313,8 @@ class ADirectorThatKeepsGoing(AgentHarness):
         # the director makes by far the most calls, and fatal for any free-tier model, which is rate
         # limited by definition.
         chat = (await self.http.post("/v1/agent/sessions", json={
-            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3"})).json()
+            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3",
+            "prose_model": "xai/grok-4.6, xai/grok-4.3"})).json()
         self.atlas.fail_models = {"xai/grok-4.6"}
 
         await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "hello"})
@@ -330,8 +332,10 @@ class ADirectorThatKeepsGoing(AgentHarness):
         # The fallback must not turn a genuinely dead provider into a silent no-op: with every id refused
         # there is nothing to do but say so, which is what the chat did for a single failure before.
         chat = (await self.http.post("/v1/agent/sessions", json={
-            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3"})).json()
-        self.atlas.fail_models = {"xai/grok-4.6", "xai/grok-4.3"}
+            "persona": "an ad-film director", "model": "xai/grok-4.6, xai/grok-4.3",
+            "prose_model": "xai/grok-4.6, xai/grok-4.3"})).json()
+        # flash too: it is every chain's built-in fallback now, so it is the last id left to refuse
+        self.atlas.fail_models = {"xai/grok-4.6", "xai/grok-4.3", "deepseek-ai/deepseek-v4.1-flash"}
 
         await self.http.post(f"/v1/agent/sessions/{chat['id']}/messages", json={"text": "hello"})
         view = await self.settle(chat["id"])

@@ -1641,10 +1641,12 @@ class AgentService:
 
         # The characters speak with the prose model and the director keeps its own. A model chosen for voice is
         # often worse at formatting, so the last attempt moves to the director's model, which has to be good at
-        # JSON to drive the tools at all.
+        # JSON to drive the tools at all. When both roles resolve to the same model -- deepseek-v4-pro on a pod
+        # with the shipped chains -- that last attempt takes the director chain's next distinct id instead, or a
+        # model that just failed twice would simply be asked a third time.
         prose = await self.model_for("prose", session)
-        director = await self.model_for("director", session)
-        attempts = [prose, prose, director if director != prose else prose]
+        director = next((m for m in await self.models_for("director", session) if m != prose), prose)
+        attempts = [prose, prose, director]
         text, call, failure = "", None, None
         for model in attempts:
             try:

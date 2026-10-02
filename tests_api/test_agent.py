@@ -277,7 +277,9 @@ class AgentApi(AgentHarness):
                          ["xai/grok-4.6", "xai/grok-4.3", "deepseek-ai/deepseek-v4.1-flash"])
         self.assertTrue(options["planner_models"][0]["vision"])
         # The planner leads with 4.6: 4.3 writes markedly weaker film plans and is the fallback, not the default.
-        self.assertEqual((options["default_planner_model"], options["default_agent_model"]), ("xai/grok-4.6", "xai/grok-4.6"))
+        # The agent's chain puts v4.1-flash right after v4-pro, so with no v4-pro here it lands on flash, not grok.
+        self.assertEqual((options["default_planner_model"], options["default_agent_model"]),
+                         ("xai/grok-4.6", "deepseek-ai/deepseek-v4.1-flash"))
         self.assertEqual(options["model_chains"]["planner"], "deepseek/deepseek-v4-pro, xai/grok-4.6, xai/grok-4.3",
                          "the configured chain is returned beside the resolved id, because that is what the field holds")
         self.assertEqual(options["default_planner_model"], "xai/grok-4.6",
@@ -325,7 +327,7 @@ class AgentApi(AgentHarness):
         self.assertGreater(session["usage"]["cost_usd"], 0)
 
         first = self.atlas.requests[0]
-        self.assertEqual(first["model"], "xai/grok-4.6")
+        self.assertEqual(first["model"], "deepseek-ai/deepseek-v4.1-flash", "the shipped chain's fallback past v4-pro")
         system = first["messages"][0]["content"]
         self.assertIn("Bollywood ad-film director", system)
         for tool in ("render_film", "plan_film", "list_options", "wait_for_job"):
@@ -915,11 +917,12 @@ class AgentApi(AgentHarness):
         made = [c["result"]["engine"] for c in tools if c["tool"] == "generate_image"]
         self.assertEqual(made, ["krea2", "z-image", "seedream"], "each failed take moves auto one engine up")
         inspected = [c["result"] for c in tools if c["tool"] == "inspect_image"]
-        self.assertEqual(inspected[0]["model"], "xai/grok-4.6", "falls back when the chat's model fails")
+        # the vision chain is qwen3.6 (not served here), then grok-4.3, then grok-4.6
+        self.assertEqual(inspected[0]["model"], "xai/grok-4.3", "falls back when the chat's model fails")
         self.assertIn("content policy", inspected[0]["skipped_models"][0])
         self.assertIn("turbo", inspected[0]["next_engine"])
         self.assertIn("seedream", tools[4]["result"]["engine_note"])
-        self.assertEqual(reviewers, ["xai/grok-4.6"] * 3)
+        self.assertEqual(reviewers, ["xai/grok-4.3"] * 3)
         self.assertEqual(inspected[0]["best"], tools[0]["result"]["assets"][0]["id"], "made-up ids mapped back by position")
 
         # a new message starts over at the free local engine
