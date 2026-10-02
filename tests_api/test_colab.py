@@ -210,6 +210,21 @@ class Detection(unittest.TestCase):
             self.assertNotIn("--use-sage-attention", hawk_colab.comfy_command(plain, ["--use-flash-attention"]),
                              "a flag passed for one restart collides just as surely as a stored one")
 
+    def test_the_comfy_compiler_is_disabled_only_where_comfyui_knows_the_flag(self):
+        """The aimdo compiler kills long H3 segments ("aimdo memory compile error"), so it is switched off --
+        but an older ComfyUI without the flag would refuse to start at all, so it is only passed when known."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as comfy:
+            session = hawk_colab.Session(comfy_dir=comfy, pack_dir=".", token="t", env={}, log_dir=".")
+            self.assertNotIn("--disable-comfy-compiler", hawk_colab.comfy_command(session))
+            os.makedirs(os.path.join(comfy, "comfy"))
+            with open(os.path.join(comfy, "comfy", "cli_args.py"), "w", encoding="utf-8") as handle:
+                handle.write('parser.add_argument("--disable-comfy-compiler", action="store_true")\n')
+            self.assertIn("--disable-comfy-compiler", hawk_colab.comfy_command(session))
+            self.assertEqual(hawk_colab.comfy_command(session, ["--disable-comfy-compiler"]).count(
+                "--disable-comfy-compiler"), 1, "a caller's own copy is not doubled")
+
     def test_lora_config_uses_the_turbo_file_on_disk(self):
         with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:
             example = json.load(handle)

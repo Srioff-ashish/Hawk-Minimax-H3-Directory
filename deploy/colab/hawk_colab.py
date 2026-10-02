@@ -525,6 +525,15 @@ COMFY_ATTENTION_FLAGS = frozenset({
 })
 
 
+def comfy_supports(comfy_dir: str, flag: str) -> bool:
+    """Whether this ComfyUI's argparser defines `flag`. An unknown flag is an argparse error: no ComfyUI at all."""
+    try:
+        with open(os.path.join(comfy_dir, "comfy", "cli_args.py"), encoding="utf-8") as handle:
+            return f'"{flag}"' in handle.read()
+    except OSError:
+        return False
+
+
 def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]:
     """ComfyUI's argv, built in one place so a restart cannot quietly drop a flag the start had.
 
@@ -540,6 +549,11 @@ def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]
     caller = list(session.comfy_args) + list(extra or [])
     if sage_installed() and not any(arg in COMFY_ATTENTION_FLAGS for arg in caller):
         args.append("--use-sage-attention")
+    # ComfyUI 0.34+ records each model's forward into an aimdo "malloc graph" that assumes every step
+    # allocates the same way. A long H3 segment (15 s at full size) does not, and dies before its first step
+    # with "aimdo memory compile error" -- ComfyUI issues #16223 / #16342. The compiler buys little here.
+    if "--disable-comfy-compiler" not in caller and comfy_supports(getattr(session, "comfy_dir", ""), "--disable-comfy-compiler"):
+        args.append("--disable-comfy-compiler")
     return args + caller
 
 
