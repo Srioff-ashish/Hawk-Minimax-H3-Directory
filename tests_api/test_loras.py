@@ -112,6 +112,24 @@ class Steps(unittest.TestCase):
         turbo_by_name, _ = resolve_request(parse_config({}), AVAILABLE, loras=[LoraSpec("turbo")])
         self.assertEqual(choose_steps(turbo_by_name, None)[0], 8)
 
+    def test_a_turbo_base_model_takes_turbo_steps_and_drops_the_turbo_lora(self):
+        # 10Eros-Max's TURBO-hybrid has the ref/fl turbo distill baked in: the shipped turbo LoRA on top of it
+        # applies the same thing twice, and without that LoRA the old rule fell back to 30 steps.
+        eros = "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"
+        with_turbo, _ = resolve_request(CONFIG, AVAILABLE)
+        kept, notes = loras.drop_baked_turbo(with_turbo, eros)
+        self.assertFalse(any(entry.turbo for entry in kept), "no turbo LoRA on a turbo base")
+        self.assertEqual(len(kept), len(with_turbo) - 1, "everything else stays")
+        self.assertIn("has turbo built in", notes[0])
+        steps, reason = choose_steps(kept, None, eros)
+        self.assertEqual(steps, 8)
+        self.assertIn(eros, reason)
+        self.assertEqual(choose_steps(kept, 6, eros)[0], 6, "an explicit step count still wins")
+        plain = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+        self.assertEqual(loras.drop_baked_turbo(with_turbo, plain), (with_turbo, []), "an ordinary base is untouched")
+        self.assertFalse(loras.turbo_base("10Eros_Max_h3_hybrid_beta5_int8.safetensors"),
+                         "the non-turbo hybrid wants full steps and the turbo LoRA")
+
 
 class Applied(unittest.TestCase):
     def test_parse_and_compare(self):

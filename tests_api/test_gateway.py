@@ -529,6 +529,23 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         allowed = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"use_default_loras": False}})).json()
         self.assertEqual((allowed["steps"], allowed["loras"]), (30, []))
 
+    async def test_a_turbo_hybrid_base_renders_at_turbo_steps_without_the_turbo_lora(self):
+        # 10Eros-Max beta5: an H3 fl2va/ref2va hybrid with no "ref2va" in its name, and turbo built in.
+        eros = "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"
+        self.fake.model_files["diffusion_models"].append(eros)
+        options = (await self.http.get("/v1/options")).json()
+        self.assertIn(eros, options["diffusion_models"], "a hybrid reads references, so the Director offers it")
+        self.assertNotIn(UNET_FL2VA, options["diffusion_models"], "plain fl2va still does not")
+
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "TURBO-hybrid_beta5"}})).json()
+        self.assertEqual(job["unet_name"], eros, job)
+        self.assertEqual(job["steps"], 8, job)
+        self.assertNotIn(TURBO, [l["file"] for l in job["loras"]], "the turbo LoRA must not be stacked on a turbo base")
+        self.assertTrue(any("turbo built in" in w for w in job.get("warnings") or []), job.get("warnings"))
+        loader = next(n for n in self.fake.prompts[job["id"]].values() if n["class_type"] == "HawkH3ModelLoader")
+        self.assertEqual(loader["inputs"]["unet_name"], eros)
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
+
     async def test_model_choice(self):
         options = (await self.http.get("/v1/options")).json()
         self.assertEqual((options["diffusion_models"], options["text_encoders"]), ([UNET_INT8, UNET_BF16], [CLIP_INT8, CLIP_BF16]))

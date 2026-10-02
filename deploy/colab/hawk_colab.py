@@ -161,7 +161,9 @@ def pick_model(files: list[str], required: tuple[str, ...], prefer: list[str]) -
 def pick_models(files: dict[str, list[str]]) -> dict[str, str | None]:
     """Choose the H3 files from ``{"diffusion_models": [...], "text_encoders": [...], "vae": [...], "loras": [...]}``."""
     return {
-        "unet_name": pick_model(files.get("diffusion_models", []), ("ref2va",), UNET_PREFERENCE),
+        # an H3 hybrid (10Eros-Max beta5 and the like) reads references too, so it is the fallback
+        "unet_name": (pick_model(files.get("diffusion_models", []), ("ref2va",), UNET_PREFERENCE)
+                      or pick_model(files.get("diffusion_models", []), ("h3", "hybrid"), UNET_PREFERENCE)),
         "clip_name": pick_model(files.get("text_encoders", []), ("qwen3vl", "minimax"), CLIP_PREFERENCE),
         "video_vae": pick_model(files.get("vae", []), ("minimax_h3_video",), []),
         "audio_vae": pick_model(files.get("vae", []), ("minimax_h3_audio",), []),

@@ -248,9 +248,31 @@ def default_status(config: LoraConfig, available: list[str]) -> list[dict]:
     return rows
 
 
-def choose_steps(resolved: list[ResolvedLora], requested: int | None) -> tuple[int, str]:
+def turbo_base(unet_name: str) -> bool:
+    """A base model with a turbo distill baked in, such as 10Eros-Max's TURBO-hybrid builds."""
+    return "turbo" in _stem(unet_name or "")
+
+
+def drop_baked_turbo(resolved: list[ResolvedLora], unet_name: str) -> tuple[list[ResolvedLora], list[str]]:
+    """Leave turbo LoRAs off a base model that already has turbo inside it.
+
+    Stacking the ref2v turbo LoRA on a TURBO checkpoint applies the same distill twice, which over-cooks the
+    render rather than speeding it up, and the shipped loras.json attaches that LoRA to every render as a
+    required default. So it is dropped here, whoever asked for it, and the render says so.
+    """
+    if not turbo_base(unet_name):
+        return resolved, []
+    dropped = [entry for entry in resolved if entry.turbo]
+    notes = [f"Turbo LoRA {entry.file} left off: {os.path.basename(unet_name)} has turbo built in."
+             for entry in dropped]
+    return [entry for entry in resolved if not entry.turbo], notes
+
+
+def choose_steps(resolved: list[ResolvedLora], requested: int | None, unet_name: str = "") -> tuple[int, str]:
     if requested:
         return int(requested), "set by the request"
+    if turbo_base(unet_name):
+        return 8, f"8 steps because {os.path.basename(unet_name)} has turbo built in"
     turbo = next((entry for entry in resolved if entry.turbo), None)
     if turbo:
         return 8, f"8 steps because turbo LoRA {turbo.file} is applied"

@@ -42,6 +42,7 @@ from .loras import (
     ResolvedLora,
     choose_steps,
     compare_applied,
+    drop_baked_turbo,
     default_status,
     load_config,
     parse_applied,
@@ -138,13 +139,18 @@ PLANNER_IMAGE_SIDE = 1024
 PLANNER_VIDEO_STAMPS = (0.0, 1.5, 3.0)
 PLANNER_MAX_TOKENS = 8192
 
-MODEL_FAMILIES = {"diffusion_models": (("ref2va",), "Base model"),
-                  "text_encoders": (("qwen3vl", "minimax"), "Text encoder")}
+#:
+#: Each folder takes any one of several word sets. An H3 "hybrid" is fl2va with ref2va's reference pathway (the
+#: later blocks' adaln_proj) grafted back in, so it reads references like ref2va does -- 10Eros-Max beta5 is
+#: one, and is named "..._h3_TURBO-hybrid_beta5..." with no "ref2va" in it at all.
+MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid")), "Base model"),
+                  "text_encoders": ((("qwen3vl", "minimax"),), "Text encoder")}
 
 
 def model_family(folder: str, files: list[str]) -> list[str]:
-    words, _ = MODEL_FAMILIES[folder]
-    return [name for name in files if all(word in os.path.basename(name).lower() for word in words)]
+    alternatives, _ = MODEL_FAMILIES[folder]
+    return [name for name in files
+            if any(all(word in os.path.basename(name).lower() for word in words) for words in alternatives)]
 
 
 def normalize_tags(tags) -> list[str]:
@@ -581,7 +587,8 @@ class HawkService:
                 other = None
             if other and "fl2va" in os.path.basename(other).lower():
                 raise RequestError(
-                    f"{other} is an fl2va model (first/last-frame video); the Director needs a ref2va model. "
+                    f"{other} is an fl2va model (first/last-frame video); the Director needs a ref2va model or "
+                    f"an H3 fl2va/ref2va hybrid. "
                     f"Choices: {', '.join(choices) or 'none found'}.",
                     {"requested": requested, "choices": choices},
                 )
@@ -1811,8 +1818,18 @@ class HawkService:
             script_text = request.script if isinstance(request.script, str) else json.dumps(request.script)
 
         refs = await self._refs(references)
+        # The base model first: a TURBO checkpoint decides both which LoRAs are left off and the step count.
+        defaults = self.render_models.resolve(self.settings.models)
+        models = dataclasses.replace(
+            defaults,
+            attention=settings.attention or defaults.attention,
+            unet_name=await self.choose_model(settings.unet_name, "diffusion_models", defaults.unet_name),
+            clip_name=await self.choose_model(settings.clip_name, "text_encoders", defaults.clip_name),
+        )
         loras, warnings = await self.resolve_loras(settings)
-        steps, steps_reason = choose_steps(loras, settings.steps)
+        loras, baked = drop_baked_turbo(loras, models.unet_name)
+        warnings += baked
+        steps, steps_reason = choose_steps(loras, settings.steps, models.unet_name)
         seed = settings.seed if settings.seed is not None else random.randrange(1, 2**48)
         job_id = str(uuid.uuid4())
         music_path = None
@@ -1844,13 +1861,6 @@ class HawkService:
             scene_volume_db=settings.scene_volume_db,
             music_fade_seconds=settings.music_fade_seconds,
             mute_generated_music=settings.mute_generated_music,
-        )
-        defaults = self.render_models.resolve(self.settings.models)
-        models = dataclasses.replace(
-            defaults,
-            attention=settings.attention or defaults.attention,
-            unet_name=await self.choose_model(settings.unet_name, "diffusion_models", defaults.unet_name),
-            clip_name=await self.choose_model(settings.clip_name, "text_encoders", defaults.clip_name),
         )
         if request.story is not None:
             # Planned here rather than by a node in the graph, so the provider chosen in Studio is the one that
