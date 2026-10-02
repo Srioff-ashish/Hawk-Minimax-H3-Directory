@@ -189,7 +189,9 @@ class Settings:
     #: Comma-separated, best first: the later ids run when the provider in force does not serve the earlier
     #: ones. A plan is 7-9k *output* tokens, which is where its cost is, so the cheaper model leads and grok
     #: stays as the rung to fall back on. grok-4.3 is last because it writes noticeably weaker plans.
-    planner_model: str = "deepseek/deepseek-v4-pro, xai/grok-4.6, xai/grok-4.3"
+    # deepseek-v4-pro cannot read images, and a plan with reference photos needs a model that can; v4.1-flash
+    # can, so a plan with photos lands there instead of jumping straight to grok's price.
+    planner_model: str = "deepseek/deepseek-v4-pro, deepseek/deepseek-v4.1-flash, xai/grok-4.6, xai/grok-4.3"
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     openrouter_api_key: str = ""

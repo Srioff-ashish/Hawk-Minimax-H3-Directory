@@ -137,7 +137,9 @@ THUMB_WIDTHS = (160, 320, 640, 1280, 2048)  # 1280 / 2048: the full-screen viewe
 PLANNER_IMAGE_SIDE = 1024
 #: Seconds into a video clip to sample, so the planner sees how a reference clip starts, sits and ends.
 PLANNER_VIDEO_STAMPS = (0.0, 1.5, 3.0)
-PLANNER_MAX_TOKENS = 8192
+# deepseek-v4-pro reasons before it writes, and its reasoning counts against this: at 8192 a full plan
+# (5-7k tokens of script) came back empty with finish_reason=length. Same cap as the director's.
+PLANNER_MAX_TOKENS = 15_000
 
 #:
 #: Each folder takes any one of several word sets. An H3 "hybrid" is fl2va with ref2va's reference pathway (the

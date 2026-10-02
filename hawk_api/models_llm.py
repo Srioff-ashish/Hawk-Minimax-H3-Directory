@@ -53,7 +53,7 @@ ROLES: dict[str, Role] = {
                   label="Prose (the characters' voices)"),
     "summary": Role(chain=("deepseek-ai/deepseek-v4.1-flash", "xai/grok-4.3"), label="Summary and compaction"),
     "vision": Role(chain=("xai/grok-4.6", "google/gemini-pro-1.5"), vision=True, label="Image inspection"),
-    "planner": Role(chain=("xai/grok-4.6", "xai/grok-4.3"), label="Film planner"),
+    "planner": Role(chain=("deepseek-ai/deepseek-v4.1-flash", "xai/grok-4.6", "xai/grok-4.3"), label="Film planner"),
 }
 
 

@@ -276,14 +276,13 @@ class AgentApi(AgentHarness):
         self.assertEqual([m["id"] for m in options["planner_models"]],
                          ["xai/grok-4.6", "xai/grok-4.3", "deepseek-ai/deepseek-v4.1-flash"])
         self.assertTrue(options["planner_models"][0]["vision"])
-        # The planner leads with 4.6: 4.3 writes markedly weaker film plans and is the fallback, not the default.
-        # The agent's chain puts v4.1-flash right after v4-pro, so with no v4-pro here it lands on flash, not grok.
+        # Both chains put v4.1-flash right after v4-pro, so with no v4-pro here they land on flash, not grok --
+        # and for the planner flash is also the first one that can read reference photos.
         self.assertEqual((options["default_planner_model"], options["default_agent_model"]),
-                         ("xai/grok-4.6", "deepseek-ai/deepseek-v4.1-flash"))
-        self.assertEqual(options["model_chains"]["planner"], "deepseek/deepseek-v4-pro, xai/grok-4.6, xai/grok-4.3",
+                         ("deepseek-ai/deepseek-v4.1-flash", "deepseek-ai/deepseek-v4.1-flash"))
+        self.assertEqual(options["model_chains"]["planner"],
+                         "deepseek/deepseek-v4-pro, deepseek/deepseek-v4.1-flash, xai/grok-4.6, xai/grok-4.3",
                          "the configured chain is returned beside the resolved id, because that is what the field holds")
-        self.assertEqual(options["default_planner_model"], "xai/grok-4.6",
-                         "this provider does not serve the cheaper lead, so the chain falls through to grok")
         await self.planner_system_message({"story": "A walk", "model": "xai/grok-4.6"})
         planner_call = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])][-1]
         self.assertEqual(planner_call["model"], "xai/grok-4.6",
