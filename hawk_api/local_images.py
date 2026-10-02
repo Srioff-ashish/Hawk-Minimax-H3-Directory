@@ -118,6 +118,13 @@ def _sampler_hint(items: list) -> "ImageLora | None":
                  if item.steps or item.scheduler or item.sampler or item.cfg is not None), None)
 
 
+def sampler_hint_for(used: list) -> "ImageLora | None":
+    """Whose sampler settings an image runs on. The LoRAs the request named decide first; when none of them has an
+    opinion (naming only the repair LoRA, say), the automatic adult LoRA's still apply. Dropping them sampled the
+    NSFW Qwen LoRA at cfg 2, which it cannot take: the image came out blurred and blotched magenta and green."""
+    return _sampler_hint([item for item in used if not item.automatic]) or _sampler_hint(used)
+
+
 def _stem(value) -> str:
     """A LoRA name reduced to what identifies it: no folder, no suffix, no case."""
     return str(value or "").strip().rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
@@ -915,8 +922,7 @@ class LocalImageEngine:
                                                           adult_default=self.adult_default, family=spec.lora_family)
         width, height = parse_size(size)
         text = self._with_triggers(prompt, used)
-        asked = [item for item in used if not item.automatic]
-        hint = _sampler_hint(asked or used)
+        hint = sampler_hint_for(used)
         files = status["files"]
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         batch = max(1, min(4, n))
@@ -971,8 +977,7 @@ class LocalImageEngine:
         text = self._with_triggers(prompt, used)
         width, height = parse_size(size) if size else (None, None)
         files = status["files"]
-        asked = [item for item in used if not item.automatic]
-        hint = _sampler_hint(asked or used)
+        hint = sampler_hint_for(used)
         cache = await self._has_cache_node()
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         paths = await self._reference_paths(sources)

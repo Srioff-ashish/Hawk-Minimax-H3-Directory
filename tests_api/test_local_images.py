@@ -337,6 +337,17 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
         automatic = {item.file.rsplit("/", 1)[-1] for item in used if item.automatic}
         self.assertEqual(automatic, {self.FIX}, "it arrived on its own, so its sampler hints must not take over")
 
+    async def test_naming_only_the_repair_lora_keeps_the_adult_loras_sampler(self):
+        # Naming the repair LoRA at 0.7 used to drop the NSFW LoRA's er_sde / cfg 1 for Qwen's own cfg 2,
+        # which that LoRA cannot take: blurred images blotched magenta and green.
+        _, used, _ = await self.resolve([self.FIX, self.NSFW], [{"name": self.FIX, "strength": 0.7}])
+        hint = li.sampler_hint_for(used)
+        self.assertEqual((hint.file.rsplit("/", 1)[-1], hint.sampler, hint.cfg), (self.NSFW, "er_sde", 1.0))
+
+    async def test_a_named_lora_with_its_own_sampler_still_wins(self):
+        _, used, _ = await self.resolve([self.FIX, self.NSFW], [{"name": self.NSFW, "strength": 0.6}])
+        self.assertEqual(li.sampler_hint_for(used).sampler, "er_sde")
+
     async def test_a_missing_one_warns_instead_of_vanishing(self):
         # a name that matches nothing attaches nothing and raises nothing, so this warning is the only
         # place a typo in an always-on LoRA can ever surface
