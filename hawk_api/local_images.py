@@ -119,10 +119,15 @@ def _sampler_hint(items: list) -> "ImageLora | None":
 
 
 def sampler_hint_for(used: list) -> "ImageLora | None":
-    """Whose sampler settings an image runs on. The LoRAs the request named decide first; when none of them has an
-    opinion (naming only the repair LoRA, say), the automatic adult LoRA's still apply. Dropping them sampled the
-    NSFW Qwen LoRA at cfg 2, which it cannot take: the image came out blurred and blotched magenta and green."""
-    return _sampler_hint([item for item in used if not item.automatic]) or _sampler_hint(used)
+    """Whose sampler settings an image runs on: the LoRAs the request chose, else everything attached.
+
+    An always-on repair LoRA named only to set its strength is not a choice. Counting it as one made the request's
+    LoRAs the only source of hints, it has none, and the automatic NSFW Qwen LoRA then ran at Qwen's cfg 2 -- which
+    it cannot take: blurred images blotched magenta and green. Picking a real LoRA still keeps the automatic adult
+    pair's hints out, as before."""
+    base = {_stem(name) for entries in BASE_LORAS.values() for name, _ in entries}
+    chosen = [item for item in used if not item.automatic and _stem(item.file) not in base]
+    return _sampler_hint(chosen or used)
 
 
 def _stem(value) -> str:

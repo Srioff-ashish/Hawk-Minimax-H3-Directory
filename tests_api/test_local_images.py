@@ -348,6 +348,15 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
         _, used, _ = await self.resolve([self.FIX, self.NSFW], [{"name": self.NSFW, "strength": 0.6}])
         self.assertEqual(li.sampler_hint_for(used).sampler, "er_sde")
 
+    def test_a_chosen_lora_without_hints_still_keeps_the_automatic_ones_out(self):
+        # Pick a real LoRA and the automatic adult LoRA's sampler does not take over: the engine default applies.
+        style = li.ImageLora(file="qwen21/qwen21_style.safetensors", kind="style", family="qwen21")
+        nsfw = li.ImageLora(file=f"qwen21/{self.NSFW}", kind="adult", family="qwen21", sampler="er_sde", cfg=1.0,
+                            automatic=True)
+        self.assertIsNone(li.sampler_hint_for([style, nsfw]))
+        fix = li.ImageLora(file=f"qwen21/{self.FIX}", kind="other", family="qwen21")
+        self.assertIs(li.sampler_hint_for([fix, nsfw]), nsfw, "the repair LoRA is not a choice")
+
     async def test_a_missing_one_warns_instead_of_vanishing(self):
         # a name that matches nothing attaches nothing and raises nothing, so this warning is the only
         # place a typo in an always-on LoRA can ever surface
