@@ -9,12 +9,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import asdict, dataclass, field, replace
 
 FPS = 24
 #: 362 frames -- the top of H3's trained range.
 MAX_SECONDS = 15.1
+#: What a segment is actually allowed. Segments past 12 s crash ComfyUI natively on the Blackwell pod
+#: (inside the sampler, no Python error), so the default stops short of the trained range. Set
+#: HAWK_MAX_SEGMENT_SECONDS=15 once that is fixed; it is read by ComfyUI and the API alike.
+DEFAULT_SEGMENT_CAP = 12.0
+
+
+def max_segment_seconds() -> float:
+    try:
+        value = float(os.environ.get("HAWK_MAX_SEGMENT_SECONDS", "") or DEFAULT_SEGMENT_CAP)
+    except ValueError:
+        value = DEFAULT_SEGMENT_CAP
+    return min(max(value, 1.0), 15.0)
 MIN_FRAMES = 5
 #: Per-kind caps. Pictures and poses both travel as H3 reference images, so a
 #: segment may send at most MAX_IMAGES of them combined.
@@ -574,9 +587,11 @@ def build_jobs(
             prompt = without_music(prompt)
 
         seconds = segment.duration if segment.duration is not None else float(default_seconds)
-        if seconds > MAX_SECONDS:
-            warnings.append(f"{where}: {seconds:g}s is past H3's ~15s trained range; clamped to 15s.")
-            seconds = 15.0
+        cap = max_segment_seconds()
+        if seconds > cap + 0.1:
+            why = "H3's ~15s trained range" if cap >= 15 else f"the {cap:g}s segment cap (HAWK_MAX_SEGMENT_SECONDS)"
+            warnings.append(f"{where}: {seconds:g}s is past {why}; clamped to {cap:g}s.")
+            seconds = cap
         frames = frames_for_seconds(seconds)
 
         mode = segment.continuity or continuity

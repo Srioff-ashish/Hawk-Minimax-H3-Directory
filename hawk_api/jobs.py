@@ -24,7 +24,7 @@ import uuid
 
 import httpx
 
-from hawk_h3.script import ScriptError, build_jobs, parse_script, reference_counts_line
+from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line
 
 from . import graph as graphs
 from . import image_engines
@@ -1625,6 +1625,7 @@ class HawkService:
             else:
                 lines.append(f"<Audio {number}> = audio clip (not attached){label}")
 
+        cap = max_segment_seconds()
         count = (f"exactly {options.segment_count} segment(s)" if options.segment_count > 0
                  else "as many segments as the story needs (usually 2-8)")
         available = {"Picture": counts["picture"], "Pose": counts["pose"],
@@ -1634,7 +1635,8 @@ class HawkService:
             "REFERENCES (global numbering):", *(lines or ["(none -- this is a text-only film)"]), "",
             "CONSTRAINTS:",
             f"- Write {count}.",
-            f"- Target about {options.segment_seconds:g} seconds per segment (each 5-15s).",
+            f"- Target about {min(options.segment_seconds, cap):g} seconds per segment (each 5-{cap:g}s; never longer "
+            f"than {cap:g}s, even where your instructions allow 15: split a longer beat into two segments).",
             f"- Frame: {options.aspect_ratio}.",
             f"- {reference_counts_line(available)}",
             "- Return only the JSON object described in your instructions.",

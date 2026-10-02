@@ -233,9 +233,18 @@ class Jobs(unittest.TestCase):
         self.assertTrue(jobs[1].warnings)
 
     def test_long_segments_are_clamped(self):
-        (job,) = jobs_for("duration: 30\nA")
-        self.assertEqual(job.frames, 362)
-        self.assertTrue(job.warnings)
+        # Past 12 s crashes ComfyUI on the pod, so 12 s is the default cap; the env var lifts it to 15.
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"HAWK_MAX_SEGMENT_SECONDS": ""}):
+            (job,) = jobs_for("duration: 14\nA")
+            self.assertEqual(job.frames, frames_for_seconds(12))
+            self.assertIn("12s", job.warnings[0])
+            (job,) = jobs_for("duration: 12\nA")
+            self.assertFalse(job.warnings)
+        with mock.patch.dict("os.environ", {"HAWK_MAX_SEGMENT_SECONDS": "15"}):
+            (job,) = jobs_for("duration: 30\nA")
+            self.assertEqual(job.frames, 362)
+            self.assertTrue(job.warnings)
 
     def test_no_references(self):
         (job,) = jobs_for("A plain scene", available={"Picture": 0, "Video": 0, "Audio": 0}, video_has_audio=())

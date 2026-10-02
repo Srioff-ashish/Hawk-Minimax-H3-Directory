@@ -12,6 +12,8 @@ import json
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
+from hawk_h3.script import max_segment_seconds
+
 from . import pose_guide as pose_guides
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .schemas import ImageLoraIn, LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
@@ -27,7 +29,7 @@ Typical flow:
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
 
 Reference roles: picture (identity, outfit, place -> <Picture N>), pose (body pose only -> <Pose N>), video (motion or camera -> <Video N>), audio (voice, music -> <Audio N>), video_soundtrack (audio of video for_video).
-Script rules: segments separated by a line '---'; optional headers title:, duration: (1-15 s), pictures: 1,2, poses:, videos:, audios:, continuity: (off, last_frame, tail_5, tail_22, tail_39), seed:; 'style:' (one paragraph, ended by a blank line or a header) is prepended to every segment; count segments in the job's progress.segments_total and fix the script if it differs from the scenes you wrote. Number tags by the order references were listed. Write each prompt as a director's brief: reference roles, action in order, one camera move, dialogue, sounds. plan_film writes the full H3 format and is the better path for anything with dialogue; when you write a script yourself, keep these rules, because whatever audio a prompt leaves unscripted H3 fills with invented speech and noise:
+Script rules: segments separated by a line '---'; optional headers title:, duration: (1-{cap} s; longer is clamped, so split a longer beat into two segments), pictures: 1,2, poses:, videos:, audios:, continuity: (off, last_frame, tail_5, tail_22, tail_39), seed:; 'style:' (one paragraph, ended by a blank line or a header) is prepended to every segment; count segments in the job's progress.segments_total and fix the script if it differs from the scenes you wrote. Number tags by the order references were listed. Write each prompt as a director's brief: reference roles, action in order, one camera move, dialogue, sounds. plan_film writes the full H3 format and is the better path for anything with dialogue; when you write a script yourself, keep these rules, because whatever audio a prompt leaves unscripted H3 fills with invented speech and noise:
 - Dialogue: every line names who says it, the person's short description plus a stable speaker ID in order of first speaking, then the words in a <d> tag with a language: the woman in the red saree (S1) says, <d>[Hindi] यार, आज का weather एकदम perfect है।</d> Describe each speaker's voice once, on their first line (age, gender, pitch, pace, accent). After each line say what the speaker does next and that their lips close; one speaker per sentence. About 2 spoken words per second of the segment.
 - Hinglish (the default): Hindi words in Devanagari, English words in Latin letters as spelled in English, tag [Hindi]. Never Hindi in Roman letters ("hai", "nahi"): H3 reads those as English and mispronounces them. Keep any words the user wrote for a line exactly as written.
 - Sound: end each segment with one main ambient sound, then an exclusion sentence naming the language: "Only their Hindi lines; no other voices, no background chatter, no other language at any point." A segment without dialogue says "No speech, no voices; all lips stay closed." Fill silent gaps with visible actions. Music N/A unless asked; with dialogue, music very low or N/A.
@@ -61,7 +63,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
-        instructions=INSTRUCTIONS,
+        instructions=INSTRUCTIONS.replace("{cap}", f"{max_segment_seconds():g}"),
         log_level="WARNING",  # the SDK configures global logging; INFO logs every HTTP call
     )
 

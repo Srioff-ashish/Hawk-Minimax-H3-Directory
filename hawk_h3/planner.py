@@ -30,6 +30,7 @@ from .script import (
     ScriptError,
     build_jobs,
     drop_unavailable_references,
+    max_segment_seconds,
     parse_script,
     reference_counts_line,
 )
@@ -109,7 +110,8 @@ def build_request(
             "",
             "CONSTRAINTS:",
             f"- Write {count}.",
-            f"- Target about {segment_seconds:g} seconds per segment (each 5-15s).",
+            f"- Target about {min(segment_seconds, max_segment_seconds()):g} seconds per segment "
+            f"(each 5-{max_segment_seconds():g}s; split a longer beat into two segments).",
             f"- Frame: {aspect_ratio}.",
             f"- {reference_counts_line(refs.available())}",
             "- Return only the JSON object described in your instructions.",
