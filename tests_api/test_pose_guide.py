@@ -10,17 +10,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hawk_api import pose_guide  # noqa: E402
 
-FIELDS = ("her:", "him:", "hands:", "faces:", "camera:", "motion:", "watch:", "prompt:")
+FIELDS = ("tags:", "her:", "him:", "hands:", "faces:", "camera:", "motion:", "watch:", "prompt:")
 
 
 class PoseGuide(unittest.TestCase):
     def test_every_position_carries_every_field(self):
         rules, poses = pose_guide.load()
-        self.assertIn("Models do not know position names", rules)
+        self.assertIn("know no position names", rules)
+        self.assertIn("the man is out of frame", rules)
         self.assertGreaterEqual(len(poses), 20)
         for pose in poses:
             for field in FIELDS:
-                self.assertIn(f"\n{field}" if field != "her:" else field, pose.text, f"{pose.key} lacks {field}")
+                self.assertIn(field, pose.text, f"{pose.key} lacks {field}")
         self.assertEqual(len({p.key for p in poses}), len(poses), "keys are unique")
 
     def test_the_longest_name_wins(self):
@@ -43,7 +44,7 @@ class PoseGuide(unittest.TestCase):
         self.assertNotIn("Butterfly", named)
         unnamed = pose_guide.planner_note("They have sex on the sofa")
         self.assertIn("Butterfly", unnamed, "no position named: the planner sees them all to choose from")
-        self.assertLess(len(unnamed), 15000, "but only each one's sentence and pitfall")
+        self.assertLess(len(unnamed), 18000, "but only each one's sentence and pitfall")
 
 
 if __name__ == "__main__":

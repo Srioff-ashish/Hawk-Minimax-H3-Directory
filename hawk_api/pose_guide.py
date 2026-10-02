@@ -113,6 +113,6 @@ def planner_note(brief: str) -> str:
     if found:
         body = "\n\n".join(f"{p.name}\n{p.text}" for p in found)
     else:  # no position named: every one, but only its ready sentence and its pitfall, to keep the brief short
-        body = "\n\n".join(f"{p.name}\n{_field(p, 'prompt')}\nWatch: {_field(p, 'watch')}" for p in poses)
+        body = "\n\n".join(f"{p.name}\n{_field(p, 'prompt')}\nTags: {_field(p, 'tags')}\nWatch: {_field(p, 'watch')}" for p in poses)
     return ("POSITION GUIDE (the video model knows no position names: write each position as this geometry, one "
             f"position per segment):\n{rules}\n\n{body}")
