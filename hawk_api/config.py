@@ -232,7 +232,7 @@ class Settings:
     krea_unet: str = "krea2_turbo_fp8_scaled.safetensors"
     krea_clip: str = "qwen3vl_4b_fp8_scaled.safetensors"
     krea_vae: str = "qwen_image_vae.safetensors"
-    qwen21_unet: str = "qwen_image_2.1_int8_convrot.safetensors"
+    qwen21_unet: str = "qwen_image_2.1_bf16.safetensors"
     qwen21_clip: str = "qwen3vl_8b_bf16.safetensors"
     qwen21_vae: str = "qwen_image_2.1_vae_bf16.safetensors"
     zimage_unet: str = "z_image_turbo_nvfp4.safetensors"
