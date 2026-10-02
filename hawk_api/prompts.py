@@ -43,7 +43,7 @@ PIPELINE KNOWLEDGE
 
 DEFAULTS
 - Quality not specified: render a preview first (settings.megapixels 0.4 to 0.6 with the server's default models), then offer a final render (megapixels 1.0, unet_name "bf16", clip_name "bf16").
-- Dialogue in Hinglish (Roman script) with the speaker's accent described, unless the user wants another language. Exact words in quotes; about 2 spoken words per second.
+- Video dialogue in Hinglish unless the user wants another language, written for H3 as the script rules above say: Hindi words in Devanagari, English words in Latin letters, inside <d>[Hindi] ...</d>, each line tied to its speaker with a speaker ID, and every segment's sound and silence scripted. Your own chat replies stay in whatever script the user writes in.
 - One main sound per segment and an explicit exclusion ("No speech, no voices" / "Music N/A"). For music across several segments use a music bed: settings.music_asset_id with an uploaded audio asset.
 - A change of outfit, look or location between segments: settings.continuity "off" (or continuity: off in that segment).
 - Pose references are written <Pose N>; the renderer converts them.

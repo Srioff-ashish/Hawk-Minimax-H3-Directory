@@ -88,15 +88,18 @@ non_diegetic_music: ...
 
 **Speakers and dialogue**
 - Stable speaker IDs `(S1)`, `(S2)`… in order of first vocal event, reused across shots; `(S1,S2)` for simultaneous speech; non-vocal characters get no ID.
-- On a speaker's first line, describe the voice outside the tag (age, gender, on/off-screen, pitch, timbre, pace, accent). Inside the tag only the language and the verbatim words: `<d>[Hinglish] exact line.</d>`
-- Write action and dialogue in the same clause when they must land together: "As she lifts the cup, she says (S1) <d>[Hinglish] Abhi nahi, yaar.</d>"
+- Every spoken line names its speaker by BOTH labels, every time: the subject that physically speaks and its speaker ID, `<Subject 1> (S1) says, <d>...</d>` (R2V), or the character's short description plus the ID in T2VA, `the woman in the red saree (S1) says, <d>...</d>`. A bare `(S1)` or "she says" leaves H3 to guess whose mouth moves; in a two-person shot it guesses wrong.
+- On a speaker's first line, describe the voice outside the tag (age, gender, on/off-screen, pitch, timbre, pace, accent). Inside the tag only the language and the verbatim words: `<d>[Hindi] exact line.</d>`
+- After every line, say what the speaker's mouth and the listener do next ("she closes her lips and smiles", "he listens silently, lips closed"). One line per speaker turn; never two speakers in one sentence unless they speak together `(S1,S2)`.
+- Write action and dialogue in the same clause when they must land together: "As she lifts the cup, <Subject 1> (S1) says, <d>[Hindi] अभी नहीं, यार।</d> She sets the cup down, lips closed."
 - Fill every gap between lines with an explicit physical action (a glance, a gesture, picking something up). Unscripted silent time is where H3 invents filler speech.
 - Voiceover: "says in an off-screen voiceover", and state that the on-screen character's lips remain closed.
 - Speech cut off by the end of the segment: end the line with `<cutoff>`.
-- **Dialogue language: Hinglish by default** — conversational Hindi mixed with everyday English words, written in Roman script the way people text it: `<d>[Hinglish] Yaar, aaj ka weather ekdum perfect hai.</d>`. Describe the voice with a native accent (e.g. "native Delhi accent"). Never write Devanagari.
-- Use another language only when the brief asks for it: pure Hindi in Roman script with `[Hindi]`, or English, French, Spanish and other languages H3 supports with their own tag.
-- Name the language in the exclusion sentence of `overall_soundscape`: "Only her Hinglish lines; no Chinese, no other language at any point, including before, between and after her lines."
-- Word budget: at most about 2 spoken words per second of speaking time (about 10 words for 5 s, 20 for 10 s, 30 for 15 s), leaving real pauses for the actions between lines; Hinglish lines crowd the actions when longer.
+- **Dialogue language: Hinglish by default, written in two scripts** — every Hindi word in Devanagari, every English word in Latin letters exactly as it is spelled in English, tagged `[Hindi]`: `<d>[Hindi] यार, आज का weather एकदम perfect है।</d>`. Hindi in Roman letters ("hai", "ke", "nahi") has no fixed spelling, and H3 reads it as English and mispronounces it; Devanagari tells it exactly which sounds to make. Never write a Hindi word in Roman letters, and never write an English word in Devanagari ("weather", not "वेदर"). End sentences with `।`, `?` or `!`.
+- Describe the voice with a native accent (e.g. "native Delhi Hindi accent, English words said the Indian way").
+- Use another language only when the brief asks for it: pure Hindi (all Devanagari) with `[Hindi]`, or English, French, Spanish and other languages H3 supports with their own tag. Words the user wrote for a line are kept exactly, in the script they used.
+- Name the language in the exclusion sentence of `overall_soundscape`: "Only her Hindi lines; no Chinese, no other language at any point, including before, between and after her lines."
+- Word budget: at most about 2 spoken words per second of speaking time (about 10 words for 5 s, 20 for 10 s, 30 for 15 s), leaving real pauses for the actions between lines; longer lines crowd the actions and get mumbled.
 
 **On-screen text:** verbatim in double quotes, no translation. Avoid on-screen text and subtitles unless the brief asks.
 
@@ -107,14 +110,16 @@ non_diegetic_music: ...
 ## Anti-filler checklist (apply to every segment before finalising)
 
 1. Every audible moment is scripted: each line of dialogue, each reaction, each sound-making action — or it is explicitly silenced.
-2. Add an explicit exclusion sentence tailored to the scene at the end of `overall_soundscape`, e.g. "No speech, no voices, no singing; her lips stay closed." or "No other voices, no background murmur, no language other than Hinglish at any point, including between lines."
+2. Add an explicit exclusion sentence tailored to the scene at the end of `overall_soundscape`, e.g. "No speech, no voices, no singing; her lips stay closed." or "No other voices, no background murmur, no language other than Hindi at any point, including between lines."
 3. State positive AND negative sound constraints: what is there, and what must not be.
 4. Non-verbal vocal sounds (breathing, sighing, laughing) are "wordless", with "no words, no syllables".
 5. Match scripted speech and action to the full segment duration; unaccounted time gets filled with invented audio.
 6. Identity matters: favour medium and close framing over wide shots, since small faces degrade first.
 7. Every reference has exactly one named job.
 8. Each speaker's first line has a voice description before the tag: age, gender, pitch, timbre, pace and accent (e.g. "a warm female voice in her late twenties, medium pitch, lively pace, native Delhi accent").
-9. The exclusion sentence names the dialogue language ("Only her Hinglish lines; no other language at any point…").
+9. The exclusion sentence names the dialogue language ("Only her Hindi lines; no other language at any point…").
+12. Every line of dialogue: `<Subject N> (Sx)` (or the character's description and `(Sx)`) before it, Hindi words in Devanagari and English words in Latin inside it, and the speaker's closed lips or next action after it.
+13. Silence is scripted too: a segment with no dialogue says so ("No speech, no voices, nobody speaks; all lips stay closed."), and `non_diegetic_music` is `N/A` unless the brief asks for music.
 10. A segment with a pose never holds that pose until the end: after the pose, script a release or a new movement (arms come down, she steps forward, turns her head) in the last seconds.
 11. Every segment prompt is read on its own, so repeat each recurring character's full identity description word for word in every segment (age, ethnicity, face shape, skin tone, hair, build, distinguishing marks). Never shorten it to "the woman" or "she" in later segments; without a reference picture that is the only thing keeping the same person across cuts.
 

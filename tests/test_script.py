@@ -329,8 +329,21 @@ class StructuredPrompts(unittest.TestCase):
     def test_planner_prompt_teaches_the_h3_format(self):
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hawk_h3", "prompts", "planner_system.md")
         text = open(path, encoding="utf-8").read()
-        for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[Hinglish]", "Anti-filler checklist"):
+        for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[Hindi]", "Anti-filler checklist"):
             self.assertIn(needle, text)
+
+    def test_hinglish_dialogue_is_devanagari_and_tied_to_its_speaker(self):
+        # Hindi in Roman letters has no fixed spelling and H3 reads it as English, so the characters
+        # mispronounce it; and a bare (S1) leaves H3 to guess whose mouth moves.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        planner = open(os.path.join(root, "hawk_h3", "prompts", "planner_system.md"), encoding="utf-8").read()
+        guide = open(os.path.join(root, "hawk_api", "mcp_server.py"), encoding="utf-8").read()
+        for name, text in (("planner", planner), ("agent/MCP guide", guide)):
+            with self.subTest(name):
+                self.assertRegex(text, r"<d>\[Hindi\] [ऀ-ॿ]", "the example line should be in Devanagari")
+                self.assertNotIn("Never write Devanagari", text)
+                self.assertIn("(S1) says, <d>", text, "every line names its speaker before the words")
+                self.assertIn("no other language at any point", text, "the exclusion sentence names the language")
 
 
 class MusicBed(unittest.TestCase):
