@@ -900,7 +900,9 @@ class HawkService:
             chain.append({"id": current["id"], "filename": current.get("filename", ""),
                           "type": source.get("type", ""), "generator": source.get("generator", ""),
                           "corrected": bool(source.get("corrected_at")),
-                          "deleted": "deleted_at" in current, "restored": bool(source.get("restored_at"))})
+                          "deleted": "deleted_at" in current, "restored": bool(source.get("restored_at")),
+                          **({"identifiable": source["person_check"]["identifiable"]}
+                             if isinstance(source.get("person_check"), dict) else {})})
             for ref_id in source.get("references") or []:
                 ref = self.store.lineage(str(ref_id))
                 if ref is None:
@@ -911,7 +913,8 @@ class HawkService:
         return {"id": asset["id"],
                 "from_upload": local_images.from_upload(asset, self.store.lineage),
                 # what the refusal is actually pointing at, which the message never used to name
-                "upload_roots": [row["id"] for row in chain if row["type"] in ("upload", "missing")],
+                "upload_roots": [row["id"] for row in chain if row["type"] in ("upload", "missing")
+                                 and row.get("identifiable") is not False],
                 "corrected_from": ((asset.get("source") or {}).get("corrected_from") or None),
                 "chain": chain}
 
@@ -1312,6 +1315,11 @@ class HawkService:
             if asset["kind"] != "image":
                 raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
             sources.append(asset)
+        if any(local_images.from_upload(asset, self.store.lineage) for asset in sources):
+            # Each upload behind these references is checked once for an identifiable person, before the rules
+            # read the request: a faceless garment shot then stops counting as a photo of someone.
+            await self._check_upload_roots(sources)
+            sources = [self.store.get_asset(asset["id"]) or asset for asset in sources]
 
         model = (model or "").strip()
         raw = (engine or "").strip().lower()
@@ -1639,6 +1647,86 @@ class HawkService:
                        "prices_usd": google_images.PRICES},
             "sizes": ["1024x1024", "1024x1536", "1536x1024", "896x1600", "1600x896"],
         }
+
+    PERSON_CHECK_PROMPT = (
+        "You check one uploaded image for a single thing: does it show a real, identifiable person? Answer "
+        "identifiable when the image shows something that identifies a particular person, such as a distinctive "
+        "face. When unsure, answer not identifiable. Reply with only one JSON object: "
+        '{"identifiable": true or false, "reason": "one short sentence"}')
+
+    async def person_check(self, asset_id: str, force: bool = False) -> dict:
+        """Whether an uploaded image shows a real, identifiable person, judged once by the vision model.
+
+        The upload rules exist for photos that may show real people, and every upload used to count, so a
+        product shot of a skirt on a faceless model flagged everything made from it. This asks the vision role
+        (the models inspect_image uses, on the chat provider -- not Google) one narrow question: is a face, or
+        anything else that identifies someone, visible? It deliberately does not ask whether a face is real or
+        AI: no model can tell that reliably from pixels, so any face keeps the upload rules on.
+
+        Recorded on the asset as source["person_check"]; local_images.from_upload reads it. Only a clear
+        "not identifiable" lifts the rules. No vision model, no answer, or a refusal records nothing, so the
+        upload stays flagged and the check runs again next time.
+        """
+        asset = self.store.get_asset(asset_id)
+        if asset is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        source = asset.get("source") or {}
+        if asset["kind"] != "image" or source.get("type") != "upload":
+            return {"id": asset_id, "checked": False, "reason": "Only uploaded images are checked."}
+        if source.get("person_check") and not force:
+            return {"id": asset_id, "checked": True, **source["person_check"]}
+        llm = self.llm()
+        try:
+            models = models_llm.resolve_many("vision", llm.agent_vision_model_override or self.settings.agent_vision_model,
+                                             await self.model_catalogue())
+        except Exception:
+            models = []
+        data, mime = await self.asset_file(asset_id, 640)
+        messages = [{"role": "system", "content": self.PERSON_CHECK_PROMPT},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": "The uploaded image:"},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}}]}]
+        failures = []
+        for model in models[:3]:
+            try:
+                text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=300, temperature=0,
+                                                max_retries=1)
+            except AtlasError as exc:
+                failures.append(f"{model}: {str(exc)[:120]}")
+                continue
+            match = re.search(r"\{.*\}", text or "", re.S)
+            try:
+                answer = json.loads(match.group(0)) if match else None
+            except json.JSONDecodeError:
+                answer = None
+            if not isinstance(answer, dict) or not isinstance(answer.get("identifiable"), bool):
+                failures.append(f"{model}: no answer in its reply")
+                continue
+            result = {"identifiable": answer["identifiable"], "reason": str(answer.get("reason") or "")[:300],
+                      "model": model, "checked_at": time.time()}
+            asset = self.store.get_asset(asset_id) or asset
+            asset["source"] = {**(asset.get("source") or {}), "person_check": result}
+            self.store.add_asset(asset)
+            log.warning("hawk_api: person check on upload %s: %s (%s, %s)", asset_id,
+                        "identifiable" if result["identifiable"] else "no identifiable person -- upload rules lifted",
+                        model, result["reason"])
+            return {"id": asset_id, "checked": True, **result}
+        return {"id": asset_id, "checked": False,
+                "reason": "The vision model gave no answer (" + "; ".join(failures)[:300] + "); still flagged."}
+
+    async def _check_upload_roots(self, sources: list[dict]) -> None:
+        """Run the person check on every upload these references were made from that has not had one."""
+        seen = set()
+        for asset in sources:
+            for root_id in self.provenance(asset["id"])["upload_roots"]:
+                root = self.store.get_asset(root_id)
+                if root_id in seen or root is None or (root.get("source") or {}).get("person_check"):
+                    continue
+                seen.add(root_id)
+                try:
+                    await self.person_check(root_id)
+                except Exception as exc:  # a check that cannot run leaves the upload flagged, as before
+                    log.warning("hawk_api: person check on %s failed: %s", root_id, exc)
 
     async def sfw_check(self, prompt: str, action: str, sources: list[dict]) -> google_images.GateVerdict:
         """Whether a request may go to Google, decided on this server's own vision model -- never on Google.

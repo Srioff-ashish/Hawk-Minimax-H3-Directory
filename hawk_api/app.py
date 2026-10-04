@@ -215,6 +215,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         which ancestors make it one, and whether its origin has been corrected."""
         return service.provenance(asset_id)
 
+    @app.post("/v1/assets/{asset_id}/person-check", tags=["assets"])
+    async def person_check(asset_id: str, force: bool = False):
+        """Ask the vision model whether an uploaded image shows a real, identifiable person (a visible face).
+        One that does not -- a faceless garment shot, a product, a background -- stops counting as a photo of
+        someone. Runs on its own the first time an upload is used as a reference; ?force=true asks again."""
+        return await service.person_check(asset_id, force=force)
+
     @app.post("/v1/assets/{asset_id}/verify-ai-credential", tags=["assets"])
     async def verify_ai_credential(asset_id: str, body: AICredentialCheck | None = None):
         """Record an AI image made elsewhere (e.g. by Nano Banana) as generated, from the C2PA content credential

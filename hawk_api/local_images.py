@@ -293,10 +293,15 @@ def check_prompt(prompt: str) -> None:
 
 def from_upload(asset: dict, lookup=None, depth: int = 0) -> bool:
     """True when an image is an upload, or was made from one (an edit of an edit of a photo still counts).
-    A reference that no longer exists counts as an upload, to be safe."""
+    A reference that no longer exists counts as an upload, to be safe.
+
+    The exception is an upload the person check (HawkService.person_check) found no identifiable person in --
+    a garment on a cropped, faceless body, a product, a flat-lay, a background. The upload rules are about real,
+    identifiable people, and such a picture is a reference for what it shows, not a photo of someone."""
     source = asset.get("source") or {}
     if source.get("type") != "generated":
-        return True
+        return not (source.get("type") == "upload"
+                    and (source.get("person_check") or {}).get("identifiable") is False)
     if lookup is None or depth > 20:
         return depth > 20
     for ref_id in source.get("references") or []:
