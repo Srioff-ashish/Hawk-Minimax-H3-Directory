@@ -199,12 +199,10 @@ class Settings:
     atlas_url: str = "https://api.atlascloud.ai/v1"
     atlas_api_key: str = ""
     openrouter_api_key: str = ""
-    #: Google AI Studio key for the Nano Banana image engines and their SFW check (GOOGLE_API_KEY, or
-    #: GEMINI_API_KEY). Studio can replace it; a Colab secret is what survives a restart.
+    #: Google AI Studio key for the Nano Banana image engines (GOOGLE_API_KEY, or GEMINI_API_KEY). Studio can
+    #: replace it; a Colab secret is what survives a restart. Their SFW check does not use it: it runs on the
+    #: vision model (agent_vision_model), so nothing reaches Google before it has been judged SFW.
     google_api_key: str = ""
-    #: The Gemini text model that decides SFW or NSFW before a Nano Banana engine runs. "" means
-    #: google_images.GATE_MODEL.
-    google_gate_model: str = ""
     #: Measured on a live pod: grok-4.6 bills $2.00/M in and $6.00/M out against deepseek-v4-pro's $0.955 and
     #: $1.911, and the director re-sends the whole prompt on every step of a chain, so this one setting moves
     #: the bill more than anything else here. deepseek-v4-pro drove a full generate -> inspect -> report chain
@@ -300,7 +298,6 @@ class Settings:
             atlas_api_key=_env("ATLAS_API_KEY"),
             openrouter_api_key=_env("OPENROUTER_API_KEY"),
             google_api_key=_env("GOOGLE_API_KEY") or _env("GEMINI_API_KEY"),
-            google_gate_model=_env("HAWK_GOOGLE_GATE_MODEL"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             agent_prose_model=_env("HAWK_AGENT_PROSE_MODEL", cls.agent_prose_model),
             agent_summary_model=_env("HAWK_AGENT_SUMMARY_MODEL", cls.agent_summary_model),

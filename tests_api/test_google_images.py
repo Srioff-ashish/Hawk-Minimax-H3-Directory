@@ -8,6 +8,7 @@ verdict, an unreadable reply, a check that could not run, no key -- moves the re
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import os
 import shutil
@@ -88,29 +89,11 @@ class Sizes(unittest.TestCase):
         self.assertGreater(gi.price("nano-banana-pro"), gi.price("nano-banana"))
 
 
-class TheCheckFailsClosed(unittest.IsolatedAsyncioTestCase):
-    async def test_no_key_is_an_nsfw_verdict_not_an_exception(self):
-        verdict = await gi.GoogleImageClient("").classify(gi.GATE_MODEL, "", "a cat", "generate")
-        self.assertFalse(verdict.sfw)
-
-    async def test_a_check_google_blocks_is_nsfw(self):
-        client = gi.GoogleImageClient("k")
-        with mock.patch.object(client, "_generate_content",
-                               mock.AsyncMock(return_value={"promptFeedback": {"blockReason": "PROHIBITED_CONTENT"}})):
-            verdict = await client.classify(gi.GATE_MODEL, "", "something", "generate")
-        self.assertFalse(verdict.sfw)
-        self.assertIn("PROHIBITED_CONTENT", verdict.reason)
-
-    async def test_the_check_sees_the_reference_images(self):
-        client = gi.GoogleImageClient("k")
-        answer = {"candidates": [{"content": {"parts": [{"text": '{"verdict": "sfw", "reason": "fine"}'}]}}]}
-        call = mock.AsyncMock(return_value=answer)
-        with mock.patch.object(client, "_generate_content", call):
-            await client.classify(gi.GATE_MODEL, "rules", "change the dress to blue", "edit", [(png(), "image/png")])
-        payload = call.call_args.args[1]
-        parts = payload["contents"][0]["parts"]
-        self.assertTrue(any("inlineData" in part for part in parts), "the images must be judged, not just the text")
-        self.assertIn("rules", payload["systemInstruction"]["parts"][0]["text"])
+class GoogleBlocks(unittest.IsolatedAsyncioTestCase):
+    def test_google_has_no_way_to_judge_a_request(self):
+        # The check must never run on Google: an NSFW request sent there "to be judged" is still NSFW traffic
+        # on the account. Keeping the method off the client means no code path can bring it back by accident.
+        self.assertFalse(hasattr(gi.GoogleImageClient, "classify"))
 
     async def test_a_declined_image_is_reported_as_blocked(self):
         client = gi.GoogleImageClient("k")
@@ -122,15 +105,16 @@ class TheCheckFailsClosed(unittest.IsolatedAsyncioTestCase):
 
 
 class FakeGoogle:
-    """Stands in for GoogleImageClient: a fixed verdict, and a record of what reached Google."""
+    """Stands in for GoogleImageClient, plus the server-side SFW check: a fixed verdict, a record of every
+    check asked for, and a record of what reached Google."""
 
     def __init__(self, sfw: bool, configured: bool = True):
         self.verdict = gi.GateVerdict(sfw, "judged sfw" if sfw else "judged nsfw")
         self.configured = configured
         self.classified, self.generated = [], []
 
-    async def classify(self, model, instruction, prompt, action, references=()):
-        self.classified.append({"model": model, "instruction": instruction, "prompt": prompt, "refs": len(references)})
+    async def check(self, prompt, action, sources):  # replaces HawkService.sfw_check
+        self.classified.append({"prompt": prompt, "action": action, "refs": len(sources)})
         return self.verdict
 
     async def generate(self, model, prompt, references=(), size=None, max_tier="4K"):
@@ -138,8 +122,8 @@ class FakeGoogle:
         return [png((10, 200, 10))]
 
 
-class TheLadder(unittest.IsolatedAsyncioTestCase):
-    """generate_images with Google rungs: the gate decides whether a request reaches them at all."""
+class ServiceCase(unittest.IsolatedAsyncioTestCase):
+    """A real HawkService on a temp folder, with ComfyUI's input folder stood in for by a directory."""
 
     async def asyncSetUp(self):
         self.dir = tempfile.mkdtemp(prefix="hawk_google_test_")
@@ -157,6 +141,18 @@ class TheLadder(unittest.IsolatedAsyncioTestCase):
             return {"name": name, "subfolder": subfolder}
 
         self.service.comfy.upload = upload
+
+    async def upload(self, color=(200, 30, 30)) -> dict:
+        data = png(color)
+        return await self.service.add_asset(f"{color}.png", io.BytesIO(data), "image/png", len(data),
+                                            source={"type": "upload"})
+
+
+class TheLadder(ServiceCase):
+    """generate_images with Google rungs: the gate decides whether a request reaches them at all."""
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
         # Google first, Seedream after it, no local engines: nothing here may touch ComfyUI.
         self.service.image_engines.save(generate=[{"engine": "nano-banana"}, {"engine": "seedream"}],
                                         edit=[{"engine": "nano-banana"}, {"engine": "seedream"}])
@@ -164,9 +160,10 @@ class TheLadder(unittest.IsolatedAsyncioTestCase):
         self.service._atlas_images = self.atlas
 
     def use(self, fake: FakeGoogle):
-        patcher = mock.patch.object(HawkService, "google", new=property(lambda _self: fake))
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(HawkService, "google", new=property(lambda _self: fake)),
+                        mock.patch.object(self.service, "sfw_check", fake.check)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         return fake
 
     async def test_an_sfw_request_is_made_by_nano_banana(self):
@@ -200,12 +197,6 @@ class TheLadder(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(google.generated, [], "an nsfw request must not be sent to Google")
         self.assertEqual(result["engine"], "seedream")
         self.assertIn("SFW", result["tried"][0]["skipped"])
-
-    async def test_the_editable_instruction_is_what_the_check_reads(self):
-        google = self.use(FakeGoogle(sfw=True))
-        self.service.prompts.save("sfw_gate", "Only landscapes are SFW.")
-        await self.service.generate_images("a mountain lake")
-        self.assertEqual(google.classified[0]["instruction"], "Only landscapes are SFW.")
 
     async def test_the_check_is_asked_once_however_many_google_rungs_there_are(self):
         google = self.use(FakeGoogle(sfw=False))
@@ -270,6 +261,78 @@ class TheLadder(unittest.IsolatedAsyncioTestCase):
         result = await self.service.generate_images("a cat")
         self.assertNotIn("sfw_check_failed", result)
         self.assertNotIn("sfw_check", self.service.store.get_asset(result["assets"][0]["id"])["source"])
+
+
+class FakeChat:
+    """The chat provider (Atlas/OpenRouter) as the vision check sees it: one scripted reply per model."""
+
+    def __init__(self, replies: dict, configured: bool = True):
+        self.replies, self.configured, self.calls = replies, configured, []
+
+    async def chat(self, model, messages, **kwargs):
+        self.calls.append({"model": model, "messages": messages})
+        reply = self.replies.get(model, '{"verdict": "nsfw", "reason": "unscripted"}')
+        if isinstance(reply, Exception):
+            raise reply
+        return reply, {}
+
+
+class TheVisionCheck(ServiceCase):
+    """HawkService.sfw_check: judged on this server's vision model, never on Google."""
+
+    CHAIN = "qwen/qwen3.6-35b-a3b, xai/grok-4.3, xai/grok-4.6"
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.service.settings = dataclasses.replace(self.service.settings, agent_vision_model=self.CHAIN)
+        self.service.model_catalogue = mock.AsyncMock(return_value=[])  # no catalogue: send the chain as written
+
+        def no_google(_self):
+            raise AssertionError("the SFW check must never touch the Google client")
+
+        patcher = mock.patch.object(HawkService, "google", new=property(no_google))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def provider(self, chat: FakeChat) -> FakeChat:
+        patcher = mock.patch.object(HawkService, "atlas", new=property(lambda _self: chat))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return chat
+
+    async def test_it_judges_on_the_vision_model_with_the_images_and_the_editable_rules(self):
+        chat = self.provider(FakeChat({"qwen/qwen3.6-35b-a3b": '{"verdict": "sfw", "reason": "a skirt"}'}))
+        self.service.prompts.save("sfw_gate", "Only landscapes are SFW.")
+        photo = await self.upload()
+        verdict = await self.service.sfw_check("put the skirt on her", "edit", [self.service.store.get_asset(photo["id"])])
+        self.assertTrue(verdict.sfw)
+        sent = chat.calls[0]
+        self.assertEqual(sent["model"], "qwen/qwen3.6-35b-a3b", "the first model of the vision chain")
+        self.assertIn("Only landscapes are SFW.", sent["messages"][0]["content"])
+        self.assertIn(gi.GATE_OUTPUT_RULES.splitlines()[0], sent["messages"][0]["content"])
+        parts = sent["messages"][1]["content"]
+        self.assertTrue(any(p.get("type") == "image_url" for p in parts), "the image must be judged, not just the text")
+
+    async def test_a_model_that_refuses_or_babbles_hands_over_to_the_next(self):
+        from hawk_api.atlas import AtlasError
+        chat = self.provider(FakeChat({"qwen/qwen3.6-35b-a3b": AtlasError("The model refused"),
+                                       "xai/grok-4.3": "I can't help with that.",
+                                       "xai/grok-4.6": '{"verdict": "nsfw", "reason": "exposed buttocks"}'}))
+        verdict = await self.service.sfw_check("something", "generate", [])
+        self.assertFalse(verdict.sfw)
+        self.assertEqual(verdict.reason, "exposed buttocks", "the third model's real answer, not a fallback")
+        self.assertEqual([c["model"] for c in chat.calls], ["qwen/qwen3.6-35b-a3b", "xai/grok-4.3", "xai/grok-4.6"])
+
+    async def test_no_verdict_from_anyone_keeps_the_request_away_from_google(self):
+        self.provider(FakeChat({m.strip(): "no" for m in self.CHAIN.split(",")}))
+        verdict = await self.service.sfw_check("a cat", "generate", [])
+        self.assertFalse(verdict.sfw)
+        self.assertIn("Google was not used", verdict.reason)
+
+    async def test_no_chat_provider_is_an_nsfw_verdict_not_an_exception(self):
+        self.provider(FakeChat({}, configured=False))
+        verdict = await self.service.sfw_check("a cat", "generate", [])
+        self.assertFalse(verdict.sfw)
 
 
 class Retakes(unittest.IsolatedAsyncioTestCase):

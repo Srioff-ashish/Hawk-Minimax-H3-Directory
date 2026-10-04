@@ -1056,8 +1056,8 @@
               <div class="field span-all"><label class="label" for="llmGoogleKey">Google AI API Key (Nano Banana)</label>
                 <div class="row"><input class="input mono" id="llmGoogleKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
                   <button class="btn btn-sm" type="button" id="llmGoogleKeyForget" hidden>Forget</button></div>
-                <span class="hint">For the Nano Banana image engines (switch them on under Images) and the SFW check that
-                  runs before them. They are used for SFW images only; the check's rules are on the Prompts page.</span>
+                <span class="hint">For the Nano Banana image engines (switch them on under Images). The SFW check that runs
+                  before them uses your vision model, not this key, so nothing reaches Google until it is judged SFW. They are used for SFW images only; the check's rules are on the Prompts page.</span>
               </div>
               <div class="field span-all"><label class="label" for="llmRouting">OpenRouter routing</label>
                 <select class="select" id="llmRouting">
@@ -4607,7 +4607,7 @@
   const PROMPT_HELP = {
     agent: "The agent's instructions for every chat. {{PERSONA}}, {{PIPELINE}} and {{TOOLS}} are filled in on each step.",
     planner: "The story planner's guide: how briefs become segment scripts in H3's prompt format.",
-    sfw_gate: "What counts as SFW for the Nano Banana (Google) image engines. A small Gemini model reads this, the prompt and any reference images, and answers sfw or nsfw. Only sfw reaches Google; everything else goes to the next engine.",
+    sfw_gate: "What counts as SFW for the Nano Banana (Google) image engines. Your vision model (the one inspect_image uses, on your chat provider -- never Google) reads this, the prompt and any reference images, and answers sfw or nsfw. Only sfw reaches Google; everything else goes to the next engine.",
   };
   const PROMPT_RULES_LABEL = {
     sfw_gate: ["Verdict format", "The server adds this after the SFW check's text so the verdict can always be read. Whatever the text above says, any answer that isn't exactly this shape counts as nsfw and the request skips Google."],

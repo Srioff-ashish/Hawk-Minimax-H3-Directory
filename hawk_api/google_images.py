@@ -1,10 +1,15 @@
 """Google's Gemini image models ("Nano Banana") and the SFW gate in front of them.
 
-The Nano Banana engines are for SFW work only. Before a request reaches one, a small Gemini text model reads
-the prompt and any reference images and answers sfw or nsfw, following an instruction the user can rewrite in
+The Nano Banana engines are for SFW work only. Before a request reaches one, this server's own vision model
+(HawkService.sfw_check: the vision role, the same models inspect_image uses, on the chat provider) reads the
+prompt and any reference images and answers sfw or nsfw, following an instruction the user can rewrite in
 Studio (Prompts page, "SFW check"). Only an explicit sfw lets the request through. An nsfw verdict, a reply
-that is not the expected JSON, a blocked or failed check: every one of them keeps the request away from
-Google, and the ladder moves on to the next engine.
+that is not the expected JSON, a failed check: every one of them keeps the request away from Google, and the
+ladder moves on to the next engine.
+
+The check deliberately does not run on Google. A request it judges may be NSFW, and sending that to Google
+to be judged would put exactly the content the gate exists to keep away into the account's API traffic.
+This module therefore only makes images; the verdict format lives here because both sides share it.
 
 Torch-free and Studio-free (httpx only), so jobs.py and the tests can import it without a GPU.
 """
@@ -21,8 +26,6 @@ from dataclasses import dataclass
 import httpx
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta"
-#: Reads the prompt and the reference images and answers sfw/nsfw. Cheap and able to see images.
-GATE_MODEL = "gemini-3.1-flash-lite"
 
 #: The editable part of the gate's instruction: what counts as SFW. Shown and saved on the Prompts page.
 DEFAULT_GATE_PROMPT = """You decide whether an image request may be sent to Google's Nano Banana image models, which this server uses for safe-for-work (SFW) images only. Anything that is not SFW is made by a different engine, so a request you mark nsfw is not refused -- it is routed elsewhere. You are deciding where the request goes, not whether it is allowed.
@@ -87,6 +90,17 @@ class GateVerdict:
 def gate_instruction(editable: str) -> str:
     """The full system instruction the gate model sees: the user's text, then the fixed output rules."""
     return f"{(editable or DEFAULT_GATE_PROMPT).rstrip()}\n\n{GATE_OUTPUT_RULES}"
+
+
+def readable_verdict(text: str) -> bool:
+    """Whether a reply holds a verdict at all, as opposed to one that says nsfw. An unreadable reply is a
+    reason to ask the next vision model; an nsfw verdict is an answer."""
+    fenced = re.search(r"\{.*\}", (text or "").strip(), re.S)
+    try:
+        data = json.loads(fenced.group(0)) if fenced else None
+    except json.JSONDecodeError:
+        return False
+    return isinstance(data, dict) and str(data.get("verdict") or "").strip().lower() in ("sfw", "nsfw")
 
 
 def parse_verdict(text: str) -> GateVerdict:
@@ -222,22 +236,3 @@ class GoogleImageClient:
         said = " ".join(part.get("text", "") for candidate in body.get("candidates") or []
                         for part in (candidate.get("content") or {}).get("parts") or []).strip()
         raise GoogleError("Google returned no image" + (f": {said[:200]}" if said else "."))
-
-    async def classify(self, model: str, instruction: str, prompt: str, action: str,
-                       references: list[tuple[bytes, str]] = ()) -> GateVerdict:
-        """The SFW gate. Never raises: a check that cannot run is an nsfw verdict, so Google is skipped."""
-        parts = [{"text": f"Request type: {action}\nReference images: {len(references)}\nPrompt:\n{prompt.strip()}"}]
-        parts += [_inline(data, mime) for data, mime in references]
-        payload = {"systemInstruction": {"parts": [{"text": gate_instruction(instruction)}]},
-                   "contents": [{"role": "user", "parts": parts}],
-                   "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}}
-        try:
-            body = await self._generate_content(model, payload, max_retries=1)
-        except GoogleError as exc:
-            return GateVerdict(False, f"The SFW check could not run ({exc}), so Google was not used.")
-        blocked = _blocked_reason(body)
-        if blocked:
-            return GateVerdict(False, f"The SFW check's own model declined to read this request ({blocked}).")
-        text = "".join(part.get("text", "") for candidate in body.get("candidates") or []
-                       for part in (candidate.get("content") or {}).get("parts") or [])
-        return parse_verdict(text)

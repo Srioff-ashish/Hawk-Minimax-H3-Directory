@@ -1401,9 +1401,7 @@ class HawkService:
             """The SFW gate, asked once per request however many Google rungs there are, and only when the
             walk reaches one -- a request a local engine answers never costs a check."""
             if not verdicts:
-                verdicts.append(await self.google.classify(
-                    self.settings.google_gate_model or google_images.GATE_MODEL, self.prompts.get("sfw_gate"),
-                    prompt, action, await google_references()))
+                verdicts.append(await self.sfw_check(prompt, action, sources))
             return verdicts[0]
 
         def judged_nsfw() -> dict:
@@ -1653,10 +1651,55 @@ class HawkService:
                                      "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"]}},
             "google": {"configured": self.google.configured, "sfw_only": True,
                        "models": {e.id: e.google_model for e in image_engines.ENGINES.values() if e.google},
-                       "sfw_check_model": self.settings.google_gate_model or google_images.GATE_MODEL,
+                       # the vision role, on the chat provider: the check never goes to Google
+                       "sfw_check_model": self.llm().agent_vision_model_override or self.settings.agent_vision_model,
                        "prices_usd": google_images.PRICES},
             "sizes": ["1024x1024", "1024x1536", "1536x1024", "896x1600", "1600x896"],
         }
+
+    async def sfw_check(self, prompt: str, action: str, sources: list[dict]) -> google_images.GateVerdict:
+        """Whether a request may go to Google, decided on this server's own vision model -- never on Google.
+
+        The check exists because the Nano Banana engines are for SFW work only, so the request it judges may
+        well be NSFW. Sending that to Google to be judged would put exactly the content the gate is there to
+        keep away from Google into the account's API traffic. So it runs on the vision role -- the same models
+        inspect_image uses, on the chat provider in force -- and Google only ever sees requests already
+        judged SFW.
+
+        Never raises. No vision model, no provider key, every model failing or answering in a shape that
+        cannot be read: each one is an nsfw verdict, so Google is skipped and the ladder moves on.
+        """
+        llm = self.llm()
+        try:
+            models = models_llm.resolve_many("vision", llm.agent_vision_model_override or self.settings.agent_vision_model,
+                                             await self.model_catalogue())
+        except Exception:  # an unreadable chain is no reason to raise out of a check that must not
+            models = []
+        if not models or not self.atlas.configured:
+            return google_images.GateVerdict(False, "No vision model is available on the chat provider to run the "
+                                                    "SFW check, so Google was not used.")
+        parts: list[dict] = [{"type": "text", "text": (
+            f"Request type: {action}\nReference images: {len(sources)}\nPrompt:\n{prompt.strip()}")}]
+        for index, asset in enumerate(sources, 1):
+            data, mime = await self.asset_file(asset["id"], 640)  # a 640 px copy is plenty to judge, as in inspect
+            parts.append({"type": "text", "text": f"Reference image {index}:"})
+            parts.append({"type": "image_url",
+                          "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
+        messages = [{"role": "system", "content": google_images.gate_instruction(self.prompts.get("sfw_gate"))},
+                    {"role": "user", "content": parts}]
+        failures = []
+        for model in models[:3]:
+            try:
+                text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=400, temperature=0,
+                                                max_retries=1)
+            except AtlasError as exc:  # a refusal or an outage: the next model in the chain may answer
+                failures.append(f"{model}: {str(exc)[:120]}")
+                continue
+            if google_images.readable_verdict(text):
+                return google_images.parse_verdict(text)
+            failures.append(f"{model}: no verdict in its reply")
+        return google_images.GateVerdict(False, "The SFW check could not get a verdict from the vision model ("
+                                                + "; ".join(failures)[:300] + "), so Google was not used.")
 
     async def _google_images(self, spec, prompt: str, references: list[tuple[bytes, str]], size,
                              n: int, notes: list) -> tuple[str, list[bytes], float]:

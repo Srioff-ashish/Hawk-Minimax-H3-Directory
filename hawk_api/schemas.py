@@ -292,8 +292,8 @@ class LLMSettingsUpdate(BaseModel):
     llm_provider: Literal["atlas", "openrouter"] | None = Field(None, description="Which service to call.")
     atlas_api_key_override: str | None = Field(None, description="Replaces ATLAS_API_KEY. Write-only.")
     google_api_key: str | None = Field(
-        None, description="Replaces GOOGLE_API_KEY: the Google AI Studio key the Nano Banana image engines and "
-                          "their SFW check use. Write-only.")
+        None, description="Replaces GOOGLE_API_KEY: the Google AI Studio key the Nano Banana image engines use. "
+                          "Write-only.")
     openrouter_url: str | None = Field(None, description="OpenRouter's OpenAI-compatible base URL.")
     openrouter_routing: Literal["sticky", "balanced", "quality", "cheapest", "fastest", "default"] | None = Field(
         None, description="Which service OpenRouter picks among the many serving one model id. One id is "
