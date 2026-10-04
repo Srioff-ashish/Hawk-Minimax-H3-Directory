@@ -148,6 +148,12 @@ class ImageRequest(BaseModel):
                                  "warns above a combined strength of 2.0). Lower it to be stricter.")
 
 
+class AICredentialCheck(BaseModel):
+    made_from: list[str] = Field(default_factory=list, max_length=16, description=
+        "Library images this one was made from, when its content credential lists input images. Each must itself "
+        "count as generated (verify its credential first), or an AI edit of a real photo would pass.")
+
+
 class AssetUpdate(BaseModel):
     collection: str | None = Field(None, description="Move to this collection (created if new).")
     tags: list[str] | None = Field(None, description="Replace all tags.")

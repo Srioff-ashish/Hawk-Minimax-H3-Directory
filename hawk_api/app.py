@@ -29,7 +29,7 @@ from .jobs import MODEL_FAMILIES, Conflict, HawkService, NotFound, RequestError,
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
-    AgentMessageIn, AgentSessionIn, AgentTalkIn, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
+    AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
@@ -214,6 +214,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Where an image came from, as the content checks see it: whether it counts as an uploaded photo,
         which ancestors make it one, and whether its origin has been corrected."""
         return service.provenance(asset_id)
+
+    @app.post("/v1/assets/{asset_id}/verify-ai-credential", tags=["assets"])
+    async def verify_ai_credential(asset_id: str, body: AICredentialCheck | None = None):
+        """Record an AI image made elsewhere (e.g. by Nano Banana) as generated, from the C2PA content credential
+        its maker signed into the file, so upload rules stop applying to it. made_from names the library images
+        it was made from, when its credential lists inputs. Undo with PATCH generated_from=""."""
+        return await service.verify_ai_credential(asset_id, made_from=(body.made_from if body else None))
 
     @app.post("/v1/assets/{asset_id}/restore-record", tags=["assets"])
     async def restore_asset_record(asset_id: str, undo: bool = False):

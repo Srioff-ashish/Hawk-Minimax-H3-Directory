@@ -7,3 +7,4 @@ python-multipart>=0.0.9
 pydantic>=2.6
 mcp>=1.10
 pillow>=10  # thumbnails for Studio and the agent chat
+c2pa-python>=0.38  # reads the content credential on uploaded AI images (verify-ai-credential)
