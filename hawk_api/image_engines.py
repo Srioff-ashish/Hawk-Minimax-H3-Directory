@@ -29,6 +29,7 @@ IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
 # more parts of the same request.
 GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
 GOOGLE_PRO_IMAGE_MODEL = "gemini-3-pro-image"  # Nano Banana Pro
+GOOGLE_LITE_IMAGE_MODEL = "gemini-3.1-flash-lite-image"  # Nano Banana 2 Lite: 1K only, the cheapest
 
 
 @dataclass(frozen=True)
@@ -115,6 +116,11 @@ ENGINES: dict[str, ImageEngine] = {
         max_refs=14, lora_family="", checks=True, google_model=GOOGLE_PRO_IMAGE_MODEL, price_key="nano-banana-pro",
         tag="nano-banana-pro",
     ),
+    "nano-banana-lite": ImageEngine(
+        id="nano-banana-lite", label="Nano Banana 2 Lite (Google)", where="google", generate=True, edit=True,
+        max_refs=14, lora_family="", checks=True, google_model=GOOGLE_LITE_IMAGE_MODEL,
+        price_key="nano-banana-lite", tag="nano-banana-lite",
+    ),
 }
 
 #: Every spelling a caller may send as ``engine``, mapped to a canonical id.
@@ -137,6 +143,8 @@ ALIASES = {
     "gemini": "nano-banana", "google": "nano-banana", "gemini-image": "nano-banana",
     "nano-banana-pro": "nano-banana-pro", "nanobanana-pro": "nano-banana-pro", "gemini-pro": "nano-banana-pro",
     "google-pro": "nano-banana-pro",
+    "nano-banana-lite": "nano-banana-lite", "nanobanana-lite": "nano-banana-lite", "nano-banana-2-lite": "nano-banana-lite",
+    "nano-lite": "nano-banana-lite", "gemini-lite": "nano-banana-lite", "google-lite": "nano-banana-lite",
 }
 
 #: Engine ids whose meaning changed, and the note to attach so the change is visible rather than silent.
@@ -183,7 +191,8 @@ IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
 _TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream",
-            "nano-banana": "nano-banana", "nano-banana-pro": "nano-banana-pro"}
+            "nano-banana": "nano-banana", "nano-banana-pro": "nano-banana-pro",
+            "nano-banana-lite": "nano-banana-lite"}
 
 
 def get(engine_id: str) -> ImageEngine | None:
@@ -303,6 +312,7 @@ DEFAULTS = {
         # Off until switched on in Studio: they need a Google API key, and they cost money.
         {"engine": "nano-banana", "enabled": False},
         {"engine": "nano-banana-pro", "enabled": False},
+        {"engine": "nano-banana-lite", "enabled": False},
     ],
     "edit": [
         {"engine": "qwen21", "enabled": True},  # 16 references, so a group shot no longer falls onto paid Seedream
@@ -311,6 +321,7 @@ DEFAULTS = {
         {"engine": "seedream-lite", "enabled": False},
         {"engine": "nano-banana", "enabled": False},
         {"engine": "nano-banana-pro", "enabled": False},
+        {"engine": "nano-banana-lite", "enabled": False},
     ],
     "busy": {"mode": "fall_through", "max_wait_seconds": 120},
     #: A retake that has exhausted the free engines asks before spending on a paid one.

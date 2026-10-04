@@ -3372,7 +3372,8 @@
     const spec = engineState.engines[id] || {};
     if (spec.where === "local") return "free, on this GPU";
     return { "z-image": "~$0.01", "pro-1.5k": "~$0.036", lite: "~$0.032",
-             "nano-banana": "~$0.067", "nano-banana-pro": "~$0.134" }[spec.price_key] || "paid";
+             "nano-banana": "~$0.067", "nano-banana-pro": "~$0.134",
+             "nano-banana-lite": "~$0.034" }[spec.price_key] || "paid";
   }
   function paintEngineList(action) {
     const host = $(action === "edit" ? "engineListEdit" : "engineListGenerate");

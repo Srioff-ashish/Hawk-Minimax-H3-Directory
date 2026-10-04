@@ -124,7 +124,7 @@ class ImageRequest(BaseModel):
     engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then "
                                "Krea 2, then Z-Image, then z-image/turbo, then Seedream; with references it starts at Qwen "
                                "Image 2.1), or one of qwen21, krea2, zimage, local, turbo, seedream, seedream-lite, "
-                               "nano-banana, nano-banana-pro. 'klein' still resolves, to qwen21. The Nano Banana engines "
+                               "nano-banana, nano-banana-pro, nano-banana-lite. 'klein' still resolves, to qwen21. The Nano Banana engines "
                                "(Google) take SFW requests only: an SFW check runs first, and anything it does not pass "
                                "goes to the next engine in the ladder, or fails when one is pinned.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "

@@ -85,7 +85,8 @@ SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 
 IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032,
                 # Google's 1K prices; bigger outputs bill higher, see google_images.PRICES
                 "nano-banana": google_images.price("nano-banana"),
-                "nano-banana-pro": google_images.price("nano-banana-pro")}
+                "nano-banana-pro": google_images.price("nano-banana-pro"),
+                "nano-banana-lite": google_images.price("nano-banana-lite")}
 SEEDREAM_EXTRA_REFERENCE = 0.003  # each reference image after the first
 
 
@@ -1473,7 +1474,7 @@ class HawkService:
                     if not why:
                         try:
                             used, images, cost = await self._google_images(
-                                spec, prompt, await google_references(), size, n)
+                                spec, prompt, await google_references(), size, n, notes)
                         except google_images.GoogleError as exc:
                             why = f"{spec.label}: {exc}"
                         else:
@@ -1658,10 +1659,13 @@ class HawkService:
         }
 
     async def _google_images(self, spec, prompt: str, references: list[tuple[bytes, str]], size,
-                             n: int) -> tuple[str, list[bytes], float]:
+                             n: int, notes: list) -> tuple[str, list[bytes], float]:
         """(model used, images, estimated USD). Gemini makes one image per request, so n runs in parallel."""
-        _, tier = google_images.image_config(size)
-        batches = await asyncio.gather(*(self.google.generate(spec.google_model, prompt, references, size)
+        max_tier = google_images.MAX_TIER.get(spec.id, "4K")
+        _, tier = google_images.image_config(size, max_tier)
+        if tier != google_images.image_config(size)[1]:
+            notes.append(f"{spec.label} makes 1K images only, so this one is 1K rather than the size asked for.")
+        batches = await asyncio.gather(*(self.google.generate(spec.google_model, prompt, references, size, max_tier)
                                          for _ in range(max(1, n or 1))))
         images = [image for batch in batches for image in batch]
         return spec.google_model, images, google_images.price(spec.id, tier) * len(images)

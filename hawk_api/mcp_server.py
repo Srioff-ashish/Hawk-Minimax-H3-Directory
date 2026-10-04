@@ -120,7 +120,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
         "resolve, to qwen21). Seedream Pro costs about $0.036 an image up to 2.36 MP and $0.072 above (e.g. "
         "2048x2048), so stay at 1536x1536 or smaller unless the user wants high resolution; Lite gives 2K+ for about "
         "$0.032, a little below Pro in quality. 'nano-banana' (Google Nano Banana 2, about $0.067) and "
-        "'nano-banana-pro' (about $0.134) generate and edit with up to 14 references, SFW only: an SFW check runs "
+        "'nano-banana-pro' (about $0.134) and 'nano-banana-lite' (about $0.034, 1K only) generate and edit with up to 14 references, SFW only: an SFW check runs "
         "first and anything it does not pass goes to the next engine (they are off until switched on in Studio). "
         "Results carry cost_usd for paid images. The result says which engine "
         "made it and what was skipped (tried). loras (local engines only): [{name, strength}] from image_options, from "

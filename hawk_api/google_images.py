@@ -61,7 +61,13 @@ BLOCKED = frozenset({"SAFETY", "IMAGE_SAFETY", "PROHIBITED_CONTENT", "IMAGE_PROH
 PRICES = {
     "nano-banana": {"1K": 0.067, "2K": 0.101, "4K": 0.151},
     "nano-banana-pro": {"1K": 0.134, "2K": 0.134, "4K": 0.24},
+    "nano-banana-lite": {"1K": 0.0336},
 }
+
+#: The largest output tier each model makes. Nano Banana 2 Lite is 1K only: Google lists 2K and 4K as
+#: unsupported, so a large size is sent to it as a 1K request rather than as one it would refuse.
+MAX_TIER = {"nano-banana-lite": "1K"}
+_TIERS = ("1K", "2K", "4K")
 
 
 class GoogleError(RuntimeError):
@@ -107,7 +113,7 @@ def _parse_size(size: str | None) -> tuple[int, int] | None:
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
-def image_config(size: str | None) -> tuple[dict, str]:
+def image_config(size: str | None, max_tier: str = "4K") -> tuple[dict, str]:
     """(imageConfig, output tier) for a "WxH" size.
 
     Gemini takes an aspect ratio and a resolution tier rather than pixels, so the nearest ratio is used, and a
@@ -124,6 +130,8 @@ def image_config(size: str | None) -> tuple[dict, str]:
     ratio = min(ASPECT_RATIOS, key=lambda r: abs(math.log(int(r.split(":")[0]) / int(r.split(":")[1])) - target))
     pixels = width * height
     tier = "1K" if pixels <= 1_700_000 else "2K" if pixels <= 4_500_000 else "4K"
+    if max_tier in _TIERS and _TIERS.index(tier) > _TIERS.index(max_tier):
+        tier = max_tier  # the model's ceiling, not the size asked for
     config = {"aspectRatio": ratio}
     if tier != "1K":
         config["imageSize"] = tier
@@ -192,10 +200,10 @@ class GoogleImageClient:
         raise GoogleError("Google did not answer.")  # pragma: no cover -- the loop always returns or raises
 
     async def generate(self, model: str, prompt: str, references: list[tuple[bytes, str]] = (),
-                       size: str | None = None) -> list[bytes]:
+                       size: str | None = None, max_tier: str = "4K") -> list[bytes]:
         """One image from a prompt, or an edit when references are given (images first, then the text)."""
         parts = [_inline(data, mime) for data, mime in references] + [{"text": prompt.strip()}]
-        config, _ = image_config(size)
+        config, _ = image_config(size, max_tier)
         payload = {"contents": [{"role": "user", "parts": parts}],
                    "generationConfig": {"responseModalities": ["TEXT", "IMAGE"],
                                         **({"imageConfig": config} if config else {})}}

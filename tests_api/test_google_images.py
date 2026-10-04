@@ -72,6 +72,17 @@ class Sizes(unittest.TestCase):
         self.assertEqual(gi.image_config("1600x896")[0]["aspectRatio"], "16:9")
         self.assertEqual(gi.image_config("4096x4096")[1], "4K")
 
+    def test_lite_never_asks_for_more_than_1k(self):
+        # Google lists 2K and 4K as unsupported on Nano Banana 2 Lite, so a large size must not request them.
+        config, tier = gi.image_config("2048x2048", gi.MAX_TIER["nano-banana-lite"])
+        self.assertEqual(tier, "1K")
+        self.assertNotIn("imageSize", config)
+        self.assertEqual(config["aspectRatio"], "1:1", "the ratio still follows the size asked for")
+        self.assertEqual(gi.price("nano-banana-lite", "2K"), gi.price("nano-banana-lite", "1K"))
+
+    def test_lite_is_the_cheapest_google_engine(self):
+        self.assertLess(gi.price("nano-banana-lite"), gi.price("nano-banana"))
+
     def test_bigger_outputs_cost_more(self):
         self.assertLess(gi.price("nano-banana", "1K"), gi.price("nano-banana", "2K"))
         self.assertGreater(gi.price("nano-banana-pro"), gi.price("nano-banana"))
@@ -122,7 +133,7 @@ class FakeGoogle:
         self.classified.append({"model": model, "instruction": instruction, "prompt": prompt, "refs": len(references)})
         return self.verdict
 
-    async def generate(self, model, prompt, references=(), size=None):
+    async def generate(self, model, prompt, references=(), size=None, max_tier="4K"):
         self.generated.append({"model": model, "prompt": prompt, "refs": len(references)})
         return [png((10, 200, 10))]
 
@@ -167,6 +178,21 @@ class TheLadder(unittest.IsolatedAsyncioTestCase):
         asset = self.service.store.get_asset(result["assets"][0]["id"])
         self.assertEqual(asset["source"]["engine"], "nano-banana")
         self.assertEqual(asset["source"]["type"], "generated")
+
+    async def test_a_large_size_on_lite_is_made_at_1k_and_says_so(self):
+        google = self.use(FakeGoogle(sfw=True))
+        sizes = []
+        original = google.generate
+
+        async def generate(model, prompt, references=(), size=None, max_tier="4K"):
+            sizes.append((model, size, max_tier))
+            return await original(model, prompt, references, size)
+
+        google.generate = generate
+        result = await self.service.generate_images("a lighthouse at dusk", engine="nano-banana-lite", size="2048x2048")
+        self.assertEqual(result["engine"], "nano-banana-lite")
+        self.assertEqual(sizes, [(ie.GOOGLE_LITE_IMAGE_MODEL, "2048x2048", "1K")])
+        self.assertIn("1K", result["note"])
 
     async def test_an_nsfw_request_never_reaches_google_and_goes_to_the_next_engine(self):
         google = self.use(FakeGoogle(sfw=False))
