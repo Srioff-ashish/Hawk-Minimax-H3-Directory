@@ -123,8 +123,10 @@ class ImageRequest(BaseModel):
     seed: int | None = Field(None, ge=0)
     engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then "
                                "Krea 2, then Z-Image, then z-image/turbo, then Seedream; with references it starts at Qwen "
-                               "Image 2.1), or one of qwen21, krea2, zimage, local, turbo, seedream, seedream-lite. "
-                               "'klein' still resolves, to qwen21.")
+                               "Image 2.1), or one of qwen21, krea2, zimage, local, turbo, seedream, seedream-lite, "
+                               "nano-banana, nano-banana-pro. 'klein' still resolves, to qwen21. The Nano Banana engines "
+                               "(Google) take SFW requests only: an SFW check runs first, and anything it does not pass "
+                               "goes to the next engine in the ladder, or fails when one is pinned.")
     loras: list[ImageLoraIn] = Field(default_factory=list, description="LoRAs for local generation, from the running "
                                      "engine's family (file name or a unique part, optional strength). Qwen Image 2.1 "
                                      "always adds its repair LoRA on top, whatever is named here.")
@@ -283,6 +285,9 @@ class LLMSettingsUpdate(BaseModel):
 
     llm_provider: Literal["atlas", "openrouter"] | None = Field(None, description="Which service to call.")
     atlas_api_key_override: str | None = Field(None, description="Replaces ATLAS_API_KEY. Write-only.")
+    google_api_key: str | None = Field(
+        None, description="Replaces GOOGLE_API_KEY: the Google AI Studio key the Nano Banana image engines and "
+                          "their SFW check use. Write-only.")
     openrouter_url: str | None = Field(None, description="OpenRouter's OpenAI-compatible base URL.")
     openrouter_routing: Literal["sticky", "balanced", "quality", "cheapest", "fastest", "default"] | None = Field(
         None, description="Which service OpenRouter picks among the many serving one model id. One id is "

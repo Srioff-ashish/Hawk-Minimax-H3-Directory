@@ -766,6 +766,10 @@ class AgentService:
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
+        #: Chats whose current run made an image the SFW check kept away from Google. A retake of it must not step
+        #: up onto, or offer to pay for, a Google engine: the check would only turn it away again -- and a stepped-up
+        #: engine is pinned, so the retake would fail instead of falling through.
+        self._not_sfw: set[str] = set()
         self._awaiting_choice: dict[str, dict] = {}  # per chat: inspection wants a retake, the user has not picked yet
         self._makes: dict[str, set[asyncio.Task]] = {}  # per chat: pictures still rendering beside the talk
         self._final: dict[str, str] = {}  # per running chat: the status it ends with
@@ -1110,6 +1114,7 @@ class AgentService:
         self.store.save_session(session)
         self._stop.discard(session_id)
         self._failed_engines.pop(session_id, None)
+        self._not_sfw.discard(session_id)
         self._awaiting_choice.pop(session_id, None)
         self._tasks[session_id] = asyncio.create_task(self._run(session_id))
         return {"session": session, "message": message}
@@ -1131,6 +1136,7 @@ class AgentService:
         self.store.save_session(session)
         self._stop.discard(session_id)
         self._failed_engines.pop(session_id, None)
+        self._not_sfw.discard(session_id)
         self._awaiting_choice.pop(session_id, None)
         makes = max(0, min(MAX_TALK_MAKES, int(makes)))
         self._tasks[session_id] = asyncio.create_task(self._run(session_id, talk_rounds=rounds, makes=makes))
@@ -2020,6 +2026,7 @@ class AgentService:
         if not failed or str(args.get("engine") or args.get("model") or "auto").strip().lower() != "auto":
             return None
         ladder = await self.service.ready_image_engines("edit" if args.get("reference_asset_ids") else "generate")
+        ladder = self._without_google(session_id, ladder)
         if args.get("loras"):  # LoRAs (adult ones included) only run on the local engines, so stay among those
             ladder = [engine for engine in ladder if image_engines.get(engine).lora_family]
             # ... and only those that hold these particular files: stepping up onto an engine of another
@@ -2050,6 +2057,7 @@ class AgentService:
         if not failed or not self.service.image_engines.confirm_paid():
             return None
         ladder = await self.service.ready_image_engines("edit" if args.get("reference_asset_ids") else "generate")
+        ladder = self._without_google(session_id, ladder)
         top = max((ladder.index(engine) for engine in failed if engine in ladder), default=-1)
         if top < 0 or top + 1 >= len(ladder):
             return None
@@ -2098,7 +2106,15 @@ class AgentService:
             engine = source.get("engine") or image_engines.id_for_generator(str(source.get("generator") or ""))
             if engine:
                 self._failed_engines.setdefault(session_id, set()).add(engine)
+            if (source.get("sfw_check") or {}).get("verdict") == "nsfw":
+                self._not_sfw.add(session_id)
         return True
+
+    def _without_google(self, session_id: str, ladder: list[str]) -> list[str]:
+        """The ladder minus the Google engines, when this run's image was one the SFW check kept from them."""
+        if session_id not in self._not_sfw:
+            return ladder
+        return [engine for engine in ladder if not image_engines.get(engine).google]
 
     async def _execute(self, session_id: str, action: dict, asked_by: str = "",
                        subjects: tuple[str, ...] = ()) -> None:
@@ -2128,6 +2144,8 @@ class AgentService:
             else:
                 result = await self._call_mcp(name, args)
             ok = not (isinstance(result, dict) and result.get("_error"))
+            if ok and name == "generate_image" and isinstance(result, dict) and result.get("sfw_check_failed"):
+                self._not_sfw.add(session_id)
         except Exception as exc:
             result, ok = {"_error": str(exc) or type(exc).__name__}, False
         if stepped and ok and isinstance(result, dict):

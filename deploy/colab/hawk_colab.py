@@ -719,6 +719,7 @@ def start(
     token: str | None = None,
     atlas_api_key: str | None = None,
     openrouter_api_key: str | None = None,
+    google_api_key: str | None = None,
     llm_routing: str = "balanced",
     comfy_args: list[str] | None = None,
     log_dir: str = "/content/hawk_logs",
@@ -774,6 +775,10 @@ def start(
         if not atlas_api_key:
             env["HAWK_LLM_PROVIDER"] = "openrouter"
             print(f"Planning and chats go to OpenRouter ({llm_routing} routing).")
+    # The Nano Banana image engines (SFW only) and their SFW check. Switch the engines on in Studio -> Images.
+    if google_api_key:
+        env["GOOGLE_API_KEY"] = google_api_key
+        print("Google key found: the Nano Banana image engines can be switched on in Studio (SFW images only).")
 
     session = Session(comfy_dir, pack_dir, token, env, log_dir, comfy_args=list(comfy_args or []))
     _start_comfyui(session)

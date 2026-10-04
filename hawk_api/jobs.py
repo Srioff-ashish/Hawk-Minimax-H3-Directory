@@ -27,6 +27,7 @@ import httpx
 from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line
 
 from . import graph as graphs
+from . import google_images
 from . import image_engines
 from . import models_llm
 from . import pose_guide
@@ -80,7 +81,10 @@ SEEDREAM_PRO_15K = ((1536, 1536), (1776, 1328), (1328, 1776), (2048, 1152), (115
 SEEDREAM_PRO_2K = ((2048, 2048), (2304, 1728), (1728, 2304), (2720, 1530), (1530, 2720), (2496, 1664), (1664, 2496))
 SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 2848), (2496, 1664), (1664, 2496))
 # Estimated USD per image on Atlas (discounted list prices, Sept 2026); reported as cost_usd so the agent can budget.
-IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032}
+IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032,
+                # Google's 1K prices; bigger outputs bill higher, see google_images.PRICES
+                "nano-banana": google_images.price("nano-banana"),
+                "nano-banana-pro": google_images.price("nano-banana-pro")}
 SEEDREAM_EXTRA_REFERENCE = 0.003  # each reference image after the first
 
 
@@ -549,6 +553,13 @@ class HawkService:
         llm = self.llm()
         return self._llm_client(self.settings.atlas_url, llm.atlas_api_key_override or self.settings.atlas_api_key,
                                 None, "")
+
+    @property
+    def google(self) -> google_images.GoogleImageClient:
+        """The Gemini client for the Nano Banana engines and their SFW check, from the key in force.
+
+        Rebuilt on every access: it holds nothing but the key, so a key saved in Studio applies at once."""
+        return google_images.GoogleImageClient(self.llm().google_api_key or self.settings.google_api_key)
 
     def _llm_client(self, url: str, key: str, routing: dict | None, routing_key: str) -> AtlasClient:
         """One client per (url, key, routing), kept because a client carries a cached model list."""
@@ -1281,7 +1292,11 @@ class HawkService:
         # Every rung is on Atlas and the pod has no Atlas key: say so here rather than letting the request
         # reach an endpoint it cannot answer and come back as a status code for the agent to interpret.
         rungs = [spec for spec in (image_engines.get(rung) for rung in ladder) if spec]
-        if rungs and not any(spec.local for spec in rungs) and not self.image_atlas.configured:
+        if rungs and all(spec.google for spec in rungs) and not self.google.configured:
+            raise RequestError(
+                f"{', '.join(spec.label for spec in rungs)} runs on Google, and this pod has no Google API key. "
+                "Add one under Settings -> LLM Routing, or as the GOOGLE_API_KEY Colab secret.")
+        if rungs and all(spec.atlas for spec in rungs) and not self.image_atlas.configured:
             named = ", ".join(spec.label for spec in rungs)
             here = await self.ready_image_engines(action)
             raise RequestError(
@@ -1318,6 +1333,32 @@ class HawkService:
                     mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
                     references.append(f"data:{mime};base64," + base64.b64encode(await self.asset_bytes(asset)).decode("ascii"))
             return references
+
+        google_refs: list[tuple[bytes, str]] = []
+
+        async def google_references() -> list[tuple[bytes, str]]:
+            """The sources as (bytes, mime), built once and only if a Google engine is actually reached."""
+            if sources and not google_refs:
+                for asset in sources:
+                    mime = mimetypes.guess_type(asset["filename"])[0] or "image/png"
+                    google_refs.append((await self.asset_bytes(asset), mime))
+            return google_refs
+
+        verdicts: list[google_images.GateVerdict] = []
+
+        async def sfw_check() -> google_images.GateVerdict:
+            """The SFW gate, asked once per request however many Google rungs there are, and only when the
+            walk reaches one -- a request a local engine answers never costs a check."""
+            if not verdicts:
+                verdicts.append(await self.google.classify(
+                    self.settings.google_gate_model or google_images.GATE_MODEL, self.prompts.get("sfw_gate"),
+                    prompt, action, await google_references()))
+            return verdicts[0]
+
+        def judged_nsfw() -> dict:
+            """Carried on an image another engine made after the SFW check turned the request away from Google,
+            so a retake knows not to offer Google for it again."""
+            return {"sfw_check_failed": verdicts[0].reason} if verdicts and not verdicts[0].sfw else {}
 
         # One wait budget for the whole walk, as a deadline: three local rungs must not each wait the full
         # time on the same busy ComfyUI. Nothing to wait for when no local engine is in the ladder.
@@ -1359,7 +1400,42 @@ class HawkService:
                                                 reference_asset_ids, engine_id=engine_id,
                                                 extra={"loras": local.loras, "seconds": local.seconds,
                                                        **({"enhanced_prompt": local.enhanced_prompt}
-                                                          if local.enhanced_prompt else {})})
+                                                          if local.enhanced_prompt else {}), **judged_nsfw()})
+
+            if spec.google:
+                if loras and not said_loras:
+                    notes.append("Image LoRAs only apply to the local engines; ignored here.")
+                    said_loras = True
+                if not self.google.configured:
+                    why = (f"{spec.label} needs a Google API key: add one under Settings -> LLM Routing, or as the "
+                           "GOOGLE_API_KEY Colab secret.")
+                else:
+                    # The fixed platform rules, exactly as the local engines apply them. A refusal is final: it is
+                    # never handed on to another engine.
+                    try:
+                        local_images.check_prompt(prompt)
+                        local_images.check_edit(prompt, sources, [], lookup=self.store.get_asset)
+                    except LocalImageError as exc:
+                        raise RequestError(" ".join([str(exc), *notes]).strip()) from None
+                    verdict = await sfw_check()
+                    why = "" if verdict.sfw else (
+                        f"{spec.label} takes SFW requests only, and the SFW check did not pass this one: {verdict.reason}")
+                    if not why:
+                        try:
+                            used, images, cost = await self._google_images(
+                                spec, prompt, await google_references(), size, n)
+                        except google_images.GoogleError as exc:
+                            why = f"{spec.label}: {exc}"
+                        else:
+                            return await self._image_result(
+                                prompt, images, used, spec.tag_for(action), notes, tried, reference_asset_ids,
+                                engine_id=spec.id, extra={"cost_usd": round(cost, 4), "sfw_check": verdict.reason})
+                # Not SFW, no key, or Google failed: the next engine gets the request, as for any other failure.
+                last_error = RequestError(" ".join([why, *notes]).strip())
+                if not more:
+                    raise last_error
+                tried.append({"engine": engine_id, "skipped": why[:300]})
+                continue
 
             if loras and not said_loras:
                 notes.append("Image LoRAs only apply to the local engines; ignored here.")
@@ -1377,7 +1453,8 @@ class HawkService:
                 continue
             tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
             return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids,
-                                            engine_id=image_engines.id_for_tag(tag), extra={"cost_usd": round(cost, 4)})
+                                            engine_id=image_engines.id_for_tag(tag),
+                                            extra={"cost_usd": round(cost, 4), **judged_nsfw()})
         if last_error:
             raise last_error
         raise RequestError("No image engine could make this image. " + (
@@ -1420,6 +1497,11 @@ class HawkService:
         ready = []
         for engine_id in self.image_ladder(action):
             spec = image_engines.get(engine_id)
+            if spec.google:
+                # ready means "could run": whether a given request passes the SFW check is only known per request
+                if self.google.configured:
+                    ready.append(engine_id)
+                continue
             if not spec.local:
                 if self.image_atlas.configured:
                     ready.append(engine_id)
@@ -1466,7 +1548,11 @@ class HawkService:
         rows = []
         for row in settings[action]:
             spec = image_engines.get(row["engine"])
-            if not spec.local:
+            if spec.google:
+                ready, why = self.google.configured, "" if self.google.configured else (
+                    f"{spec.label} runs on Google. This pod has no Google API key: add one under Settings -> LLM "
+                    "Routing, or as the GOOGLE_API_KEY Colab secret.")
+            elif not spec.local:
                 ready, why = self.image_atlas.configured, "" if self.image_atlas.configured else (
                     f"{spec.label} runs on Atlas Cloud, whichever service answers chat. This pod has no Atlas key: "
                     "add one under Settings -> Connect, or use one of the engines on this GPU.")
@@ -1483,7 +1569,8 @@ class HawkService:
                     ready, why = True, ""
             rows.append({"engine": spec.id, "label": spec.label, "where": spec.where, "enabled": row["enabled"],
                          "cost_usd": IMAGE_PRICES.get(spec.price_key, 0.0), "max_refs": spec.max_refs,
-                         "lora_family": spec.lora_family, "ready": ready, "why_not": why})
+                         "lora_family": spec.lora_family, "ready": ready, "why_not": why,
+                         **({"sfw_only": True} if spec.google else {})})
         return rows
 
     async def image_options(self) -> dict:
@@ -1513,8 +1600,21 @@ class HawkService:
                       "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,
                       "prices_usd": {"z-image/turbo": IMAGE_PRICES["z-image"], "seedream 1.5K (up to 2.36 MP)": IMAGE_PRICES["pro-1.5k"],
                                      "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"]}},
+            "google": {"configured": self.google.configured, "sfw_only": True,
+                       "models": {e.id: e.google_model for e in image_engines.ENGINES.values() if e.google},
+                       "sfw_check_model": self.settings.google_gate_model or google_images.GATE_MODEL,
+                       "prices_usd": google_images.PRICES},
             "sizes": ["1024x1024", "1024x1536", "1536x1024", "896x1600", "1600x896"],
         }
+
+    async def _google_images(self, spec, prompt: str, references: list[tuple[bytes, str]], size,
+                             n: int) -> tuple[str, list[bytes], float]:
+        """(model used, images, estimated USD). Gemini makes one image per request, so n runs in parallel."""
+        _, tier = google_images.image_config(size)
+        batches = await asyncio.gather(*(self.google.generate(spec.google_model, prompt, references, size)
+                                         for _ in range(max(1, n or 1))))
+        images = [image for batch in batches for image in batch]
+        return spec.google_model, images, google_images.price(spec.id, tier) * len(images)
 
     async def _atlas_images(self, prompt: str, model: str, references: list[str], size, n: int, seed,
                             notes: list) -> tuple[str, list[bytes], float]:
@@ -1562,6 +1662,9 @@ class HawkService:
                   "prompt": prompt.strip()[:PROMPT_RECORD_LIMIT], "references": list(reference_asset_ids or [])}
         if extra and extra.get("loras"):
             source["loras"] = extra["loras"]
+        if extra and extra.get("sfw_check_failed"):
+            # Kept on the asset so a retake read back from it (agent._retake_args) knows Google is not an option.
+            source["sfw_check"] = {"verdict": "nsfw", "reason": extra["sfw_check_failed"]}
         assets = []
         for number, data in enumerate(images, 1):
             extension, mime = _image_type(data)

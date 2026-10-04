@@ -25,6 +25,11 @@ IMAGE_LITE_MODEL = "bytedance/seedream-v5.0-lite"  # 2K-4K only, a little cheape
 IMAGE_LITE_EDIT_MODEL = "bytedance/seedream-v5.0-lite/edit"
 IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
 
+# Google Gemini image models ("Nano Banana"). One model both generates and edits: reference images are just
+# more parts of the same request.
+GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image"  # Nano Banana 2
+GOOGLE_PRO_IMAGE_MODEL = "gemini-3-pro-image"  # Nano Banana Pro
+
 
 @dataclass(frozen=True)
 class ImageEngine:
@@ -32,12 +37,13 @@ class ImageEngine:
 
     ``checks`` is the content-check boundary made explicit: engines that run on the user's own GPU have no
     provider-side moderation, so ``check_prompt`` / ``check_edit`` apply to them. Atlas engines are left to
-    Atlas's own moderation, which is how they have always worked here.
+    Atlas's own moderation, which is how they have always worked here. Google engines run the same checks as
+    the local ones, and on top of them the SFW gate (google_images.py): they are only ever used for SFW work.
     """
 
     id: str
     label: str
-    where: str  # "local" (this GPU) or "atlas" (paid, over the network)
+    where: str  # "local" (this GPU), "atlas" (paid, over the network) or "google" (paid, Gemini API)
     generate: bool
     edit: bool
     max_refs: int  # reference images an edit may take; 0 when edit is False
@@ -45,6 +51,7 @@ class ImageEngine:
     checks: bool  # run the local content checks before this engine draws anything
     atlas_model: str = ""
     atlas_edit_model: str = ""
+    google_model: str = ""  # Gemini model id; generates and edits alike
     price_key: str = ""  # key into jobs.IMAGE_PRICES; "" means free
     tag: str = ""  # asset tag written by _image_result; user-visible in the Media library
     edit_tag: str = ""
@@ -52,6 +59,14 @@ class ImageEngine:
     @property
     def local(self) -> bool:
         return self.where == "local"
+
+    @property
+    def atlas(self) -> bool:
+        return self.where == "atlas"
+
+    @property
+    def google(self) -> bool:
+        return self.where == "google"
 
     def supports(self, action: str) -> bool:
         return self.edit if action == "edit" else self.generate
@@ -89,6 +104,17 @@ ENGINES: dict[str, ImageEngine] = {
         lora_family="", checks=False, atlas_model=IMAGE_LITE_MODEL, atlas_edit_model=IMAGE_LITE_EDIT_MODEL,
         price_key="lite", tag="seedream",
     ),
+    # Google's Nano Banana models, for SFW work only: a request the SFW gate does not pass is never sent to
+    # them, and the ladder moves on to the next engine instead. Both take up to 14 reference images.
+    "nano-banana": ImageEngine(
+        id="nano-banana", label="Nano Banana 2 (Google)", where="google", generate=True, edit=True, max_refs=14,
+        lora_family="", checks=True, google_model=GOOGLE_IMAGE_MODEL, price_key="nano-banana", tag="nano-banana",
+    ),
+    "nano-banana-pro": ImageEngine(
+        id="nano-banana-pro", label="Nano Banana Pro (Google)", where="google", generate=True, edit=True,
+        max_refs=14, lora_family="", checks=True, google_model=GOOGLE_PRO_IMAGE_MODEL, price_key="nano-banana-pro",
+        tag="nano-banana-pro",
+    ),
 }
 
 #: Every spelling a caller may send as ``engine``, mapped to a canonical id.
@@ -107,6 +133,10 @@ ALIASES = {
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
+    "nano-banana": "nano-banana", "nanobanana": "nano-banana", "nano-banana-2": "nano-banana", "nano": "nano-banana",
+    "gemini": "nano-banana", "google": "nano-banana", "gemini-image": "nano-banana",
+    "nano-banana-pro": "nano-banana-pro", "nanobanana-pro": "nano-banana-pro", "gemini-pro": "nano-banana-pro",
+    "google-pro": "nano-banana-pro",
 }
 
 #: Engine ids whose meaning changed, and the note to attach so the change is visible rather than silent.
@@ -152,7 +182,8 @@ BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = {
 IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
-_TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream"}
+_TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream",
+            "nano-banana": "nano-banana", "nano-banana-pro": "nano-banana-pro"}
 
 
 def get(engine_id: str) -> ImageEngine | None:
@@ -269,12 +300,17 @@ DEFAULTS = {
         {"engine": "turbo", "enabled": True},
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
+        # Off until switched on in Studio: they need a Google API key, and they cost money.
+        {"engine": "nano-banana", "enabled": False},
+        {"engine": "nano-banana-pro", "enabled": False},
     ],
     "edit": [
         {"engine": "qwen21", "enabled": True},  # 16 references, so a group shot no longer falls onto paid Seedream
         {"engine": "krea2", "enabled": True},
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
+        {"engine": "nano-banana", "enabled": False},
+        {"engine": "nano-banana-pro", "enabled": False},
     ],
     "busy": {"mode": "fall_through", "max_wait_seconds": 120},
     #: A retake that has exhausted the free engines asks before spending on a paid one.
@@ -387,8 +423,13 @@ class ImageEngineStore:
             live = [ENGINES[row["engine"]] for row in data[action] if row["enabled"]]
             if not live:
                 continue  # save() refuses this; an older file could still hold it
+            if all(engine.google for engine in live):
+                found.append(f"Only Google engines are on for {action}: they take SFW requests only, so anything "
+                             "the SFW check does not pass has no engine to go to and fails.")
             if not any(engine.local for engine in live):
-                found.append(f"No local engine is on for {action}: every image will be billed to Atlas.")
+                services = " or ".join(name for name, on in (("Atlas", any(e.atlas for e in live)),
+                                                            ("Google", any(e.google for e in live))) if on)
+                found.append(f"No local engine is on for {action}: every image will be billed to {services}.")
             elif all(engine.local for engine in live):
                 found.append(f"Only local engines are on for {action}: it fails when ComfyUI is busy or down.")
         found += self.missing_base_loras(installed)
@@ -417,7 +458,8 @@ class ImageEngineStore:
         return {**data, "warnings": self.warnings(data, installed), "defaults": shown, "base": base,
                 "families": {f: family_label(f) for f in sorted(IMAGE_FAMILIES)}, "engines": [
             {"id": e.id, "label": e.label, "where": e.where, "generate": e.generate, "edit": e.edit,
-             "max_refs": e.max_refs, "lora_family": e.lora_family, "price_key": e.price_key}
+             "max_refs": e.max_refs, "lora_family": e.lora_family, "price_key": e.price_key,
+             **({"sfw_only": True} if e.google else {})}
             for e in ENGINES.values()]}
 
     @staticmethod

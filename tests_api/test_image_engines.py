@@ -21,9 +21,31 @@ class Descriptors(unittest.TestCase):
         for key, engine in ie.ENGINES.items():
             self.assertEqual(key, engine.id)
 
-    def test_only_local_engines_run_the_content_checks(self):
+    def test_every_engine_but_atlas_runs_the_content_checks(self):
+        # Atlas engines are left to Atlas's own moderation; local and Google engines run the fixed rules here.
         for engine in ie.ENGINES.values():
-            self.assertEqual(engine.checks, engine.local, f"{engine.id}: checks must follow where it runs")
+            self.assertEqual(engine.checks, not engine.atlas, f"{engine.id}: checks must follow where it runs")
+
+    def test_every_engine_runs_somewhere_known(self):
+        for engine in ie.ENGINES.values():
+            self.assertIn(engine.where, ("local", "atlas", "google"), engine.id)
+
+    def test_google_engines_carry_a_gemini_model_and_a_price(self):
+        google = [e for e in ie.ENGINES.values() if e.google]
+        self.assertTrue(google, "the Nano Banana engines should be registered")
+        for engine in google:
+            self.assertTrue(engine.google_model.startswith("gemini-"), engine.id)
+            self.assertTrue(engine.price_key, f"{engine.id} costs money, so it needs a price")
+            self.assertEqual(engine.atlas_model, "", engine.id)
+            self.assertEqual(engine.lora_family, "", f"{engine.id} takes no LoRAs")
+
+    def test_google_engines_ship_switched_off(self):
+        # They need a key and they cost money: a pod must not start spending on them by itself.
+        for action in ("generate", "edit"):
+            self.assertFalse(any(e.startswith("nano-banana") for e in ie.order(ie.DEFAULTS[action], action)), action)
+            rows = {r["engine"]: r["enabled"] for r in ie.full_order(ie.DEFAULTS[action], action)}
+            self.assertIs(rows["nano-banana"], False)
+            self.assertIs(rows["nano-banana-pro"], False)
 
     def test_an_engine_that_cannot_edit_takes_no_references(self):
         for engine in ie.ENGINES.values():
@@ -38,13 +60,13 @@ class Descriptors(unittest.TestCase):
                 self.assertEqual(engine.atlas_model, "", engine.id)
                 self.assertEqual(engine.price_key, "", f"{engine.id} runs here, so it is free")
                 self.assertTrue(engine.lora_family, f"{engine.id} needs a LoRA family")
-            else:
+            elif engine.atlas:
                 self.assertTrue(engine.atlas_model, engine.id)
                 self.assertTrue(engine.price_key, engine.id)
 
     def test_an_atlas_engine_that_edits_names_an_edit_model(self):
         for engine in ie.ENGINES.values():
-            if engine.edit and not engine.local:
+            if engine.edit and engine.atlas:
                 self.assertTrue(engine.atlas_edit_model, engine.id)
 
     def test_tag_for_uses_the_edit_tag_only_on_edits(self):
@@ -286,6 +308,11 @@ class Store(unittest.TestCase):
         self.assertTrue(any("billed to Atlas" in w for w in view["warnings"]))
         view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "qwen21"}])
         self.assertTrue(any("ComfyUI is busy" in w for w in view["warnings"]))
+
+    def test_a_google_only_ladder_warns_that_nsfw_has_nowhere_to_go(self):
+        view = self.store.save(generate=[{"engine": "nano-banana"}, {"engine": "nano-banana-pro"}])
+        self.assertTrue(any("SFW requests only" in w for w in view["warnings"]), view["warnings"])
+        self.assertTrue(any("billed to Google" in w for w in view["warnings"]), view["warnings"])
 
     def test_a_mixed_ladder_warns_about_nothing(self):
         view = self.store.save(generate=[{"engine": "krea2"}, {"engine": "seedream"}],
