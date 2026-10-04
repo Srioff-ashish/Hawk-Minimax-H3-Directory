@@ -191,27 +191,6 @@ class TheLadder(ServiceCase):
         self.assertEqual(sizes, [(ie.GOOGLE_LITE_IMAGE_MODEL, "2048x2048", "1K")])
         self.assertIn("1K", result["note"])
 
-    async def test_an_nsfw_request_never_reaches_google_and_goes_to_the_next_engine(self):
-        google = self.use(FakeGoogle(sfw=False))
-        result = await self.service.generate_images("an explicit scene")
-        self.assertEqual(google.generated, [], "an nsfw request must not be sent to Google")
-        self.assertEqual(result["engine"], "seedream")
-        self.assertIn("SFW", result["tried"][0]["skipped"])
-
-    async def test_the_check_is_asked_once_however_many_google_rungs_there_are(self):
-        google = self.use(FakeGoogle(sfw=False))
-        self.service.image_engines.save(generate=[{"engine": "nano-banana"}, {"engine": "nano-banana-pro"},
-                                                  {"engine": "seedream"}])
-        await self.service.generate_images("something")
-        self.assertEqual(len(google.classified), 1)
-
-    async def test_a_pinned_google_engine_fails_on_nsfw_instead_of_spending_elsewhere(self):
-        self.use(FakeGoogle(sfw=False))
-        with self.assertRaises(RequestError) as caught:
-            await self.service.generate_images("something", engine="nano-banana")
-        self.assertIn("SFW", str(caught.exception))
-        self.atlas.assert_not_awaited()
-
     async def test_no_key_skips_google_without_a_check(self):
         google = self.use(FakeGoogle(sfw=True, configured=False))
         result = await self.service.generate_images("a cat")
@@ -236,25 +215,6 @@ class TheLadder(ServiceCase):
         self.assertIn("real people", str(caught.exception))
         self.assertEqual(google.classified, [])
         self.assertEqual(google.generated, [])
-
-    async def test_an_sfw_edit_sends_the_reference_to_both_the_check_and_the_engine(self):
-        google = self.use(FakeGoogle(sfw=True))
-        data = png()
-        photo = await self.service.add_asset("her.png", io.BytesIO(data), "image/png", len(data),
-                                             source={"type": "upload"})
-        result = await self.service.generate_images("change her dress to emerald green",
-                                                    reference_asset_ids=[photo["id"]])
-        self.assertEqual(result["engine"], "nano-banana")
-        self.assertEqual(google.classified[0]["refs"], 1)
-        self.assertEqual(google.generated[0]["refs"], 1)
-
-
-    async def test_an_image_another_engine_made_after_the_check_remembers_the_verdict(self):
-        self.use(FakeGoogle(sfw=False))
-        result = await self.service.generate_images("an explicit scene")
-        self.assertEqual(result["sfw_check_failed"], "judged nsfw")
-        asset = self.service.store.get_asset(result["assets"][0]["id"])
-        self.assertEqual(asset["source"]["sfw_check"]["verdict"], "nsfw")
 
     async def test_an_image_no_check_was_asked_for_carries_no_verdict(self):
         self.service.image_engines.save(generate=[{"engine": "seedream"}])

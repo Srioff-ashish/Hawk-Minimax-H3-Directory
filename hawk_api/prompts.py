@@ -15,7 +15,7 @@ import time
 
 from .google_images import DEFAULT_GATE_PROMPT, GATE_OUTPUT_RULES
 
-PROMPT_NAMES = ("agent", "planner", "sfw_gate")
+PROMPT_NAMES = ("agent", "planner")
 HISTORY_LIMIT = 30
 
 #: Appended to every agent and custom planner prompt. Not editable.

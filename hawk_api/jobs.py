@@ -1395,19 +1395,6 @@ class HawkService:
                     google_refs.append((await self.asset_bytes(asset), mime))
             return google_refs
 
-        verdicts: list[google_images.GateVerdict] = []
-
-        async def sfw_check() -> google_images.GateVerdict:
-            """The SFW gate, asked once per request however many Google rungs there are, and only when the
-            walk reaches one -- a request a local engine answers never costs a check."""
-            if not verdicts:
-                verdicts.append(await self.sfw_check(prompt, action, sources))
-            return verdicts[0]
-
-        def judged_nsfw() -> dict:
-            """Carried on an image another engine made after the SFW check turned the request away from Google,
-            so a retake knows not to offer Google for it again."""
-            return {"sfw_check_failed": verdicts[0].reason} if verdicts and not verdicts[0].sfw else {}
 
         # One wait budget for the whole walk, as a deadline: three local rungs must not each wait the full
         # time on the same busy ComfyUI. Nothing to wait for when no local engine is in the ladder.
@@ -1449,7 +1436,7 @@ class HawkService:
                                                 reference_asset_ids, engine_id=engine_id,
                                                 extra={"loras": local.loras, "seconds": local.seconds,
                                                        **({"enhanced_prompt": local.enhanced_prompt}
-                                                          if local.enhanced_prompt else {}), **judged_nsfw()})
+                                                          if local.enhanced_prompt else {})})
 
             if spec.google:
                 if loras and not said_loras:
@@ -1466,20 +1453,16 @@ class HawkService:
                         local_images.check_edit(prompt, sources, [], lookup=self.store.get_asset)
                     except LocalImageError as exc:
                         raise RequestError(" ".join([str(exc), *notes]).strip()) from None
-                    verdict = await sfw_check()
-                    why = "" if verdict.sfw else (
-                        f"{spec.label} takes SFW requests only, and the SFW check did not pass this one: {verdict.reason}")
-                    if not why:
-                        try:
-                            used, images, cost = await self._google_images(
-                                spec, prompt, await google_references(), size, n, notes)
-                        except google_images.GoogleError as exc:
-                            why = f"{spec.label}: {exc}"
-                        else:
-                            return await self._image_result(
-                                prompt, images, used, spec.tag_for(action), notes, tried, reference_asset_ids,
-                                engine_id=spec.id, extra={"cost_usd": round(cost, 4), "sfw_check": verdict.reason})
-                # Not SFW, no key, or Google failed: the next engine gets the request, as for any other failure.
+                    try:
+                        used, images, cost = await self._google_images(
+                            spec, prompt, await google_references(), size, n, notes)
+                    except google_images.GoogleError as exc:
+                        why = f"{spec.label}: {exc}"
+                    else:
+                        return await self._image_result(
+                            prompt, images, used, spec.tag_for(action), notes, tried, reference_asset_ids,
+                            engine_id=spec.id, extra={"cost_usd": round(cost, 4)})
+                # No key, or Google declined or failed: the next engine gets the request.
                 last_error = RequestError(" ".join([why, *notes]).strip())
                 if not more:
                     raise last_error
@@ -1503,7 +1486,7 @@ class HawkService:
             tag = "z-image" if used.startswith("z-image/") else "seedream" if "seedream" in used else "atlas"
             return await self._image_result(prompt, images, used, tag, notes, tried, reference_asset_ids,
                                             engine_id=image_engines.id_for_tag(tag),
-                                            extra={"cost_usd": round(cost, 4), **judged_nsfw()})
+                                            extra={"cost_usd": round(cost, 4)})
         if last_error:
             raise last_error
         raise RequestError("No image engine could make this image. " + (
