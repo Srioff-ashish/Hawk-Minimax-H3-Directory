@@ -26,6 +26,7 @@ import httpx
 
 from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line
 
+from . import billing
 from . import content_credentials
 from . import graph as graphs
 from . import google_images
@@ -344,6 +345,20 @@ class Store:
             rows = self._db.execute("SELECT data FROM assets ORDER BY created_at DESC").fetchall()
         return [json.loads(row[0]) for row in rows]
 
+    def made_by_engines(self, engines) -> list[dict]:
+        """Every asset, live or deleted, that one of these image engines made. The billing page totals Google
+        spend from these, and a deleted image was still paid for, so the history table counts too."""
+        engines = list(engines)
+        if not engines:
+            return []
+        marks = ", ".join("?" * len(engines))
+        with self._lock:
+            rows = self._db.execute(f"SELECT data FROM assets WHERE json_extract(data, '$.source.engine') IN ({marks})",
+                                    engines).fetchall()
+            rows += self._db.execute(f"SELECT data FROM asset_history "
+                                     f"WHERE json_extract(data, '$.source.engine') IN ({marks})", engines).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
     #: What a deleted asset leaves behind: enough to say where it came from, nothing to show.
     HISTORY_FIELDS = ("id", "filename", "kind", "sha256", "created_at", "source")
 
@@ -451,6 +466,7 @@ class HawkService:
         self.render_done_hooks: list = []
         self.local_images = LocalImageEngine(self)
         self._model_cache: dict[str, tuple[float, list[str]]] = {}
+        self._billing_cache: dict[tuple, tuple[float, dict]] = {}  # see billing()
         self._llm_clients: dict[tuple[str, str, str], AtlasClient] = {}  # per url+key+routing; see the atlas property
         self._tasks: list[asyncio.Task] = []
         #: Plans in flight. A plan is written by the gateway rather than queued in ComfyUI, so it runs as a
@@ -1650,8 +1666,8 @@ class HawkService:
 
     PERSON_CHECK_PROMPT = (
         "You check one uploaded image for a single thing: does it show a real, identifiable person? Answer "
-        "identifiable when the image shows something that identifies a particular person, such as a distinctive "
-        "face. When unsure, answer not identifiable. Reply with only one JSON object: "
+        "identifiable when the image shows something that identifies a particular person."
+        " When unsure, answer not identifiable. Reply with only one JSON object: "
         '{"identifiable": true or false, "reason": "one short sentence"}')
 
     async def person_check(self, asset_id: str, force: bool = False) -> dict:
@@ -1689,7 +1705,9 @@ class HawkService:
         failures = []
         for model in models[:3]:
             try:
-                text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=300, temperature=0,
+                # Room to think first: qwen3.6 is a reasoning model and spent all of the old 300 tokens
+                # thinking (finish_reason "length", empty reply), so every check fell through to the next model.
+                text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=3000, temperature=0,
                                                 max_retries=1)
             except AtlasError as exc:
                 failures.append(f"{model}: {str(exc)[:120]}")
@@ -1704,6 +1722,8 @@ class HawkService:
                 continue
             result = {"identifiable": answer["identifiable"], "reason": str(answer.get("reason") or "")[:300],
                       "model": model, "checked_at": time.time()}
+            if failures:  # which models were passed over, and why, so a silent fallback shows on the asset
+                result["skipped"] = [failure[:200] for failure in failures]
             asset = self.store.get_asset(asset_id) or asset
             asset["source"] = {**(asset.get("source") or {}), "person_check": result}
             self.store.add_asset(asset)
@@ -1772,6 +1792,42 @@ class HawkService:
         return google_images.GateVerdict(False, "The SFW check could not get a verdict from the vision model ("
                                                 + "; ".join(failures)[:300] + "), so Google was not used.")
 
+    #: How long a billing report is reused. The providers' billing APIs are rate-limited and change slowly.
+    BILLING_TTL = 120.0
+
+    async def billing(self, provider: str, days: int = 30, refresh: bool = False) -> dict:
+        """Balance and spend for one paid service: "atlas", "openrouter" or "google". See hawk_api/billing.py.
+
+        A missing key is a report with configured false, not an error, so the page can say what to add."""
+        llm = self.llm()
+        keys = {
+            "atlas": (llm.atlas_api_key_override or self.settings.atlas_api_key,),
+            "openrouter": (llm.openrouter_api_key or self.settings.openrouter_api_key,
+                           llm.openrouter_management_key or self.settings.openrouter_management_key),
+            "google": (llm.google_api_key or self.settings.google_api_key,),
+        }
+        if provider not in keys:
+            raise RequestError(f"No billing for {provider!r}; use one of: {', '.join(keys)}.")
+        # The keys are part of the cache key (hashed), so a key changed in Studio is never answered from the
+        # previous account's figures.
+        cache_key = (provider, int(days), hashlib.sha256("\0".join(keys[provider]).encode()).hexdigest())
+        hit = self._billing_cache.get(cache_key)
+        if hit and not refresh and time.time() - hit[0] < self.BILLING_TTL:
+            return hit[1]
+        try:
+            if provider == "atlas":
+                report = await billing.atlas_report(keys["atlas"][0], days)
+            elif provider == "openrouter":
+                report = await billing.openrouter_report(*keys["openrouter"], days=days)
+            else:
+                report = billing.google_report(self.store.made_by_engines(billing.GOOGLE_ENGINES), days,
+                                               configured=bool(keys["google"][0]))
+        except billing.BillingError as exc:
+            raise Unavailable(str(exc)) from None
+        report["fetched_at"] = time.time()
+        self._billing_cache[cache_key] = (time.time(), report)
+        return report
+
     async def _google_images(self, spec, prompt: str, references: list[tuple[bytes, str]], size,
                              n: int, notes: list) -> tuple[str, list[bytes], float]:
         """(model used, images, estimated USD). Gemini makes one image per request, so n runs in parallel."""
@@ -1830,6 +1886,9 @@ class HawkService:
                   "prompt": prompt.strip()[:PROMPT_RECORD_LIMIT], "references": list(reference_asset_ids or [])}
         if extra and extra.get("loras"):
             source["loras"] = extra["loras"]
+        if extra and isinstance(extra.get("cost_usd"), (int, float)) and images:
+            # Per image, kept on the asset: Google has no spend API, so the billing page totals these.
+            source["cost_usd"] = round(extra["cost_usd"] / len(images), 6)
         if extra and extra.get("sfw_check_failed"):
             # Kept on the asset so a retake read back from it (agent._retake_args) knows Google is not an option.
             source["sfw_check"] = {"verdict": "nsfw", "reason": extra["sfw_check_failed"]}

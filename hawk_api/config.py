@@ -105,6 +105,9 @@ class LLMSettings:
     #: Replaces GOOGLE_API_KEY for the Nano Banana engines and their SFW check. Not an LLM provider for chat:
     #: it lives here because this is the store that already keeps keys write-only.
     google_api_key: str = ""
+    #: An OpenRouter *management* key, for the OpenRouter billing page only: it unlocks spend per model
+    #: (/activity). Never used for chat; the ordinary key does that.
+    openrouter_management_key: str = ""
 
 
 class LLMSettingsStore:
@@ -121,9 +124,9 @@ class LLMSettingsStore:
     FIELDS = ("llm_provider", "atlas_api_key_override", "openrouter_url", "openrouter_api_key",
               "openrouter_routing", "planner_model_override", "agent_model_override",
               "agent_summary_model_override", "agent_prose_model_override", "agent_vision_model_override",
-              "google_api_key")
+              "google_api_key", "openrouter_management_key")
     #: Written but never read back out: a key is set or replaced, not displayed or round-tripped.
-    SECRETS = ("atlas_api_key_override", "openrouter_api_key", "google_api_key")
+    SECRETS = ("atlas_api_key_override", "openrouter_api_key", "google_api_key", "openrouter_management_key")
 
     def __init__(self, data_dir: str):
         self.path = os.path.join(data_dir, "llm_settings.json")
@@ -203,6 +206,8 @@ class Settings:
     #: replace it; a Colab secret is what survives a restart. Their SFW check does not use it: it runs on the
     #: vision model (agent_vision_model), so nothing reaches Google before it has been judged SFW.
     google_api_key: str = ""
+    #: OpenRouter management key (OPENROUTER_MANAGEMENT_KEY), read only by the billing page. Optional.
+    openrouter_management_key: str = ""
     #: Measured on a live pod: grok-4.6 bills $2.00/M in and $6.00/M out against deepseek-v4-pro's $0.955 and
     #: $1.911, and the director re-sends the whole prompt on every step of a chain, so this one setting moves
     #: the bill more than anything else here. deepseek-v4-pro drove a full generate -> inspect -> report chain
@@ -298,6 +303,7 @@ class Settings:
             atlas_api_key=_env("ATLAS_API_KEY"),
             openrouter_api_key=_env("OPENROUTER_API_KEY"),
             google_api_key=_env("GOOGLE_API_KEY") or _env("GEMINI_API_KEY"),
+            openrouter_management_key=_env("OPENROUTER_MANAGEMENT_KEY"),
             agent_model=_env("HAWK_AGENT_MODEL", cls.agent_model),
             agent_prose_model=_env("HAWK_AGENT_PROSE_MODEL", cls.agent_prose_model),
             agent_summary_model=_env("HAWK_AGENT_SUMMARY_MODEL", cls.agent_summary_model),

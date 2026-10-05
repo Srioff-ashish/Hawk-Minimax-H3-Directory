@@ -384,6 +384,15 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         # failing much later. "honoured" false means this provider does not serve what was asked for.
         return {**stored, **set_flags, **store.hints(), "models": await service.model_report()}
 
+    @app.get("/v1/billing/{provider}", tags=["system"])
+    async def billing_report(provider: str, days: int = 30, refresh: bool = False):
+        """Balance and spend for one paid service: atlas, openrouter or google (Nano Banana).
+
+        Atlas and OpenRouter are read from their billing APIs; Google has none, so its figures are this
+        server's own record of the Nano Banana images it made. days is 1-180 (OpenRouter's per-model data
+        stops at 30). Cached for two minutes; refresh=true asks the provider again."""
+        return await service.billing(provider.lower(), days=max(1, min(days, 180)), refresh=refresh)
+
     @app.put("/v1/settings/llm", tags=["system"])
     async def update_llm_settings(body: LLMSettingsUpdate):
         values = body.model_dump(exclude_unset=True)

@@ -720,6 +720,7 @@ def start(
     atlas_api_key: str | None = None,
     openrouter_api_key: str | None = None,
     google_api_key: str | None = None,
+    openrouter_management_key: str | None = None,
     llm_routing: str = "balanced",
     comfy_args: list[str] | None = None,
     log_dir: str = "/content/hawk_logs",
@@ -778,6 +779,8 @@ def start(
     # The Nano Banana image engines (SFW only) and their SFW check. Switch the engines on in Studio -> Images.
     if google_api_key:
         env["GOOGLE_API_KEY"] = google_api_key
+    if openrouter_management_key:  # only the OpenRouter billing page reads it
+        env["OPENROUTER_MANAGEMENT_KEY"] = openrouter_management_key
         print("Google key found: the Nano Banana image engines can be switched on in Studio (SFW images only).")
 
     session = Session(comfy_dir, pack_dir, token, env, log_dir, comfy_args=list(comfy_args or []))

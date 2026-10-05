@@ -303,6 +303,9 @@ class LLMSettingsUpdate(BaseModel):
         "'cheapest' takes the cheapest at any weight, 'fastest' sorts by throughput, 'default' lets "
         "OpenRouter decide. Ignored on Atlas.")
     openrouter_api_key: str | None = Field(None, description="OpenRouter key. Write-only.")
+    openrouter_management_key: str | None = Field(
+        None, description="OpenRouter management key, used only by the billing page to read spend per model. "
+                          "Never used for chat. Write-only.")
     #: Each of these takes a comma-separated chain, best first, because a model id belongs to a provider: the
     #: later ids are what run when the provider in force does not serve the earlier ones. A single id still
     #: works and is read as a one-element chain.

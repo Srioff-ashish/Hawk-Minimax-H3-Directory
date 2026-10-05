@@ -114,6 +114,7 @@
        with no dot, so the whole row goes rather than leaving an empty flex line behind; the topbar's
        own #topQueue pill already carries it. */
     :root[data-sidebar="collapsed"] .sidebar-foot .status-line:not([role="status"]) { display: none; }
+    :root[data-sidebar="collapsed"] .nav-group { display: none; }
     /* margin-left:auto has nothing to push against at 64px, so the count becomes a corner badge. */
     :root[data-sidebar="collapsed"] .nav-count { position: absolute; top: 2px; right: 5px; margin: 0;
       min-width: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
@@ -308,6 +309,34 @@
   .table td { padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   .table tr:last-child td { border-bottom: 0; }
   .table-wrap { overflow-x: auto; }
+
+  /* ---------- billing pages (OpenRouter, Atlas Cloud, Google Cloud) ---------- */
+  .nav-group { margin: 14px 10px 4px; font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  /* minmax(0, 1fr): an auto column grows to the model table's width and pushes the page sideways on a phone. */
+  .billing { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; --accent: var(--brand); }
+  .bill-model { min-width: 190px; }
+  .billing[data-provider="openrouter"] { --accent: #6467f2; }
+  .billing[data-provider="atlas"] { --accent: #0ea5e9; }
+  .billing[data-provider="gcp"] { --accent: #1a73e8; }
+  .bill-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+  .bill-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .bill-stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; box-shadow: var(--shadow-sm); min-width: 0; }
+  .bill-stat.lead { border-top: 3px solid var(--accent); }
+  .bill-stat .k { font-size: 12px; color: var(--muted); font-weight: 550; }
+  .bill-stat .v { font-size: 22px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .bill-stat .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .bill-chart { display: flex; align-items: flex-end; gap: 2px; height: 160px; }
+  .bill-chart .col { flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: flex-end; }
+  .bill-chart .col span { display: block; width: 100%; min-height: 2px; background: var(--accent); border-radius: 3px 3px 0 0; opacity: .85; }
+  .bill-chart .col:hover span { opacity: 1; }
+  .bill-chart .col.zero span { background: var(--line); }
+  .bill-axis { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .bill-share { height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; min-width: 60px; }
+  .bill-share span { display: block; height: 100%; background: var(--accent); }
+  .bill-note { padding: 10px 14px; border-radius: var(--r); background: var(--info-soft); color: var(--ink-2); font-size: 13px; }
+  .bill-note.warn { background: var(--warn-soft); }
+  .bill-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   /* ---------- drawer, modal, toasts ---------- */
   .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(8, 10, 16, .45); backdrop-filter: blur(2px); }
@@ -574,7 +603,7 @@
     .sidebar { position: sticky; top: 0; z-index: 30; height: auto; flex-direction: row; align-items: center; gap: 2px; padding: 8px 10px; overflow-x: auto;
                border-right: 0; border-bottom: 1px solid var(--line); }
     .logo { padding: 0 10px 0 2px; }
-    .logo small, .nav-label-long, .sidebar-foot, .wordmark, .divider-v, #topHealthText, .crumbs { display: none; }
+    .logo small, .nav-label-long, .sidebar-foot, .wordmark, .divider-v, #topHealthText, .crumbs, .nav-group { display: none; }
     .topbar { flex-wrap: wrap; }
     .nav-item { width: auto; padding: 7px 10px; }
     .topbar { position: static; padding: 12px 16px; }
@@ -610,6 +639,10 @@
   <symbol id="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
   <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.8v14.4L19 12z"/></symbol>
   <symbol id="i-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+  <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 1 1 .9-8.9A6 6 0 0 1 19.5 11 3.5 3.5 0 0 1 18 18z"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
   <symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
 </svg>
 
@@ -622,6 +655,10 @@
     <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Media</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
+    <div class="nav-group">Billing</div>
+    <a class="nav-item" href="#openrouter" data-route="openrouter"><svg><use href="#i-route"/></svg><span>OpenRouter</span></a>
+    <a class="nav-item" href="#atlas" data-route="atlas"><svg><use href="#i-globe"/></svg><span>Atlas Cloud</span></a>
+    <a class="nav-item" href="#gcp" data-route="gcp"><svg><use href="#i-cloud"/></svg><span>Google Cloud</span></a>
     <div class="sidebar-foot">
       <div class="status-line" role="status" aria-live="polite"><span class="dot" id="healthDot"></span><span id="healthText">Checking server…</span></div>
       <div class="status-line"><span id="queueText">No active jobs</span></div>
@@ -947,6 +984,11 @@
       </div>
     </main>
 
+    <!-- ================================================================ BILLING -->
+    <main class="content" id="page-openrouter" data-page="openrouter" hidden><div class="billing" data-provider="openrouter" id="billing-openrouter"></div></main>
+    <main class="content" id="page-atlas" data-page="atlas" hidden><div class="billing" data-provider="atlas" id="billing-atlas"></div></main>
+    <main class="content" id="page-gcp" data-page="gcp" hidden><div class="billing" data-provider="gcp" id="billing-gcp"></div></main>
+
     <!-- ================================================================ ASSETS -->
     <main class="content" id="page-assets" data-page="assets" hidden>
       <div class="media-layout">
@@ -1051,6 +1093,12 @@
               <div class="field"><label class="label" for="llmOpenrouterKey">OpenRouter API Key</label>
                 <div class="row"><input class="input mono" id="llmOpenrouterKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
                   <button class="btn btn-sm" type="button" id="llmOpenrouterKeyForget" hidden>Forget</button></div>
+              </div>
+              <div class="field span-all"><label class="label" for="llmOpenrouterMgmtKey">OpenRouter management key (billing only, optional)</label>
+                <div class="row"><input class="input mono" id="llmOpenrouterMgmtKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
+                  <button class="btn btn-sm" type="button" id="llmOpenrouterMgmtKeyForget" hidden>Forget</button></div>
+                <span class="hint">Lets the OpenRouter billing page show spend per model and per day. Never used for chat.
+                  Create one at openrouter.ai &rarr; Settings &rarr; Management keys, or set the OPENROUTER_MANAGEMENT_KEY Colab secret.</span>
               </div>
               <div class="field span-all"><label class="label" for="llmGoogleKey">Google AI API Key (Nano Banana)</label>
                 <div class="row"><input class="input mono" id="llmGoogleKey" type="password" placeholder="not set" style="flex:1;min-width:160px">
@@ -1328,6 +1376,9 @@
     connect: ["Connect & settings", "Chat connectors, API and preferences"],
     agent: ["Agent", "Your autonomous video director"],
     prompts: ["Prompts", "Edit the agent, story planner and SFW check instructions"],
+    openrouter: ["OpenRouter", "Credits, spend and usage per model"],
+    atlas: ["Atlas Cloud", "Balance, spend and usage per model"],
+    gcp: ["Google Cloud", "Nano Banana spend on the Gemini API"],
   };
   const DRAFT_KEY = "hawkH3Draft";
 
@@ -1486,11 +1537,154 @@
     if (page === "assets") loadMedia();
     if (page === "connect") renderConnect();
     if (page === "library") renderLibrary();
+    if (BILLING_PAGES[page] && (PREFIX || token)) loadBilling(page);
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
   window.addEventListener("hashchange", route);
+
+  // --------------------------------------------------------------- billing
+
+  //: Route -> the server's provider name. Each page is drawn from GET /v1/billing/<provider>, which reads
+  //: Atlas's and OpenRouter's billing APIs, and this server's own record of Nano Banana images for Google.
+  const BILLING_PAGES = { openrouter: "openrouter", atlas: "atlas", gcp: "google" };
+  const BILLING_PERIODS = { openrouter: [7, 30], atlas: [7, 30, 90, 180], gcp: [7, 30, 90, 180] };
+  const billing = { days: Number(storage.get("hawkH3BillingDays")) || 30, seq: {} };
+
+  function usd(value) {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "\u2014";
+    const n = Number(value), digits = n !== 0 && Math.abs(n) < 1 ? 4 : 2;
+    return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
+  const compact = (n) => Number(n || 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
+  const billingDays = (route) => BILLING_PERIODS[route].includes(billing.days) ? billing.days
+    : BILLING_PERIODS[route].filter((d) => d <= billing.days).pop() || BILLING_PERIODS[route][0];
+
+  function billingStat(label, value, sub = "", lead = false) {
+    return `<div class="bill-stat${lead ? " lead" : ""}"><div class="k">${esc(label)}</div><div class="v">${esc(value)}</div>`
+      + (sub ? `<div class="s">${esc(sub)}</div>` : "") + `</div>`;
+  }
+
+  function billingUsage(row) {
+    const parts = [];
+    if (row.input_tokens || row.output_tokens) parts.push(`${compact(row.input_tokens)} in \u00b7 ${compact(row.output_tokens)} out tokens`);
+    if (row.images) parts.push(`${compact(row.images)} image${row.images === 1 ? "" : "s"}`);
+    if (row.video_seconds) parts.push(`${compact(row.video_seconds)} s video`);
+    return parts.join(" \u00b7 ") || "\u2014";
+  }
+
+  function billingChart(daily) {
+    if (!daily || !daily.length) return "";
+    const max = Math.max(...daily.map((d) => d.amount), 0);
+    const cols = daily.map((d) => {
+      const pct = max ? Math.max(1.5, (d.amount / max) * 100) : 0;
+      return `<div class="col${d.amount ? "" : " zero"}" title="${esc(d.date)}: ${esc(usd(d.amount))}"><span style="height:${d.amount ? pct : 1.5}%"></span></div>`;
+    }).join("");
+    const mid = daily[Math.floor(daily.length / 2)].date;
+    return `<section class="card"><div class="card-head"><h2>Daily spend</h2><span class="hint">UTC days \u00b7 peak ${esc(usd(max))}</span></div>
+      <div class="card-body"><div class="bill-chart" role="img" aria-label="Daily spend chart">${cols}</div>
+      <div class="bill-axis"><span>${esc(daily[0].date)}</span><span>${esc(mid)}</span><span>${esc(daily[daily.length - 1].date)}</span></div></div></section>`;
+  }
+
+  function billingModels(report) {
+    const rows = report.models;
+    if (!rows) return "";
+    if (!rows.length) return `<section class="card"><div class="card-head"><h2>By model</h2></div><div class="card-body hint">Nothing spent in this period.</div></section>`;
+    const total = rows.reduce((sum, r) => sum + r.amount, 0);
+    const body = rows.map((r) => {
+      const share = total ? (r.amount / total) * 100 : 0;
+      const under = r.providers && r.providers.length ? `<div class="hint">via ${esc(r.providers.join(", "))}</div>` : "";
+      return `<tr><td class="bill-model"><div class="mono" style="overflow-wrap:anywhere">${esc(r.model)}</div>${under}</td><td>${esc(r.type || "")}</td>`
+        + `<td class="num">${esc(compact(r.requests))}</td><td style="white-space:nowrap">${esc(billingUsage(r))}</td><td class="num"><b>${esc(usd(r.amount))}</b></td>`
+        + `<td><div class="bill-share" title="${share.toFixed(1)}%"><span style="width:${share.toFixed(1)}%"></span></div></td></tr>`;
+    }).join("");
+    return `<section class="card"><div class="card-head"><h2>By model</h2><span class="hint">${rows.length} model${rows.length === 1 ? "" : "s"}</span></div>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Model</th><th>Type</th><th class="num">Requests</th><th>Usage</th><th class="num">Spend</th><th>Share</th></tr></thead>
+      <tbody>${body}</tbody></table></div></section>`;
+  }
+
+  function billingToolbar(route, report) {
+    const periods = BILLING_PERIODS[route].map((d) =>
+      `<label><input type="radio" name="billDays-${route}" value="${d}"${d === billingDays(route) ? " checked" : ""}>${d} days</label>`).join("");
+    const links = Object.entries((report && report.links) || {}).map(([label, url]) =>
+      `<a class="btn btn-sm" href="${esc(url)}" target="_blank" rel="noopener"><svg><use href="#i-external"/></svg>${esc(label)}</a>`).join("");
+    const when = report && report.fetched_at ? `Updated ${new Date(report.fetched_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "";
+    return `<div class="bill-bar"><div class="segmented" role="radiogroup" aria-label="Period">${periods}</div>
+      <button class="btn btn-sm" type="button" data-bill-refresh><svg><use href="#i-refresh"/></svg>Refresh</button>
+      <span class="hint">${esc(when)}</span><div class="spacer"></div>${links}</div>`;
+  }
+
+  function billingStats(route, r) {
+    const days = r.period ? r.period.days : billingDays(route);
+    const perDay = r.total != null ? `${usd(r.total / days)} a day on average` : "";
+    if (route === "atlas") {
+      const b = r.balance || {};
+      const top = Object.entries(r.by_type || {})[0];
+      return billingStat("Available balance", usd(b.available), b.bonus ? `${usd(b.cash)} cash \u00b7 ${usd(b.bonus)} bonus` : "", true)
+        + billingStat(`Spent, last ${days} days`, usd(r.total), perDay)
+        + billingStat("Biggest category", top ? top[0] : "\u2014", top ? usd(top[1]) : "")
+        + billingStat("Frozen", usd(b.frozen), "held for running tasks");
+    }
+    if (route === "openrouter") {
+      const b = r.balance || {}, k = r.key;
+      return billingStat("Credits remaining", usd(b.available), `of ${usd(b.bought)} bought`, true)
+        + (r.total != null ? billingStat(`Spent, last ${days} days`, usd(r.total), perDay) : "")
+        + billingStat("Used, all time", usd(b.used))
+        + (k ? billingStat("This key: this month", usd(k.month), `${usd(k.today)} today \u00b7 ${usd(k.week)} this week`) : "")
+        + (k && k.limit != null ? billingStat("Key limit left", usd(k.limit_remaining), `of a ${usd(k.limit)} limit`) : "");
+    }
+    const images = (r.models || []).reduce((sum, m) => sum + (m.images || 0), 0);
+    return billingStat(`Spent, last ${days} days (est.)`, usd(r.total), perDay, true)
+      + billingStat("Images made", compact(images), "Nano Banana engines")
+      + billingStat("Average per image", images ? usd(r.total / images) : "\u2014")
+      + billingStat("Prepaid balance", "In AI Studio", "Google has no API for it");
+  }
+
+  function renderBillingReport(route, r) {
+    const parts = [billingToolbar(route, r)];
+    if (r.message) parts.push(`<div class="bill-note${r.configured ? "" : " warn"}">${esc(r.message)}</div>`);
+    if (r.configured || route === "gcp") {
+      parts.push(`<div class="bill-stats">${billingStats(route, r)}</div>`);
+      if (r.by_type && Object.keys(r.by_type).length) {
+        parts.push(`<div class="bill-chips">${Object.entries(r.by_type).map(([kind, amount]) =>
+          `<span class="badge plain">${esc(kind)} \u00b7 ${esc(usd(amount))}</span>`).join("")}</div>`);
+      }
+      parts.push(billingChart(r.daily), billingModels(r));
+    }
+    for (const note of r.notes || []) parts.push(`<div class="bill-note">${esc(note)}</div>`);
+    return parts.join("");
+  }
+
+  async function loadBilling(route, refresh = false) {
+    const host = $(`billing-${route}`);
+    const seq = billing.seq[route] = (billing.seq[route] || 0) + 1;
+    if (!host.dataset.loaded) host.innerHTML = `<div class="card"><div class="card-body hint">Loading\u2026</div></div>`;
+    else host.querySelector("[data-bill-refresh]")?.setAttribute("disabled", "");
+    let html;
+    try {
+      const report = await api(`/v1/billing/${BILLING_PAGES[route]}?days=${billingDays(route)}${refresh ? "&refresh=true" : ""}`);
+      html = renderBillingReport(route, report);
+    } catch (error) {
+      html = billingToolbar(route, null) + `<div class="bill-note warn">Could not load billing: ${esc(error.message)}</div>`;
+    }
+    if (seq !== billing.seq[route]) return;  // a newer load for this page has started
+    host.innerHTML = html;
+    host.dataset.loaded = "1";
+  }
+
+  for (const route of Object.keys(BILLING_PAGES)) {
+    const host = $(`billing-${route}`);
+    host.addEventListener("change", (event) => {
+      if (!event.target.name || !event.target.name.startsWith("billDays-")) return;
+      billing.days = Number(event.target.value);
+      storage.set("hawkH3BillingDays", String(billing.days));
+      loadBilling(route);
+    });
+    host.addEventListener("click", (event) => {
+      if (event.target.closest("[data-bill-refresh]")) loadBilling(route, true);
+    });
+  }
 
   // --------------------------------------------------------------- health
 
@@ -3486,7 +3680,8 @@
     // as the key: the box says whether one is stored, and typing replaces it.
     for (const [field, flag, hint] of [["llmAtlasKey", "atlas_api_key_override_set", "atlas_api_key_override_hint"],
                                        ["llmOpenrouterKey", "openrouter_api_key_set", "openrouter_api_key_hint"],
-                                       ["llmGoogleKey", "google_api_key_set", "google_api_key_hint"]]) {
+                                       ["llmGoogleKey", "google_api_key_set", "google_api_key_hint"],
+                                       ["llmOpenrouterMgmtKey", "openrouter_management_key_set", "openrouter_management_key_hint"]]) {
       $(field).value = "";
       $(field).placeholder = data[flag] ? `saved (${data[hint]}) \u2014 type to replace` : "not set";
       $(`${field}Forget`).hidden = !data[flag];
@@ -3546,7 +3741,7 @@
     } catch (error) { toast("Could not save", error.message, "bad"); }
   }
   for (const [field, key] of [["llmAtlasKey", "atlas_api_key_override"], ["llmOpenrouterKey", "openrouter_api_key"],
-                              ["llmGoogleKey", "google_api_key"]]) {
+                              ["llmGoogleKey", "google_api_key"], ["llmOpenrouterMgmtKey", "openrouter_management_key"]]) {
     $(`${field}Forget`).onclick = async () => {
       if (!(await confirmAction("Forget this key?", "The pod goes back to the key in its own environment, "
         + "if it has one. Nothing else changes.", "Forget"))) return;
@@ -3568,6 +3763,7 @@
     if ($("llmAtlasKey").value.trim()) body.atlas_api_key_override = $("llmAtlasKey").value.trim();
     if ($("llmOpenrouterKey").value.trim()) body.openrouter_api_key = $("llmOpenrouterKey").value.trim();
     if ($("llmGoogleKey").value.trim()) body.google_api_key = $("llmGoogleKey").value.trim();
+    if ($("llmOpenrouterMgmtKey").value.trim()) body.openrouter_management_key = $("llmOpenrouterMgmtKey").value.trim();
     await saveLLMSettings(body);
     loadImageEngines();  // a new Google key changes which image engines can run
   };
