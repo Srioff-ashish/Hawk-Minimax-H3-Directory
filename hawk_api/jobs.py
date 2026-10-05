@@ -295,6 +295,9 @@ class Store:
     _SCHEMA = """
     CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS asset_history (id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS llm_calls (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, service TEXT NOT NULL,
+                                          outcome TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS llm_calls_service ON llm_calls(service, seq);
     CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, prompt_id TEXT,
         data TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
@@ -358,6 +361,32 @@ class Store:
             rows += self._db.execute(f"SELECT data FROM asset_history "
                                      f"WHERE json_extract(data, '$.source.engine') IN ({marks})", engines).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    #: How many chat calls the log keeps. Older ones are dropped; the provider's own console has the rest.
+    LLM_CALLS_KEPT = 5000
+
+    def add_llm_call(self, entry: dict) -> None:
+        with self._lock:
+            cursor = self._db.execute("INSERT INTO llm_calls (at, service, outcome, data) VALUES (?, ?, ?, ?)",
+                                      (entry["at"], entry["service"], entry["outcome"], json.dumps(entry)))
+            if cursor.lastrowid % 100 == 0:  # trim now and then rather than on every call
+                self._db.execute("DELETE FROM llm_calls WHERE seq <= ?", (cursor.lastrowid - self.LLM_CALLS_KEPT,))
+            self._db.commit()
+
+    def llm_calls(self, service: str = "", limit: int = 100, failed_only: bool = False,
+                  before: int | None = None) -> list[dict]:
+        """Newest first. ``before`` is a seq from an earlier page, for "load more"."""
+        where, args = [], []
+        if service:
+            where.append("service = ?"); args.append(service)
+        if failed_only:
+            where.append("outcome != 'ok'")
+        if before:
+            where.append("seq < ?"); args.append(before)
+        sql = "SELECT seq, data FROM llm_calls" + (" WHERE " + " AND ".join(where) if where else "")
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY seq DESC LIMIT ?", (*args, limit)).fetchall()
+        return [dict(json.loads(data), seq=seq) for seq, data in rows]
 
     #: What a deleted asset leaves behind: enough to say where it came from, nothing to show.
     HISTORY_FIELDS = ("id", "filename", "kind", "sha256", "created_at", "source")
@@ -585,6 +614,7 @@ class HawkService:
         found = self._llm_clients.get(cache_key)
         if found is None:
             found = self._llm_clients[cache_key] = AtlasClient(url, key, routing=routing)
+            found.on_call = self._log_llm_call
         return found
 
     # ------------------------------------------------------------ lifecycle
@@ -1708,7 +1738,7 @@ class HawkService:
                 # Room to think first: qwen3.6 is a reasoning model and spent all of the old 300 tokens
                 # thinking (finish_reason "length", empty reply), so every check fell through to the next model.
                 text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=3000, temperature=0,
-                                                max_retries=1)
+                                                max_retries=1, purpose="person check")
             except AtlasError as exc:
                 failures.append(f"{model}: {str(exc)[:120]}")
                 continue
@@ -1782,7 +1812,7 @@ class HawkService:
         for model in models[:3]:
             try:
                 text, _ = await self.atlas.chat(model, messages, json_mode=True, max_tokens=400, temperature=0,
-                                                max_retries=1)
+                                                max_retries=1, purpose="sfw check")
             except AtlasError as exc:  # a refusal or an outage: the next model in the chain may answer
                 failures.append(f"{model}: {str(exc)[:120]}")
                 continue
@@ -1791,6 +1821,36 @@ class HawkService:
             failures.append(f"{model}: no verdict in its reply")
         return google_images.GateVerdict(False, "The SFW check could not get a verdict from the vision model ("
                                                 + "; ".join(failures)[:300] + "), so Google was not used.")
+
+    def _log_llm_call(self, entry: dict) -> None:
+        try:
+            self.store.add_llm_call(entry)
+        except Exception as exc:  # the log must never break the call it describes
+            log.warning("hawk_api: could not log an LLM call: %s", exc)
+
+    def llm_calls(self, service: str, limit: int = 100, failed_only: bool = False, before: int | None = None) -> dict:
+        calls = self.store.llm_calls(service, max(1, min(limit, 500)), failed_only, before)
+        return {"service": service, "calls": calls, "next_before": calls[-1]["seq"] if len(calls) == limit else None}
+
+    async def openrouter_generation(self, generation_id: str) -> dict:
+        """OpenRouter's own record of one call: provider, latency, cost, finish reason. Needs the call's id."""
+        if not re.fullmatch(r"gen-[\w-]{4,80}", generation_id or ""):
+            raise RequestError("Not an OpenRouter generation id (they start with gen-).")
+        key = self.llm().openrouter_api_key or self.settings.openrouter_api_key
+        if not key:
+            raise RequestError("No OpenRouter key on the server.")
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as http:
+                response = await http.get(f"{billing.OPENROUTER_URL}/generation", params={"id": generation_id},
+                                          headers={"Authorization": f"Bearer {key}"})
+        except httpx.HTTPError as exc:
+            raise Unavailable(f"OpenRouter could not be reached: {type(exc).__name__}") from None
+        if response.status_code == 404:
+            raise NotFound("OpenRouter has no record of this call yet -- it publishes one up to a few minutes "
+                           "after the call -- or the call was made with a different key.")
+        if response.status_code >= 400:
+            raise Unavailable(f"OpenRouter answered {response.status_code}.")
+        return (response.json() or {}).get("data") or {}
 
     #: How long a billing report is reused. The providers' billing APIs are rate-limited and change slowly.
     BILLING_TTL = 120.0
@@ -2129,7 +2189,8 @@ class HawkService:
         for model in models:
             try:
                 reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
-                                                    max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature)
+                                                    max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature,
+                                                    purpose="story planner")
                 if not (reply or "").strip():
                     raise Unavailable(f"{model} returned an empty plan.")
                 # "Not empty" was the only thing ever checked here, so a plan cut off mid-sentence was stored as

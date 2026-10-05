@@ -393,6 +393,23 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         stops at 30). Cached for two minutes; refresh=true asks the provider again."""
         return await service.billing(provider.lower(), days=max(1, min(days, 180)), refresh=refresh)
 
+    @app.get("/v1/billing/{provider}/logs", tags=["system"])
+    async def billing_logs(provider: str, limit: int = 100, failed: bool = False, before: int | None = None):
+        """Every chat call this server made to one service (openrouter or atlas), newest first: what it was
+        for, the model and provider that served it, tokens (reasoning included), cost, latency, and how it
+        ended -- ok, empty, truncated, error or network. OpenRouter has no API that lists past requests, so
+        this is the server's own record; it keeps the last 5000. failed=true shows only the calls that did
+        not succeed. Pass next_before as before for the next page."""
+        provider = provider.lower()
+        if provider not in ("openrouter", "atlas"):
+            raise RequestError("Call logs exist for openrouter and atlas.")
+        return service.llm_calls(provider, limit=limit, failed_only=failed, before=before)
+
+    @app.get("/v1/billing/openrouter/generations/{generation_id}", tags=["system"])
+    async def openrouter_generation(generation_id: str):
+        """OpenRouter's own record of one logged call (GET /api/v1/generation): provider, latency, cost."""
+        return await service.openrouter_generation(generation_id)
+
     @app.put("/v1/settings/llm", tags=["system"])
     async def update_llm_settings(body: LLMSettingsUpdate):
         values = body.model_dump(exclude_unset=True)

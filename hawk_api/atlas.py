@@ -107,6 +107,39 @@ class AtlasClient:
         #: model itself, so sending it one would be an unknown field on a request it cannot act on.
         self.routing = routing or None
         self._models: tuple[float, list[dict]] = (0.0, [])
+        #: Called with one dict per chat attempt (see _call_record); HawkService keeps these as the call log the
+        #: billing pages show. OpenRouter has no API that lists past requests, so this is the only record.
+        self.on_call = None
+
+    @property
+    def service(self) -> str:
+        return "openrouter" if "openrouter.ai" in self.base_url else "atlas"
+
+    def _record(self, model: str, purpose: str, started: float, outcome: str, *, response: httpx.Response | None = None,
+                body: dict | None = None, error: str = "") -> None:
+        """Hand one attempt to on_call. Never raises: a broken log must not break the call it describes."""
+        if self.on_call is None:
+            return
+        try:
+            body = body if isinstance(body, dict) else {}
+            usage = body.get("usage") or {}
+            choice = (body.get("choices") or [{}])[0] or {}
+            entry = {
+                "at": time.time(), "service": self.service, "purpose": purpose, "model": model,
+                "served_model": body.get("model") or "", "provider": body.get("provider") or "",
+                "generation_id": body.get("id") or "", "outcome": outcome,
+                "http_status": response.status_code if response is not None else None,
+                "finish_reason": choice.get("finish_reason") or "",
+                "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                "completion_tokens": int(usage.get("completion_tokens") or 0),
+                "reasoning_tokens": int((usage.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0),
+                "cached_tokens": int((usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0),
+                "cost": usage.get("cost") if isinstance(usage.get("cost"), (int, float)) else None,
+                "latency_ms": int((time.monotonic() - started) * 1000), "error": error[:400],
+            }
+            self.on_call(entry)
+        except Exception:  # pragma: no cover - logging only
+            pass
 
     @property
     def configured(self) -> bool:
@@ -249,8 +282,9 @@ class AtlasClient:
         max_tokens: int = 8192,
         temperature: float = 0.4,
         max_retries: int = 3,
+        purpose: str = "",
     ) -> tuple[str, dict]:
-        """One chat completion. Returns ``(text, usage)``."""
+        """One chat completion. Returns ``(text, usage)``. ``purpose`` labels the call in the call log."""
         if not self.configured:
             raise AtlasError("No Atlas API key on the server. Set ATLAS_API_KEY and restart the API.")
         payload: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": False}
@@ -263,17 +297,25 @@ class AtlasClient:
         async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=30.0)) as http:
             attempt = 0
             while True:
+                started = time.monotonic()
                 try:
                     response = await http.post(url, headers=self._headers(), json=payload)
                 except httpx.HTTPError as exc:
+                    self._record(model, purpose, started, "network", error=f"{type(exc).__name__}: {exc}")
                     if attempt >= max_retries:
                         raise AtlasError(f"Could not reach Atlas: {exc}") from exc
                     last_error = str(exc)
                 else:
                     if response.status_code == 200:
                         try:
-                            return self._parse(response, json_mode=json_mode)
+                            body = response.json()
+                        except json.JSONDecodeError:
+                            body = None
+                        try:
+                            result = self._parse(response, json_mode=json_mode)
                         except AtlasTruncated as exc:
+                            self._record(model, purpose, started, "truncated", response=response, body=body,
+                                         error=str(exc))
                             # Nothing but asking again can help, so this takes the same backoff as a 429.
                             if attempt >= max_retries:
                                 raise AtlasError(str(exc)) from None
@@ -281,7 +323,19 @@ class AtlasClient:
                             attempt += 1
                             await asyncio.sleep(min(2**attempt, 30) * (0.5 + random.random() / 2))
                             continue
+                        except AtlasError as exc:
+                            outcome = "empty" if "empty message" in str(exc) else "error"
+                            self._record(model, purpose, started, outcome, response=response, body=body, error=str(exc))
+                            raise
+                        self._record(model, purpose, started, "ok", response=response, body=body)
+                        return result
                     body = response.text
+                    try:
+                        error_body = response.json()
+                    except ValueError:
+                        error_body = None
+                    self._record(model, purpose, started, "error", response=response,
+                                 body=error_body if isinstance(error_body, dict) else None, error=body[:400])
                     if response.status_code == 400 and "response_format" in payload and "response_format" in body:
                         payload.pop("response_format")  # this model rejects JSON mode; the prompt still asks for JSON
                         continue

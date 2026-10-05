@@ -1422,7 +1422,7 @@ class AgentService:
             temperature = PROSE_TEMPERATURE if prose else DIRECTOR_TEMPERATURE
         for position, model in enumerate(models):
             try:
-                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=DIRECTOR_MAX_TOKENS,
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=DIRECTOR_MAX_TOKENS, purpose="director",
                                                     temperature=temperature)
             except AtlasError as exc:
                 if position + 1 >= len(models):
@@ -1656,7 +1656,7 @@ class AgentService:
         text, call, failure = "", None, None
         for model in attempts:
             try:
-                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8)
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8, purpose="character turn")
             except AtlasError as exc:
                 # A refusal, a rate limit, or an empty reply -- deepseek-v4-pro returned one on the pod and it
                 # ended the whole talk, because the error escaped before any of the parsing fallbacks below
@@ -1930,7 +1930,7 @@ class AgentService:
                    {"role": "user", "content": f"{previous}What you heard since:\n{older}"}]
         for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=False, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1, purpose="character memory")
             except AtlasError as exc:
                 log.warning("character memory with %s failed: %s", model, exc)
                 continue
@@ -2286,7 +2286,8 @@ class AgentService:
         for model in models:
             try:
                 text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True,
-                                                    max_tokens=INSPECT_MAX_TOKENS, temperature=0.2, max_retries=1)
+                                                    max_tokens=INSPECT_MAX_TOKENS, temperature=0.2, max_retries=1,
+                                                    purpose="inspect image")
             except AtlasError as exc:
                 failures.append(f"{model}: {exc}")
                 continue
@@ -2490,7 +2491,7 @@ class AgentService:
         text = None
         for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=3000, temperature=0.2, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=3000, temperature=0.2, max_retries=1, purpose="character growth")
             except AtlasError as exc:
                 log.warning("merging growth notes with %s failed: %s", model, exc)
                 continue
@@ -2698,7 +2699,7 @@ class AgentService:
         text = usage = model = None
         for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
             try:
-                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1)
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=SUMMARY_MAX_TOKENS, max_retries=1, purpose="chat summary")
                 break
             except AtlasError as exc:
                 log.warning("summary with %s failed: %s", model, exc)

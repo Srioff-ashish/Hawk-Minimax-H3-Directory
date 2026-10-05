@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
@@ -248,6 +249,76 @@ class Service(unittest.IsolatedAsyncioTestCase):
         self.service.llm_settings.save({"atlas_api_key_override": "a2"})
         await self.service.billing("atlas", 30)
         self.assertEqual(calls, ["a1", "a1", "a2"], "a new key is never answered from the old account's figures")
+
+
+class CallLog(unittest.IsolatedAsyncioTestCase):
+    """Every chat attempt is logged: what it was for, who served it, tokens, cost, and how it ended."""
+
+    def client(self, replies):
+        from hawk_api import atlas as atlas_module
+        from hawk_api.atlas import AtlasClient
+
+        replies = list(replies)
+        transport = httpx.MockTransport(lambda request: replies.pop(0))
+        real = httpx.AsyncClient
+        patcher = unittest.mock.patch.object(atlas_module.httpx, "AsyncClient",
+                                             lambda *a, **k: real(*a, transport=transport, **k))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        sleep = unittest.mock.patch.object(atlas_module.asyncio, "sleep", unittest.mock.AsyncMock())
+        sleep.start()
+        self.addCleanup(sleep.stop)
+        chat = AtlasClient("https://openrouter.ai/api/v1", "k")
+        self.calls = []
+        chat.on_call = self.calls.append
+        return chat
+
+    @staticmethod
+    def reply(content, finish="stop", reasoning=0):
+        return httpx.Response(200, json={
+            "id": "gen-123-abc", "provider": "AkashML", "model": "qwen/qwen3.6-35b-a3b",
+            "choices": [{"message": {"content": content}, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 300, "cost": 0.00042,
+                      "completion_tokens_details": {"reasoning_tokens": reasoning}}})
+
+    async def test_a_good_call(self):
+        chat = self.client([self.reply('{"identifiable": false}')])
+        await chat.chat("qwen/qwen3.6-35b-a3b", [{"role": "user", "content": "x"}], purpose="person check")
+        [entry] = self.calls
+        self.assertEqual((entry["outcome"], entry["service"], entry["purpose"]), ("ok", "openrouter", "person check"))
+        self.assertEqual((entry["generation_id"], entry["provider"], entry["cost"]), ("gen-123-abc", "AkashML", 0.00042))
+
+    async def test_a_reply_spent_on_thinking_is_logged_as_empty(self):
+        chat = self.client([self.reply("", finish="length", reasoning=300)])
+        from hawk_api.atlas import AtlasError
+
+        with self.assertRaises(AtlasError):
+            await chat.chat("qwen/qwen3.6-35b-a3b", [{"role": "user", "content": "x"}], purpose="person check")
+        [entry] = self.calls
+        self.assertEqual((entry["outcome"], entry["finish_reason"], entry["reasoning_tokens"]), ("empty", "length", 300))
+
+    async def test_every_attempt_of_a_retried_call_is_logged(self):
+        chat = self.client([httpx.Response(503, json={"error": {"message": "overloaded"}}),
+                            self.reply('{"ok": true}')])
+        await chat.chat("m", [{"role": "user", "content": "x"}], max_retries=2)
+        self.assertEqual([c["outcome"] for c in self.calls], ["error", "ok"])
+        self.assertEqual(self.calls[0]["http_status"], 503)
+        self.assertIn("overloaded", self.calls[0]["error"])
+
+    async def test_kept_and_filtered_by_the_service(self):
+        directory = tempfile.mkdtemp(prefix="hawk_calllog_test_")
+        self.addCleanup(shutil.rmtree, directory, True)
+        service = HawkService(Settings(token="t" * 24, data_dir=directory))
+        for outcome in ("ok", "empty", "ok"):
+            service._log_llm_call({"at": 1.0, "service": "openrouter", "outcome": outcome, "model": "m"})
+        service._log_llm_call({"at": 1.0, "service": "atlas", "outcome": "ok", "model": "m"})
+        self.assertEqual(len(service.llm_calls("openrouter")["calls"]), 3)
+        self.assertEqual([c["outcome"] for c in service.llm_calls("openrouter", failed_only=True)["calls"]], ["empty"])
+        page = service.llm_calls("openrouter", limit=2)
+        self.assertEqual(len(page["calls"]), 2)
+        self.assertEqual(len(service.llm_calls("openrouter", before=page["next_before"])["calls"]), 1)
+        with self.assertRaises(RequestError):
+            await service.openrouter_generation("not-an-id")
 
 
 if __name__ == "__main__":

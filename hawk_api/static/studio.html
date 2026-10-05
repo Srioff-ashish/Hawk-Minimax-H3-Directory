@@ -336,6 +336,10 @@
   .bill-note { padding: 10px 14px; border-radius: var(--r); background: var(--info-soft); color: var(--ink-2); font-size: 13px; }
   .bill-note.warn { background: var(--warn-soft); }
   .bill-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .call-row { cursor: pointer; }
+  .call-row:hover td { background: var(--surface-2); }
+  .call-detail td { background: var(--surface-2); font-size: 12.5px; }
+  .call-detail pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
   .table td.num, .table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
   /* ---------- drawer, modal, toasts ---------- */
@@ -1555,6 +1559,7 @@
   function usd(value) {
     if (value === null || value === undefined || Number.isNaN(Number(value))) return "\u2014";
     const n = Number(value), digits = n !== 0 && Math.abs(n) < 1 ? 4 : 2;
+    if (n > 0 && n < 0.0001) return "<$0.0001";
     return (n < 0 ? "-$" : "$") + Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: digits, maximumFractionDigits: digits });
   }
   const compact = (n) => Number(n || 0).toLocaleString(undefined, { notation: "compact", maximumFractionDigits: 1 });
@@ -1653,6 +1658,7 @@
       parts.push(billingChart(r.daily), billingModels(r));
     }
     for (const note of r.notes || []) parts.push(`<div class="bill-note">${esc(note)}</div>`);
+    if (CALL_LOGS[route]) parts.push(callLogCard(route));
     return parts.join("");
   }
 
@@ -1671,6 +1677,106 @@
     if (seq !== billing.seq[route]) return;  // a newer load for this page has started
     host.innerHTML = html;
     host.dataset.loaded = "1";
+    if (CALL_LOGS[route]) loadCallLog(route);
+  }
+
+  // ------------------------------------------------ call log (OpenRouter has no API listing past requests,
+  // so this is the server's own record of every chat call it made: GET /v1/billing/<service>/logs)
+
+  const CALL_LOGS = { openrouter: "openrouter" };
+  const callLog = { failed: storage.get("hawkH3CallLogFailed") === "1", rows: {}, next: {} };
+  const OUTCOME_BADGE = { ok: "done", empty: "failed", truncated: "queued", error: "failed", network: "failed" };
+
+  function callLogCard(route) {
+    return `<section class="card" id="callLog-${route}"><div class="card-head"><h2>Call log</h2>
+      <span class="hint">every request this server sent \u00b7 newest first \u00b7 click a row for details</span><div class="spacer"></div>
+      <label class="check"><input type="checkbox" data-call-failed${callLog.failed ? " checked" : ""}> Failed only</label></div>
+      <div class="table-wrap"><table class="table"><thead><tr><th>Time</th><th>For</th><th>Model</th><th>Provider</th><th>Result</th>
+      <th class="num">Tokens in / out</th><th class="num">Cost</th><th class="num">Time</th></tr></thead>
+      <tbody data-call-body><tr><td colspan="8" class="hint">Loading\u2026</td></tr></tbody></table></div>
+      <div class="card-body" data-call-more hidden><button class="btn btn-sm" type="button" data-call-next>Load older</button></div></section>`;
+  }
+
+  function callLogRow(c) {
+    const when = new Date(c.at * 1000);
+    const time = when.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const result = c.outcome === "ok" ? "ok" : c.outcome + (c.http_status && c.http_status !== 200 ? ` ${c.http_status}` : "");
+    const finish = c.finish_reason && c.finish_reason !== "stop" ? `<div class="hint">finish: ${esc(c.finish_reason)}</div>` : "";
+    const think = c.reasoning_tokens ? `<div class="hint">${esc(compact(c.reasoning_tokens))} thinking</div>` : "";
+    return `<tr class="call-row" data-call="${esc(c.seq)}"><td style="white-space:nowrap">${esc(time)}</td><td>${esc(c.purpose || "\u2014")}</td>`
+      + `<td class="bill-model"><div class="mono" style="overflow-wrap:anywhere">${esc(c.served_model || c.model)}</div></td>`
+      + `<td>${esc(c.provider || "\u2014")}</td><td><span class="badge ${OUTCOME_BADGE[c.outcome] || "cancelled"}">${esc(result)}</span>${finish}</td>`
+      + `<td class="num">${esc(compact(c.prompt_tokens))} / ${esc(compact(c.completion_tokens))}${think}</td>`
+      + `<td class="num">${c.cost == null ? "\u2014" : esc(usd(c.cost))}</td><td class="num">${esc((c.latency_ms / 1000).toFixed(1))} s</td></tr>`;
+  }
+
+  async function loadCallLog(route, older = false) {
+    const card = $(`callLog-${route}`);
+    if (!card) return;
+    const tbody = card.querySelector("[data-call-body]");
+    const before = older ? callLog.next[route] : null;
+    let data;
+    try {
+      data = await api(`/v1/billing/${CALL_LOGS[route]}/logs?limit=100${callLog.failed ? "&failed=true" : ""}${before ? `&before=${before}` : ""}`);
+    } catch (error) {
+      tbody.innerHTML = `<tr><td colspan="8"><div class="bill-note warn">Could not load the call log: ${esc(error.message)}</div></td></tr>`;
+      return;
+    }
+    if (!older) callLog.rows[route] = new Map();
+    for (const c of data.calls) callLog.rows[route].set(String(c.seq), c);
+    const rows = data.calls.map(callLogRow).join("");
+    if (older) tbody.insertAdjacentHTML("beforeend", rows);
+    else tbody.innerHTML = rows || `<tr><td colspan="8" class="hint">${callLog.failed ? "No failed calls logged." : "No calls logged yet. Calls are recorded from this version on."}</td></tr>`;
+    callLog.next[route] = data.next_before;
+    card.querySelector("[data-call-more]").hidden = !data.next_before;
+  }
+
+  async function toggleCallDetail(route, row) {
+    const open = row.nextElementSibling;
+    if (open && open.classList.contains("call-detail")) { open.remove(); return; }
+    const c = callLog.rows[route] && callLog.rows[route].get(row.dataset.call);
+    if (!c) return;
+    const lines = [
+      ["Asked for", c.model], ["Served by", [c.served_model, c.provider].filter(Boolean).join(" via ") || "\u2014"],
+      ["Generation id", c.generation_id || "\u2014"], ["Finish reason", c.finish_reason || "\u2014"],
+      ["Tokens", `${c.prompt_tokens} in (${c.cached_tokens} cached) \u00b7 ${c.completion_tokens} out (${c.reasoning_tokens} thinking)`],
+    ];
+    const detail = document.createElement("tr");
+    detail.className = "call-detail";
+    detail.innerHTML = `<td colspan="8"><div class="kv">${lines.map(([k, v]) => `<span class="hint">${esc(k)}</span><span class="mono">${esc(v)}</span>`).join("")}</div>`
+      + (c.error ? `<pre>${esc(c.error)}</pre>` : "")
+      + (c.generation_id ? `<div style="margin-top:8px"><button class="btn btn-sm" type="button" data-call-gen="${esc(c.generation_id)}">OpenRouter's record</button></div><pre data-call-gen-out hidden></pre>` : "")
+      + `</td>`;
+    row.after(detail);
+  }
+
+  for (const route of Object.keys(CALL_LOGS)) {
+    const host = $(`billing-${route}`);
+    host.addEventListener("change", (event) => {
+      if (!event.target.matches("[data-call-failed]")) return;
+      callLog.failed = event.target.checked;
+      storage.set("hawkH3CallLogFailed", callLog.failed ? "1" : "0");
+      loadCallLog(route);
+    });
+    host.addEventListener("click", async (event) => {
+      if (event.target.closest("[data-call-next]")) return loadCallLog(route, true);
+      const gen = event.target.closest("[data-call-gen]");
+      if (gen) {
+        const out = gen.parentElement.nextElementSibling;
+        out.hidden = false;
+        out.textContent = "Asking OpenRouter\u2026";
+        try {
+          const d = await api(`/v1/billing/openrouter/generations/${encodeURIComponent(gen.dataset.callGen)}`);
+          const keep = ["created_at", "model", "provider_name", "finish_reason", "native_finish_reason", "latency", "generation_time",
+                        "tokens_prompt", "tokens_completion", "native_tokens_reasoning", "native_tokens_cached", "total_cost",
+                        "cache_discount", "num_media_prompt", "cancelled"];
+          out.textContent = keep.filter((k) => d[k] !== undefined && d[k] !== null).map((k) => `${k}: ${d[k]}`).join("\n");
+        } catch (error) { out.textContent = error.message; }
+        return;
+      }
+      const row = event.target.closest(".call-row");
+      if (row) toggleCallDetail(route, row);
+    });
   }
 
   for (const route of Object.keys(BILLING_PAGES)) {
