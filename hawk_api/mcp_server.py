@@ -37,7 +37,7 @@ Sex scenes (adults only): before writing any explicit prompt -- a video segment 
 LoRAs: the server adds its default LoRAs (usually the turbo LoRA) automatically. list_loras shows every LoRA file on the pod, the defaults and the presets. To use one, pass settings.loras=[{"name": "<file name or a unique part of it>", "strength": 0.6}] in render_film (or lora_preset); get_job's loras_applied confirms what was applied. strength 0 switches a default off.
 Music: H3 composes new music in every segment, so a multi-segment film jumps at each cut. For one continuous track, upload it (upload page or add_reference_from_url) and pass settings.music_asset_id; the Director mixes it under the whole film (settings.music_volume_db, scene_volume_db, music_fade_seconds) and turns off each segment's own music. Do not also list the track in references.
 Planner: plan_film takes model, any id from list_options.planner_models (default: the server's planner chain, list_options.model_chains.planner); pick a vision model when references are attached. The call is made by the gateway on whichever provider its settings name, so an id from another provider is matched by name where it can be.
-Models: list_options shows diffusion_models (ref2va base models), text_encoders and the defaults. settings.unet_name / settings.clip_name pick others for one render, by file name or a unique part such as "bf16". bf16 gives the best quality but is slowest; int8 / fp8 / nvfp4 are faster. Omit them to use the defaults.
+Models: list_options shows diffusion_models (H3 base models that read references: ref2va, hybrids such as 10Eros-Max beta5, and turbo bases such as 10Eros-Max beta6), text_encoders and the defaults. settings.unet_name / settings.clip_name pick others for one render, by file name or a unique part such as "bf16". bf16 gives the best quality but is slowest; int8 / fp8 / nvfp4 are faster. Omit them to use the defaults.
 Renders take many minutes. Never wait inside a tool call; poll get_job instead.
 """ + """
 Image prompts (generate_image): write for the engine that will run it. engine auto: text only -> local Qwen Image 2.1 when idle, then Krea 2, else z-image/turbo; with reference images -> Qwen Image 2.1, then Krea 2 Identity Edit, else Seedream edit. When a retake moves to another engine (inspect_image's next_engine), rewrite the prompt for that engine.
@@ -82,6 +82,14 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
     @mcp.tool(description="Get a signed link to a web page where the user uploads reference files (images, audio, video) from their device. The page shows each file's asset_id.")
     async def upload_page_link() -> dict:
         return {"upload_url": service.upload_page_link(), "note": "Open in a browser, upload files, then paste the asset ids into the chat."}
+
+    @mcp.tool(description=(
+        "Upload an image you hold (for example one the user attached) straight to the library, as base64 or a data: "
+        "URI. Returns its asset_id. It is stored as an upload and copied to the user's Google Drive image folder. "
+        "For files on the user's device, use upload_page_link instead."))
+    async def upload_image(data_base64: str, filename: str = "upload.png", collection: str | None = None,
+                           tags: list[str] | None = None) -> dict:
+        return await run(_viewed(service.add_asset_from_base64(data_base64, filename, collection, tags)))
 
     @mcp.tool(description="Download a public image, audio or video URL onto the pod as a reference asset. Returns its asset_id.")
     async def add_reference_from_url(url: str, filename: str | None = None) -> dict:
@@ -200,7 +208,7 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
     async def image_options() -> dict:
         return await run(service.image_options())
 
-    @mcp.tool(description="Show what the pod can use: LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, ref2va base models and text encoders (with the defaults), planner model ids, samplers, schedulers, aspect ratios and continuity modes.")
+    @mcp.tool(description="Show what the pod can use: LoRA files in models/loras, the default LoRAs (and whether they are present), LoRA presets, H3 base models (ref2va, hybrid and turbo bases) and text encoders (with the defaults), planner model ids, samplers, schedulers, aspect ratios and continuity modes.")
     async def list_options() -> dict:
         options = await run(service.options())
         # Compact for chat models: LoRAs first, and planner models as ids (the full catalogue

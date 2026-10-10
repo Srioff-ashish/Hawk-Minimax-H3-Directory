@@ -204,7 +204,7 @@ DRIVE_ID_ATTRS = ("user.drive.id", "user.drive.item_id", "user.drive.file_id")
 DRIVE_ID_WAIT_SECONDS = 1800.0  # big videos can take a while to upload from the mount
 DRIVE_ID_POLL_SECONDS = 10.0
 EXPORT_DEFAULTS = {"enabled": True, "folder": "Hawk H3/Videos", "segments": False,
-                   "images": True, "image_folder": "Hawk H3/Images",
+                   "images": True, "image_folder": "Hawk H3/Images", "uploads": True,
                    "snapshots": True, "snapshot_folder": "Hawk H3/Backups", "snapshot_minutes": 10}
 
 
@@ -235,6 +235,12 @@ def _slug(text: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:50] or "video"
 
 
+def _write_file(path: str, data: bytes) -> None:
+    """Write and close: on the Drive mount an unclosed file is not guaranteed to be complete."""
+    with open(path, "wb") as handle:
+        handle.write(data)
+
+
 class DriveExporter:
     """Copies finished renders into the mounted Google Drive so they play and download from
     Google's servers instead of through the tunnel."""
@@ -257,7 +263,8 @@ class DriveExporter:
         return {**data, "mounted": self.browser.available, "root": self.browser.root}
 
     def save_settings(self, *, enabled: bool | None = None, folder: str | None = None, segments: bool | None = None,
-                      images: bool | None = None, image_folder: str | None = None, snapshots: bool | None = None,
+                      images: bool | None = None, image_folder: str | None = None, uploads: bool | None = None,
+                      snapshots: bool | None = None,
                       snapshot_folder: str | None = None, snapshot_minutes: float | None = None) -> dict:
         current = {k: v for k, v in self.settings().items() if k in EXPORT_DEFAULTS}
         clean_folder = lambda value: "/".join(p for p in value.replace("\\", "/").split("/") if p and p not in (".", ".."))
@@ -272,6 +279,8 @@ class DriveExporter:
             current["segments"] = bool(segments)
         if images is not None:
             current["images"] = bool(images)
+        if uploads is not None:
+            current["uploads"] = bool(uploads)
         if image_folder is not None:
             clean = clean_folder(image_folder)
             if not clean:
@@ -333,10 +342,14 @@ class DriveExporter:
 
     # --------------------------------------------------------- images
 
-    def schedule_assets(self, assets: list[dict]) -> bool:
-        """Copy freshly generated images into Drive, in the background. Never delays or fails the generation."""
+    def schedule_assets(self, assets: list[dict], setting: str = "images") -> bool:
+        """Copy new images into Drive, in the background. Never delays or fails the generation or upload.
+
+        ``setting`` is the switch that governs them: "images" for generated ones, "uploads" for images added from
+        a device or a URL. Both land in the same image folder, which is where drive_asset_path looks when a
+        restarted runtime has lost a file -- an upload with no copy there is gone for good after a restart."""
         config = self.settings()
-        if not config["images"] or not self.browser.available:
+        if not config[setting] or not self.browser.available:
             return False
         ids = [a.get("id") for a in assets if a.get("id") and a.get("kind") == "image" and not a.get("duplicate")]
         if not ids:
@@ -367,7 +380,7 @@ class DriveExporter:
                         await asyncio.to_thread(shutil.copyfile, local, target)
                     else:
                         data = await self.service.asset_bytes(asset)
-                        await asyncio.to_thread(lambda: open(target, "wb").write(data))
+                        await asyncio.to_thread(_write_file, target, data)
                 written.append(f"{folder}/{os.path.basename(target)}")
             except asyncio.CancelledError:
                 raise

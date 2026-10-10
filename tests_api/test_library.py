@@ -183,7 +183,8 @@ class Library(unittest.IsolatedAsyncioTestCase):
             self.assertTrue({"list_collections", "organize_assets", "browse_drive", "import_from_drive", "get_import"} <= names)
             self.assertEqual((await call("list_references", {"collection": "Cast"}))["total"], 1)
             self.assertEqual((await call("list_collections"))["collections"][0]["name"], "Cast")
-            self.assertEqual([f["name"] for f in (await call("browse_drive"))["folders"]], ["Model Eunha", "Music"])
+            # "Hawk H3" is the backup of the image uploaded above: uploads are copied into Drive now
+            self.assertEqual([f["name"] for f in (await call("browse_drive"))["folders"]], ["Hawk H3", "Model Eunha", "Music"])
             state = await call("import_from_drive", {"paths": ["Music"], "collection": "Beats", "wait_seconds": 20})
             self.assertEqual((state["status"], state["imported"], state["collection"]), ("done", 1, "Beats"))
             organised = await call("organize_assets", {"asset_ids": state["asset_ids"], "add_tags": ["edm"]})

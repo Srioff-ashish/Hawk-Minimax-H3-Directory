@@ -170,14 +170,16 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     async def _store_uploads(files: list[UploadFile], collection: str | None = None, tags: str | None = None) -> dict:
         limit = settings.max_upload_mb * 1024 * 1024
-        assets = []
+        assets, stored = [], []
         for upload in files:
             if upload.size is not None and upload.size > limit:
                 raise RequestError(f"{upload.filename} is larger than {settings.max_upload_mb} MB.")
             asset = await service.add_asset(upload.filename or "upload", upload.file, upload.content_type, upload.size,
                                             collection=collection, tags=tags)
+            stored.append(asset)
             assets.append(service.asset_view(asset))
-        return {"assets": assets}
+        # Studio and the upload page (the link MCP clients hand out) both come through here.
+        return {"assets": assets, "saving_to_drive": service.back_up_uploads(stored)}
 
     @app.post("/v1/assets", tags=["assets"], status_code=201)
     async def upload_assets(
@@ -524,10 +526,16 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         await snapshots.snapshot(force=True)
         return snapshots.state()
 
+    @app.post("/v1/drive/back-up-uploads", tags=["downloads"])
+    async def drive_back_up_uploads():
+        """Copy every uploaded image that has no Drive copy yet into the Drive image folder. New uploads are
+        copied as they arrive; this is for the ones from before. Lists any whose file is already gone."""
+        return await service.back_up_existing_uploads()
+
     @app.put("/v1/drive/export", tags=["downloads"])
     async def drive_export_update(body: DriveExportSettings):
         return exporter.save_settings(enabled=body.enabled, folder=body.folder, segments=body.segments,
-                                     images=body.images, image_folder=body.image_folder,
+                                     images=body.images, image_folder=body.image_folder, uploads=body.uploads,
                                      snapshots=body.snapshots, snapshot_folder=body.snapshot_folder,
                                      snapshot_minutes=body.snapshot_minutes)
 

@@ -46,6 +46,7 @@ from .loras import (
     ResolvedLora,
     choose_steps,
     compare_applied,
+    base_shift,
     drop_baked_turbo,
     default_status,
     load_config,
@@ -152,8 +153,9 @@ PLANNER_MAX_TOKENS = 15_000
 #:
 #: Each folder takes any one of several word sets. An H3 "hybrid" is fl2va with ref2va's reference pathway (the
 #: later blocks' adaln_proj) grafted back in, so it reads references like ref2va does -- 10Eros-Max beta5 is
-#: one, and is named "..._h3_TURBO-hybrid_beta5..." with no "ref2va" in it at all.
-MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid")), "Base model"),
+#: one, and is named "..._h3_TURBO-hybrid_beta5..." with no "ref2va" in it at all. 10Eros-Max beta6 drops "hybrid"
+#: from the name as well ("..._h3_8stepTURBO_beta6..."): it is a mostly-reference hybrid with a turbo built in.
+MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid"), ("h3", "turbo")), "Base model"),
                   "text_encoders": ((("qwen3vl", "minimax"),), "Text encoder")}
 
 
@@ -1159,7 +1161,53 @@ class HawkService:
             if not os.path.splitext(name)[1] and content_type:
                 name += mimetypes.guess_extension(content_type.split(";")[0]) or ""
             buffer.seek(0)
-            return await self.add_asset(name, buffer, content_type, size, collection="From URLs", source={"type": "url", "url": url})
+            asset = await self.add_asset(name, buffer, content_type, size, collection="From URLs",
+                                         source={"type": "url", "url": url})
+        self.back_up_uploads([asset])
+        return asset
+
+    def back_up_uploads(self, assets: list[dict]) -> bool:
+        """Copy uploaded images into the Drive image folder, in the background, when that setting is on."""
+        return bool(self.drive_exporter and self.drive_exporter.schedule_assets(assets, setting="uploads"))
+
+    async def add_asset_from_base64(self, data: str, filename: str = "upload.png", collection: str | None = None,
+                                    tags=None) -> dict:
+        """An image sent as base64 (an MCP client attaching a file it holds), stored as an upload."""
+        payload = (data or "").strip()
+        if payload.startswith("data:"):
+            payload = payload.split(",", 1)[-1]
+        try:
+            raw = base64.b64decode(payload, validate=False)
+        except (ValueError, TypeError):
+            raise RequestError("data must be base64 (a data: URI is fine too).") from None
+        if not raw:
+            raise RequestError("data is empty.")
+        if len(raw) > self.settings.max_upload_mb * 1024 * 1024:
+            raise RequestError(f"The file is larger than {self.settings.max_upload_mb} MB.")
+        asset = await self.add_asset(os.path.basename(filename or "upload.png") or "upload.png", io.BytesIO(raw),
+                                     None, len(raw), collection=collection, tags=tags)
+        self.back_up_uploads([asset])
+        return asset
+
+    async def back_up_existing_uploads(self) -> dict:
+        """Copy every uploaded or URL-imported image that has no Drive copy yet. For uploads made before the
+        uploads setting existed; a file already gone from the runtime cannot be copied and is listed."""
+        exporter = self.drive_exporter
+        if exporter is None or not exporter.browser.available:
+            raise RequestError("Google Drive is not mounted on the server. Run drive.mount('/content/drive') in the notebook.")
+        todo, already = [], 0
+        for asset in self.store.all_assets():
+            if asset.get("kind") != "image" or (asset.get("source") or {}).get("type") not in ("upload", "url", None):
+                continue
+            if self.drive_asset_path(asset):
+                already += 1
+            else:
+                todo.append(asset)
+        written = await exporter.export_assets([asset["id"] for asset in todo])
+        copied = {path.rsplit("_", 1)[-1].split(".")[0] for path in written}
+        missing = [{"id": a["id"], "filename": a.get("filename")} for a in todo if a["id"][:8] not in copied]
+        return {"copied": len(written), "already_in_drive": already, "missing": missing,
+                "folder": exporter.settings()["image_folder"]}
 
     def list_assets(self, limit: int = 100, by: str = "", session: str = "") -> list[dict]:
         return self.store.list_assets(limit, by=by, session=session)
@@ -2352,6 +2400,10 @@ class HawkService:
         loras, warnings = await self.resolve_loras(settings)
         loras, baked = drop_baked_turbo(loras, models.unet_name)
         warnings += baked
+        shift, shift_note = base_shift(models.unet_name, models.shift_video)
+        if shift_note:
+            models = dataclasses.replace(models, shift_video=shift)
+            warnings.append(shift_note)
         steps, steps_reason = choose_steps(loras, settings.steps, models.unet_name)
         seed = settings.seed if settings.seed is not None else random.randrange(1, 2**48)
         job_id = str(uuid.uuid4())

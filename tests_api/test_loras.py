@@ -127,6 +127,12 @@ class Steps(unittest.TestCase):
         self.assertEqual(choose_steps(kept, 6, eros)[0], 6, "an explicit step count still wins")
         plain = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
         self.assertEqual(loras.drop_baked_turbo(with_turbo, plain), (with_turbo, []), "an ordinary base is untouched")
+        beta6 = "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"
+        self.assertTrue(loras.turbo_base(beta6))
+        self.assertEqual(choose_steps(kept, None, beta6)[0], 8)
+        self.assertEqual(loras.base_shift(beta6, 12.0)[0], 10.0)
+        self.assertEqual(loras.base_shift(f"h3/{beta6}", 10.0), (10.0, ""), "already right: no note")
+        self.assertEqual(loras.base_shift(eros, 12.0), (12.0, ""), "beta5 keeps the default shift")
         self.assertFalse(loras.turbo_base("10Eros_Max_h3_hybrid_beta5_int8.safetensors"),
                          "the non-turbo hybrid wants full steps and the turbo LoRA")
 

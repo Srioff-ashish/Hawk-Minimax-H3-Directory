@@ -188,6 +188,8 @@ class DriveExportSettings(BaseModel):
     folder: str | None = Field(None, description="Folder inside My Drive, e.g. Hawk H3/Videos (a dated subfolder is added).")
     segments: bool | None = Field(None, description="Also copy each segment file.")
     images: bool | None = Field(None, description="Copy every generated image into Google Drive.")
+    uploads: bool | None = Field(None, description="Copy every uploaded image (Studio, the upload page, MCP, URL "
+                                 "imports) into the same Drive image folder, so a runtime restart cannot lose it.")
     image_folder: str | None = Field(None, description="Folder inside My Drive for generated images, e.g. Hawk H3/Images (a dated subfolder is added).")
     snapshots: bool | None = Field(None, description="Copy the chats-and-jobs database into Drive, so a Colab runtime that ends does not take them with it.")
     snapshot_folder: str | None = Field(None, description="Folder inside My Drive for the database copy, e.g. Hawk H3/Backups. Two files are kept there.")

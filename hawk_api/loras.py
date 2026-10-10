@@ -253,6 +253,20 @@ def turbo_base(unet_name: str) -> bool:
     return "turbo" in _stem(unet_name or "")
 
 
+#: Video shift a base model was tuned for, when it is not the H3 default. Matched on the file name's stem.
+#: 10Eros-Max beta6's author samples it at shift 10 video / 3 audio.
+BASE_SHIFTS = (("10eros_max_h3_8stepturbo_beta6", 10.0),)
+
+
+def base_shift(unet_name: str, current: float) -> tuple[float, str]:
+    """(video shift, note) for this base model. The note is empty when the shift is left as it was."""
+    stem = _stem(unet_name or "")
+    for prefix, shift in BASE_SHIFTS:
+        if stem.startswith(prefix) and shift != current:
+            return shift, f"Video shift {shift:g} (not {current:g}): the value {os.path.basename(unet_name)} is tuned for."
+    return current, ""
+
+
 def drop_baked_turbo(resolved: list[ResolvedLora], unet_name: str) -> tuple[list[ResolvedLora], list[str]]:
     """Leave turbo LoRAs off a base model that already has turbo inside it.
 

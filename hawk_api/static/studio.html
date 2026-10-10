@@ -1181,7 +1181,7 @@
           <div class="card-head"><h2>Render models</h2><span class="chip" id="renderModelChip">Checking…</span></div>
           <div class="card-body" style="display:grid;gap:14px">
             <span class="hint">The MiniMax H3 files every video render loads, from ComfyUI's model folders. The text encoder also encodes your reference images, so its precision decides how well a face carries across shots.</span>
-            <div class="field"><label class="label" for="renderUnet">Base model (ref2va)</label><select class="select" id="renderUnet"></select></div>
+            <div class="field"><label class="label" for="renderUnet">Base model (reads references)</label><select class="select" id="renderUnet"></select></div>
             <div class="field"><label class="label" for="renderClip">Text encoder</label><select class="select" id="renderClip"></select></div>
             <div class="field"><label class="label" for="renderVideoVae">Video VAE</label><select class="select" id="renderVideoVae"></select></div>
             <div class="field"><label class="label" for="renderAudioVae">Audio VAE</label><select class="select" id="renderAudioVae"></select></div>
@@ -1201,6 +1201,8 @@
             <label class="check"><input type="checkbox" id="driveExportImages"> Copy every generated image to Google Drive</label>
             <div class="field"><label class="label" for="driveExportImageFolder">Drive folder for images</label>
               <input class="input" id="driveExportImageFolder" placeholder="Hawk H3/Images"><span class="hint">Inside My Drive. Images go into a dated subfolder.</span></div>
+            <label class="check"><input type="checkbox" id="driveExportUploads"> Copy every uploaded image to the same Drive folder</label>
+            <div class="row"><button class="btn btn-sm" id="driveBackUpUploads" type="button" title="Copy uploads that have no Drive copy yet">Back up existing uploads</button><span class="hint" id="driveBackUpUploadsState">Uploads from Studio, the upload page, MCP and URLs. Without a Drive copy an upload is lost when the runtime restarts.</span></div>
             <label class="check"><input type="checkbox" id="driveSnapshots"> Keep chats and jobs in Google Drive</label>
             <div class="field"><label class="label" for="driveSnapshotFolder">Drive folder for chats</label>
               <input class="input" id="driveSnapshotFolder" placeholder="Hawk H3/Backups"><span class="hint">A Colab runtime erases itself when it ends. This copies the chats, personas and job records to Drive so the next session can pick them up. Two files are kept there, and a copy is only written when something changed.</span></div>
@@ -3956,6 +3958,7 @@
     $("driveExportSegments").checked = settings.segments;
     $("driveExportImages").checked = settings.images;
     $("driveExportImageFolder").value = settings.image_folder || "";
+    $("driveExportUploads").checked = settings.uploads !== false;
     $("driveSnapshots").checked = settings.snapshots !== false;
     $("driveSnapshotFolder").value = settings.snapshot_folder || "";
     $("driveSnapshotMinutes").value = settings.snapshot_minutes ?? 10;
@@ -3978,11 +3981,25 @@
       toast("Chats backed up", "They will be here after the runtime restarts.", "ok", 3000);
     } catch (error) { $("driveSnapshotState").textContent = error.message; }
   };
+  $("driveBackUpUploads").onclick = async () => {
+    const button = $("driveBackUpUploads"), state = $("driveBackUpUploadsState");
+    button.disabled = true;
+    state.textContent = "Copying\u2026";
+    try {
+      const r = await post("/v1/drive/back-up-uploads", {});
+      const gone = (r.missing || []).length;
+      state.textContent = `${r.copied} copied, ${r.already_in_drive} already in Drive (${r.folder})`
+        + (gone ? `. ${gone} could not be copied: the file is already gone from this runtime (${r.missing.slice(0, 5).map((m) => m.filename || m.id).join(", ")}${gone > 5 ? ", \u2026" : ""}). Upload those again.` : ".");
+      toast("Uploads backed up", `${r.copied} copied to Drive`, gone ? "warn" : "ok", 4000);
+    } catch (error) { state.textContent = error.message; }
+    finally { button.disabled = false; }
+  };
   $("driveExportSave").onclick = async () => {
     try {
       paintDriveExport(await api("/v1/drive/export", { method: "PUT", headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled: $("driveExportEnabled").checked, folder: $("driveExportFolder").value.trim() || "Hawk H3/Videos", segments: $("driveExportSegments").checked,
           images: $("driveExportImages").checked, image_folder: $("driveExportImageFolder").value.trim() || "Hawk H3/Images",
+          uploads: $("driveExportUploads").checked,
           snapshots: $("driveSnapshots").checked, snapshot_folder: $("driveSnapshotFolder").value.trim() || "Hawk H3/Backups",
           snapshot_minutes: Number($("driveSnapshotMinutes").value) || 10 }) }));
       toast("Delivery settings saved");

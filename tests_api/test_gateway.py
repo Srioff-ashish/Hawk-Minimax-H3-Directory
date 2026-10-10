@@ -569,6 +569,27 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader["inputs"]["unet_name"], eros)
         self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
+    async def test_eros_beta6_is_offered_and_renders_at_its_own_shift(self):
+        # 10Eros-Max beta6: no "ref2va" and no "hybrid" in its name; turbo built in, tuned for shift 10.
+        beta6 = "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"
+        self.fake.model_files["diffusion_models"].append(beta6)
+        options = (await self.http.get("/v1/options")).json()
+        self.assertIn(beta6, options["diffusion_models"])
+        self.assertNotIn(UNET_FL2VA, options["diffusion_models"], "plain fl2va still does not")
+
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "beta6"}})).json()
+        self.assertEqual((job["unet_name"], job["steps"]), (beta6, 8), job)
+        self.assertNotIn(TURBO, [l["file"] for l in job["loras"]], "the turbo LoRA must not be stacked on a turbo base")
+        self.assertTrue(any("shift 10" in w for w in job.get("warnings") or []), job.get("warnings"))
+        loader = next(n for n in self.fake.prompts[job["id"]].values() if n["class_type"] == "HawkH3ModelLoader")
+        self.assertEqual((loader["inputs"]["unet_name"], loader["inputs"]["shift_video"], loader["inputs"]["shift_audio"]),
+                         (beta6, 10.0, 3.0))
+
+        other = (await self.http.post("/v1/videos", json={"script": "A"})).json()
+        loader = next(n for n in self.fake.prompts[other["id"]].values() if n["class_type"] == "HawkH3ModelLoader")
+        self.assertEqual(loader["inputs"]["shift_video"], 12.0, "every other base keeps the default shift")
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
+
     async def test_a_default_encoder_moved_into_a_subfolder_loads_by_its_subfolder_path(self):
         # The configured default is a bare name; sorted into text_encoders/h3/ ComfyUI calls it "h3/...".
         default = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"

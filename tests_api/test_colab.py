@@ -105,6 +105,13 @@ class Detection(unittest.TestCase):
             "turbo_lora": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
         })
 
+    def test_eros_beta6_is_picked_only_when_nothing_else_reads_references(self):
+        beta5 = "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"
+        beta6 = "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"
+        self.assertEqual(hawk_colab.pick_models({"diffusion_models": [beta6, beta5]})["unet_name"], beta5,
+                         "added next to beta5, beta6 is a choice in Studio, not the new default")
+        self.assertEqual(hawk_colab.pick_models({"diffusion_models": [beta6]})["unet_name"], beta6)
+
     def test_fl2va_only_is_not_picked(self):
         chosen = hawk_colab.pick_models({"diffusion_models": self.FILES["diffusion_models"][:1], "loras": self.FILES["loras"][:1]})
         self.assertIsNone(chosen["unet_name"])

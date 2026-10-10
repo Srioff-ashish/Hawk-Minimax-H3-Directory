@@ -204,6 +204,42 @@ class Delivery(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(exporter.schedule_assets([dict(asset, kind="image")]), "images off: nothing is copied")
         self.assertEqual((await self.http.put("/v1/drive/export", json={"image_folder": "/.."})).status_code, 422)
 
+    async def test_uploaded_images_are_kept_in_drive(self):
+        """An upload has no other copy: without one in Drive a runtime restart loses it for good."""
+        import base64
+
+        from hawk_api.jobs import HawkService
+        from hawk_api.library import DriveBrowser, DriveExporter
+
+        png = lambda n: b"\x89PNG\r\n\x1a\n" + bytes([n]) * 512
+        folder = os.path.join(self.drive, "Hawk H3", "Images", time.strftime("%Y-%m-%d"))
+
+        async def in_drive(asset_id) -> bool:
+            for _ in range(100):
+                if os.path.isdir(folder) and any(name.endswith(f"_{asset_id[:8]}.png") for name in os.listdir(folder)):
+                    return True
+                await asyncio.sleep(0.05)
+            return False
+
+        studio = (await self.http.post("/v1/assets", files={"files": ("skirt.png", png(1), "image/png")})).json()
+        self.assertTrue(studio["saving_to_drive"])
+        self.assertTrue(await in_drive(studio["assets"][0]["id"]), "a Studio or upload-page upload is copied")
+
+        # the MCP upload_image tool's path: base64 or a data: URI
+        service = HawkService(self.settings)
+        service.drive_exporter = DriveExporter(service, DriveBrowser(self.drive))
+        sent = await service.add_asset_from_base64("data:image/png;base64," + base64.b64encode(png(2)).decode(), "dress.png")
+        self.assertEqual((sent["source"]["type"], sent["kind"]), ("upload", "image"), "stored as an upload, as it is")
+        self.assertTrue(await in_drive(sent["id"]))
+
+        # switched off: nothing is copied, until the back-up button copies what is missing
+        self.assertFalse((await self.http.put("/v1/drive/export", json={"uploads": False})).json()["uploads"])
+        later = (await self.http.post("/v1/assets", files={"files": ("boots.png", png(3), "image/png")})).json()
+        self.assertFalse(later["saving_to_drive"])
+        result = (await self.http.post("/v1/drive/back-up-uploads")).json()
+        self.assertEqual((result["copied"], result["already_in_drive"], result["missing"]), (1, 2, []), result)
+        self.assertTrue(await in_drive(later["assets"][0]["id"]))
+
     @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
     async def test_job_thumbnail(self):
         clip = os.path.join(self.tmp, "clip.mp4")
