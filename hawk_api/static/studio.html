@@ -1682,7 +1682,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div></div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1753,11 +1753,29 @@
   $("mhResults").addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-chapter]");
     if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
+    const job = event.target.closest("[data-open-job]");
+    if (job && state.jobs.has(job.dataset.openJob)) { event.preventDefault(); openDrawer(job.dataset.openJob); }  // else the link opens Jobs
+    const plan = event.target.closest("[data-plan-chapter]");
+    if (plan) mhPlan(plan.dataset.planChapter);
     const convert = event.target.closest("[data-convert-chapter]");
     if (convert) mhConvert(convert.dataset.convertChapter);
     const stop = event.target.closest("[data-cancel-conversion]");
     if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
+
+  function mhPlans(plans) {
+    if (!plans || !plans.length) return `<div id="mhPlans"></div>`;
+    return `<div id="mhPlans" class="hint" style="margin-top:6px">Video plans: ${plans.map((p) => `<a href="#jobs" data-open-job="${esc(p.job_id)}">part ${p.part} (${p.segments} segments)</a>`).join(" · ")} <span>— open one to read it and render it</span></div>`;
+  }
+
+  async function mhPlan(chapterId) {
+    try {
+      const out = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/plan`, {});
+      toast("Planning the video", `${out.plans.length} plan${out.plans.length === 1 ? "" : "s"} from ${out.photographs} photographs`);
+      const box = $("mhPlans");
+      if (box) box.outerHTML = mhPlans(out.plans);
+    } catch (error) { toast("Could not plan", error.message, "bad"); }
+  }
 
   async function mhConvert(chapterId) {
     try {
@@ -1776,6 +1794,7 @@
     const counts = [`${state.panels_done}/${state.panels_total || "?"} panels`, `${state.converted} made`];
     if (state.refused) counts.push(`${state.refused} refused`);
     if (state.failed) counts.push(`${state.failed} failed`);
+    if (state.plans && state.plans.length && $("mhPlans")) $("mhPlans").outerHTML = mhPlans(state.plans);
     const last = (state.results || []).filter((r) => r.error).slice(-2).map((r) => `${r.page}: ${r.error}`);
     box.innerHTML = `<span class="badge ${state.status === "running" ? "rendering" : state.status}">${esc(state.status)}</span> ${esc(counts.join(" · "))} → Media → ${esc(state.collection)}${left}`
       + (last.length || (state.errors || []).length ? `<div>${esc([...last, ...(state.errors || [])].slice(-3).join(" · "))}</div>` : "");

@@ -31,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, ManhwaConvertIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, ManhwaConvertIn, ManhwaPlanIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -329,7 +329,15 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Turn the chapter's panels into photographs with Qwen Image 2.1 on this GPU (newest Anime2Real LoRA
         from models/loras). Poll GET /v1/manhwa/conversions/{id}."""
         return await manhwa.convert(chapter_id, tile_ids=body.tile_ids, loras=body.loras, prompt=body.prompt,
-                                    realism=body.realism, age_slider=body.age_slider, max_panels=body.max_panels)
+                                    realism=body.realism, age_slider=body.age_slider, max_panels=body.max_panels,
+                                    plan_after=body.plan_after)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/plan", tags=["manhwa"], status_code=202)
+    async def manhwa_plan(chapter_id: str, body: ManhwaPlanIn):
+        """Story-planner jobs for the chapter's photographs: one per nine photographs, one segment each, the
+        dialogue spoken word for word. Render a finished one with POST /v1/videos {plan_job_id}."""
+        return await manhwa.plan_chapter(chapter_id, aspect_ratio=body.aspect_ratio,
+                                         segment_seconds=body.segment_seconds, model=body.model)
 
     @app.get("/v1/manhwa/conversions", tags=["manhwa"])
     async def manhwa_conversions():

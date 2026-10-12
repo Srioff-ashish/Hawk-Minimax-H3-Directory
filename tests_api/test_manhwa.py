@@ -503,3 +503,65 @@ class Convert(unittest.IsolatedAsyncioTestCase):
         self.service.local_images.catalogue = none
         with self.assertRaises(RequestError):
             await self.manager.convert("ch1")
+
+
+class PlanService(ConvertService):
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        self.plans = []
+
+    async def create_plan(self, request):
+        self.plans.append(request)
+        return {"id": f"job{len(self.plans)}"}
+
+
+class Plans(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_plan_")
+        self.service = PlanService(self.tmp)
+        self.manager = ManhwaManager(self.service, delay=(0, 0))
+        self.manager.busy_wait = 0
+        self.manager.store.save_chapter({"id": "ch1", "series": "S", "chapter": "1", "url": "https://x/1",
+                                         "status": "done", "created_at": 1.0, "summary": "Mina meets a stranger."})
+        pages = []
+        for n in range(6):  # six tiles, two photographs each: twelve shots -> plans of 9 and 3
+            photos = [(await self.service.add_asset(f"real{n}{k}.png", io.BytesIO(b"x"), source={"type": "generated"}))["id"]
+                      for k in range(2)]
+            pages.append({"id": f"ch1-{n:04d}", "idx": n, "asset_id": "page", "part": n, "status": "ok",
+                          "scene": f"scene {n}", "characters": [{"name": "Mina", "appearance": "black hair"}],
+                          "dialogue": [{"speaker": "Mina", "text": "늦었네", "text_en": f"line {n}"},
+                                       {"speaker": "narration", "text": "Later.", "text_en": ""}],
+                          "real": [{"panel_asset_id": f"p{n}{k}", "asset_ids": [photos[k]]} for k in range(2)]})
+        self.manager.store.save_pages("ch1", "S", pages)
+
+    async def test_one_plan_per_nine_photographs_with_dialogue_spoken_once(self):
+        out = await self.manager.plan_chapter("ch1")
+        self.assertEqual([p["segments"] for p in out["plans"]], [9, 3])
+        first, second = self.service.plans
+        self.assertEqual((first.segment_count, first.aspect_ratio, len(first.references)), (9, "9:16", 9))
+        self.assertTrue(all(r.role == "picture" for r in first.references))
+        self.assertEqual(first.references[0].asset_id, self.manager.shots("ch1")[0]["asset_id"])
+        self.assertIn("part 1 of 2", first.story)
+        self.assertEqual(first.story.count('Mina: "line 0"'), 1, "a tile's line goes on its first panel only")
+        self.assertIn('Narration (voice-over): "Later."', first.story)
+        self.assertIn("Mina meets a stranger.", first.story)
+        self.assertIn('Mina: "line 5"', second.story)
+        self.assertEqual(self.manager.store.get_chapter("ch1")["plans"][1]["job_id"], "job2")
+
+    async def test_no_photographs_and_bad_settings_are_request_errors(self):
+        from hawk_api.jobs import RequestError
+
+        with self.assertRaises(RequestError):
+            await self.manager.plan_chapter("ch1", aspect_ratio="2:7")
+        self.manager.store.save_pages("ch1", "S", [{"id": "ch1-0000", "idx": 0, "asset_id": "page", "part": 0}])
+        with self.assertRaises(RequestError):
+            await self.manager.plan_chapter("ch1")
+
+    async def test_a_conversion_ends_by_planning_the_chapter(self):
+        page = await self.service.add_asset("p001.png", io.BytesIO(strip_with_panels()), source={"type": "manhwa"})
+        self.manager.store.save_pages("ch1", "S", [
+            {"id": "ch1-0000", "idx": 0, "asset_id": page["id"], "part": 0, "status": "ok", "scene": "a"},
+            {"id": "ch1-0001", "idx": 1, "asset_id": page["id"], "part": 1, "status": "ok", "scene": "b"}])
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual([p["segments"] for p in state["plans"]], [2], state)
+        self.assertEqual(len(self.service.plans), 1)

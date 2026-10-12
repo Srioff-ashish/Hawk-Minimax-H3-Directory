@@ -330,6 +330,13 @@ class ManhwaConvertIn(BaseModel):
     realism: float = Field(0.5, ge=0, le=1, description="Strength of the photoreal lenovo LoRA; 0 leaves it out.")
     age_slider: float = Field(1.0, ge=0, le=3, description="Age slider strength, so drawn faces read as adults; 0 leaves it out.")
     max_panels: int = Field(300, ge=1, le=300)
+    plan_after: bool = Field(True, description="When the photographs are made, start the video plans for the chapter.")
+
+
+class ManhwaPlanIn(BaseModel):
+    aspect_ratio: AspectRatio = Field("9:16", description="Webtoon panels are tall: 9:16 by default.")
+    segment_seconds: float = Field(10.0, ge=1, le=15)
+    model: str | None = Field(None, description="Planner model id. Default comes from the server.")
 
 
 class ManhwaCatalogIn(BaseModel):

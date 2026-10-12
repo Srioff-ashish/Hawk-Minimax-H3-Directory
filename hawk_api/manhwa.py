@@ -32,6 +32,7 @@ import httpx
 from . import models_llm
 from .atlas import AtlasError
 from .jobs import NotFound, RequestError
+from .schemas import PlanRequest, ReferenceIn
 
 log = logging.getLogger("hawk_api.manhwa")
 
@@ -59,6 +60,8 @@ MAX_PANEL = 2400  # px; a taller run is cut into equal parts (a 1024 x 2400 fram
 MAX_CONVERT_PANELS = 300
 BUSY_RETRIES = 10  # ComfyUI busy with a video render: wait a minute and try again, this many times
 BUSY_WAIT = 60.0
+PLAN_PICTURES = 9  # a render takes at most nine pictures, so a chapter is planned in parts this size
+PLAN_SEGMENT_SECONDS = 10.0
 
 #: Images whose URL says what they are, and it is not a panel.
 NOT_PANEL = re.compile(r"logo|avatar|icon|banner|sprite|emoji|badge|button|loading|placeholder|/ads?/|adserver|pixel",
@@ -356,6 +359,33 @@ def real_prompt(tile: dict | None, extra: str = "") -> str:
     if extra.strip():
         parts.append(extra.strip())
     return " ".join(parts)[:1500]
+
+
+def plan_brief(chapter: dict, shots: list[dict], part: int, parts: int) -> str:
+    """The story planner's brief for one part of a chapter: one segment per photograph, in reading order,
+    with the panel's dialogue as the exact lines to speak."""
+    lines = [f"A live-action film of {chapter['series']}, chapter {chapter.get('chapter') or '?'}"
+             + (f", part {part} of {parts}" if parts > 1 else "") + ".",
+             "The attached pictures are photographs made from the comic's panels, in reading order. Write exactly "
+             "one segment per picture, in the same order: segment N starts from <Picture N>, uses only that picture "
+             "(\"pictures\": [N]) and plays out what the panel shows, with the people looking as they do in it.",
+             "Characters speak the dialogue below word for word, in English, in the order given; narration is a "
+             "voice-over. Keep segments with no dialogue free of speech. Leave references_to_make empty.",
+             "All characters are adults."]
+    if chapter.get("summary"):
+        lines.append(f"Chapter so far: {chapter['summary']}")
+    for number, shot in enumerate(shots, 1):
+        lines.append(f"\n<Picture {number}>: {shot.get('scene') or 'see the picture'}")
+        people = [f"{p['name']} ({p.get('appearance', '')})" for p in shot.get("characters") or [] if p.get("name")]
+        if people:
+            lines.append("People: " + "; ".join(people))
+        for said in shot.get("dialogue") or []:
+            text = (said.get("text_en") or said.get("text") or "").strip()
+            if not text:
+                continue
+            who = said.get("speaker") or "narration"
+            lines.append(f'{"Narration (voice-over)" if who.lower() == "narration" else who}: "{text}"')
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- store
@@ -692,7 +722,7 @@ class ManhwaManager:
 
     async def convert(self, chapter_id: str, *, tile_ids: list[str] | None = None, loras: list[dict] | None = None,
                       prompt: str = "", realism: float = 0.5, age_slider: float = 1.0,
-                      max_panels: int = MAX_CONVERT_PANELS) -> dict:
+                      max_panels: int = MAX_CONVERT_PANELS, plan_after: bool = True) -> dict:
         """Turn a catalogued chapter's panels into photographs with Qwen Image 2.1 on this GPU. Runs in the
         background, one panel at a time; poll conversion(). tile_ids limits it to the panels in those tiles."""
         chapter = self.store.get_chapter(chapter_id)
@@ -710,6 +740,7 @@ class ManhwaManager:
             "panels_total": 0, "panels_done": 0, "converted": 0, "refused": 0, "failed": 0, "results": [],
             "errors": [], "cancel_requested": False, "created_at": time.time(), "finished_at": None,
             "collection": f"manhwa/{chapter['series']}/{chapter['chapter'] or 'chapter'}/real",
+            "plan_after": bool(plan_after), "plans": [],
         }
         self.conversions[state["id"]] = state
         self._convert_tasks[state["id"]] = asyncio.create_task(
@@ -793,6 +824,11 @@ class ManhwaManager:
                         self.store.save_pages(chapter_id, series, pages)
                 state["results"].append(row)
                 state["panels_done"] += 1
+            if state["plan_after"] and state["converted"]:
+                try:
+                    state["plans"] = (await self.plan_chapter(chapter_id))["plans"]
+                except Exception as exc:  # the photographs are made; a plan can be asked for again
+                    state["errors"].append(f"Video plan: {exc}")
             state["status"] = "done"
         except asyncio.CancelledError:
             state["status"] = "cancelled"
@@ -804,6 +840,60 @@ class ManhwaManager:
         finally:
             state["finished_at"] = time.time()
             self._convert_tasks.pop(state["id"], None)
+
+    def shots(self, chapter_id: str) -> list[dict]:
+        """The chapter's photographs in reading order, one per panel (the latest made from it), each with its
+        tile's scene, characters and dialogue -- the dialogue only on the first panel of a tile, so a line is
+        not spoken twice."""
+        shots, spoken = [], set()
+        for tile in self.store.pages(chapter_id):
+            latest: dict[str, str] = {}
+            for made in tile.get("real") or []:
+                ids = [i for i in made.get("asset_ids") or [] if self.service.store.get_asset(i) is not None]
+                if ids:
+                    latest[made.get("panel_asset_id") or ids[0]] = ids[0]
+            for asset_id in latest.values():
+                shot = {"asset_id": asset_id, "tile_id": tile["id"], "scene": tile.get("scene", ""),
+                        "characters": tile.get("characters") or [], "dialogue": []}
+                if tile["id"] not in spoken:
+                    shot["dialogue"] = tile.get("dialogue") or []
+                    spoken.add(tile["id"])
+                shots.append(shot)
+        return shots
+
+    async def plan_chapter(self, chapter_id: str, *, aspect_ratio: str = "9:16",
+                           segment_seconds: float = PLAN_SEGMENT_SECONDS, model: str | None = None) -> dict:
+        """Start story-planner jobs that turn the chapter's photographs into a film: one plan per nine
+        photographs (a render's picture limit), one segment per photograph, the tiles' dialogue spoken word
+        for word. Render each finished plan with plan_job_id."""
+        chapter = self.store.get_chapter(chapter_id)
+        if chapter is None:
+            raise NotFound(f"No catalogued chapter {chapter_id!r}.")
+        shots = self.shots(chapter_id)
+        if not shots:
+            raise RequestError("This chapter has no photographs yet: convert its panels first.")
+        parts = [shots[i:i + PLAN_PICTURES] for i in range(0, len(shots), PLAN_PICTURES)]
+        plans = []
+        for number, part in enumerate(parts, 1):
+            try:
+                request = self._plan_request(chapter, part, number, len(parts), aspect_ratio, segment_seconds, model)
+            except ValueError as exc:  # pydantic: an aspect ratio or length the planner does not take
+                raise RequestError(str(exc).splitlines()[0] if str(exc) else "Bad plan settings.") from None
+            job = await self.service.create_plan(request)
+            plans.append({"part": number, "job_id": job["id"], "pictures": [s["asset_id"] for s in part],
+                          "segments": len(part)})
+        chapter["plans"] = plans
+        self.store.save_chapter(chapter)
+        return {"chapter_id": chapter_id, "photographs": len(shots), "plans": plans}
+
+    @staticmethod
+    def _plan_request(chapter, part, number, parts, aspect_ratio, segment_seconds, model) -> PlanRequest:
+        return PlanRequest(
+            story=plan_brief(chapter, part, number, parts), segment_count=len(part),
+            segment_seconds=segment_seconds, aspect_ratio=aspect_ratio, model=model,
+            references=[ReferenceIn(asset_id=shot["asset_id"], role="picture",
+                                    label=(shot["scene"] or f"panel photo {k}")[:200])
+                        for k, shot in enumerate(part, 1)])
 
     async def _convert_panel(self, panel_id: str, prompt: str, loras: list[dict]) -> dict:
         for attempt in range(BUSY_RETRIES + 1):

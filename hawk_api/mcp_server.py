@@ -392,15 +392,29 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
             "in models/loras/qwen21, the lenovo realism LoRA (realism, 0 = off) and the age slider (age_slider, "
             "0 = off), using the tile's catalogued scene and character looks in the prompt. loras=[{name, strength}] "
             "replaces those defaults. tile_ids limits it to some tiles. Results go to manhwa/<series>/<chapter>/real. "
-            "Runs in the background: poll get_manhwa_conversion. The usual image rules apply to every panel."))
+            "Runs in the background: poll get_manhwa_conversion. The usual image rules apply to every panel. "
+            "With plan_after (default) it then starts the chapter's video plans, as plan_manhwa_video does; their "
+            "job ids are in the conversion's plans."))
         async def convert_manhwa_to_real(chapter_id: str, tile_ids: list[str] | None = None,
                                          loras: list[dict] | None = None, prompt: str = "", realism: float = 0.5,
-                                         age_slider: float = 1.0, max_panels: int = 300,
+                                         age_slider: float = 1.0, max_panels: int = 300, plan_after: bool = True,
                                          wait_seconds: int = 20) -> dict:
             state = await run(manhwa.convert(chapter_id, tile_ids=tile_ids, loras=loras, prompt=prompt,
                                              realism=max(0.0, min(realism, 1.0)),
-                                             age_slider=max(0.0, min(age_slider, 3.0)), max_panels=max_panels))
+                                             age_slider=max(0.0, min(age_slider, 3.0)), max_panels=max_panels,
+                                             plan_after=plan_after))
             return await manhwa.wait_conversion(state["id"], max(0, min(wait_seconds, 120)))
+
+        @mcp.tool(description=(
+            "Plan a film from a manhwa chapter's converted photographs: story-planner jobs, one per nine photographs "
+            "(a render's picture limit), one segment per photograph in reading order, with each tile's catalogued "
+            "dialogue spoken word for word (narration as voice-over). Returns the plan job ids; poll get_job, then "
+            "render each with create_video plan_job_id. aspect_ratio defaults to 9:16 for tall webtoon panels."))
+        async def plan_manhwa_video(chapter_id: str, aspect_ratio: str = "9:16", segment_seconds: float = 10.0,
+                                    model: str = "") -> dict:
+            return await run(manhwa.plan_chapter(chapter_id, aspect_ratio=aspect_ratio,
+                                                 segment_seconds=max(1.0, min(segment_seconds, 15.0)),
+                                                 model=model or None))
 
         @mcp.tool(description="Progress of a manhwa-to-real conversion: panels_total, panels_done, converted, refused, failed, and per panel the image asset ids or the reason.")
         async def get_manhwa_conversion(conversion_id: str) -> dict:
