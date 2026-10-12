@@ -126,6 +126,19 @@
   .page-title { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
   .page-sub { color: var(--muted); font-size: 13px; }
   .spacer { flex: 1; }
+  .mh-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 16px; align-items: start; }
+  @media (max-width: 960px) { .mh-layout { grid-template-columns: 1fr; } }
+  .mh-results { display: grid; gap: 10px; }
+  .mh-hit { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+  .mh-hit img { width: 96px; height: 128px; object-fit: cover; object-position: top; border-radius: 6px; background: var(--surface-3); }
+  .mh-hit p { margin: 4px 0 0; font-size: 13px; }
+  .mh-said { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
+  .mh-said b { font-weight: 600; }
+  .mh-list { display: grid; gap: 6px; max-height: 420px; overflow: auto; }
+  .mh-list button { text-align: left; border: 1px solid var(--line); background: var(--surface); border-radius: var(--r-sm); padding: 8px 10px; cursor: pointer; color: inherit; font: inherit; }
+  .mh-list button:hover { border-color: var(--brand); }
+  .mh-char { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .mh-char:last-child { border-bottom: 0; }
   .content { padding: 24px 28px 64px; max-width: 1440px; width: 100%; margin: 0 auto; }
 
   /* ---------- primitives ---------- */
@@ -657,6 +670,7 @@
     <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Videos</span><span class="nav-count" id="activeCount" hidden>0</span></a>
     <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
     <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
+    <a class="nav-item" href="#manhwa" data-route="manhwa"><svg><use href="#i-library"/></svg><span>Manhwa</span><span class="nav-count" id="manhwaBusy" hidden title="Cataloguing">●</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Media</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
     <div class="nav-group">Billing</div>
@@ -983,6 +997,51 @@
               <div><b>SFW check:</b> decides, before every Nano Banana image or edit, whether the request is SFW. It sees the prompt and the reference images. Only an sfw verdict sends a request to Google; nsfw, or any answer it can't read, sends it to the next engine in the ladder instead. Applies from the next image.</div>
               <div>Every save keeps the previous version under <b>Version history</b>.</div>
             </div>
+          </section>
+        </aside>
+      </div>
+    </main>
+    <main class="content" id="page-manhwa" data-page="manhwa" hidden>
+      <div class="mh-layout">
+        <div style="display:grid;gap:16px">
+          <section class="card" aria-label="Catalogue a chapter">
+            <div class="card-head"><h2>Catalogue a chapter</h2><span class="hint">panels go to Media → manhwa/&lt;series&gt;/&lt;chapter&gt;</span></div>
+            <form class="card-body grid" id="mhForm" autocomplete="off">
+              <label class="field"><span class="label">Chapter URL</span><input class="input" id="mhUrl" type="url" required placeholder="https://…/chapter-1"></label>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Series</span><input class="input" id="mhSeries" required placeholder="Series name" list="mhSeriesList"><datalist id="mhSeriesList"></datalist></label>
+                <label class="field"><span class="label">Chapter no. <span class="hint">blank: from the URL</span></span><input class="input" id="mhChapter" placeholder="e.g. 12"></label>
+              </div>
+              <label class="field"><span class="label">Cookies <span class="hint">optional, for a site you are logged in to</span></span><input class="input" id="mhCookies" placeholder="name=value; other=value"></label>
+              <div class="row">
+                <label class="check"><input type="checkbox" id="mhFollow">Keep going to next chapters</label>
+                <label class="check">up to <input class="input" id="mhMax" type="number" min="1" max="50" value="5" style="width:70px;height:30px"> chapters</label>
+                <div class="spacer"></div>
+                <button class="btn btn-primary" type="submit" id="mhStart">Catalogue</button>
+              </div>
+              <div id="mhRun" hidden style="display:grid;gap:6px">
+                <div class="row"><span class="badge" id="mhRunBadge"></span><span class="hint" id="mhRunText"></span><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhCancel">Cancel</button></div>
+                <div class="progress"><i id="mhRunBar" style="width:0%"></i></div>
+                <div class="hint" id="mhRunErrors"></div>
+              </div>
+            </form>
+          </section>
+          <section class="card" aria-label="Search the catalogue">
+            <div class="card-head"><h2>Search</h2><div class="spacer"></div><select class="select" id="mhSearchSeries" style="width:auto;height:30px"><option value="">All series</option></select></div>
+            <div class="card-body grid">
+              <form class="row" id="mhSearchForm"><input class="input" id="mhQuery" placeholder="a name, a line of dialogue, a place, a tag…" style="flex:1"><button class="btn" type="submit">Search</button></form>
+              <div class="mh-results" id="mhResults"></div>
+            </div>
+          </section>
+        </div>
+        <aside style="display:grid;gap:16px">
+          <section class="card" aria-label="Chapters">
+            <div class="card-head"><h2>Chapters</h2><div class="spacer"></div><select class="select" id="mhSeriesPick" style="width:auto;height:30px"></select></div>
+            <div class="card-body"><div class="mh-list" id="mhChapters"><span class="hint">Nothing catalogued yet.</span></div></div>
+          </section>
+          <section class="card" aria-label="Characters">
+            <div class="card-head"><h2>Characters</h2></div>
+            <div class="card-body" id="mhCharacters"><span class="hint">Pick a series.</span></div>
           </section>
         </aside>
       </div>
@@ -1382,6 +1441,7 @@
     connect: ["Connect & settings", "Chat connectors, API and preferences"],
     agent: ["Agent", "Your autonomous video director"],
     prompts: ["Prompts", "Edit the agent, story planner and SFW check instructions"],
+    manhwa: ["Manhwa", "Catalogue chapters from a URL: scenes, characters, dialogue, search"],
     openrouter: ["OpenRouter", "Credits, spend and usage per model"],
     atlas: ["Atlas Cloud", "Balance, spend and usage per model"],
     gcp: ["Google Cloud", "Nano Banana spend on the Gemini API"],
@@ -1545,10 +1605,143 @@
     if (page === "library") renderLibrary();
     if (BILLING_PAGES[page] && (PREFIX || token)) loadBilling(page);
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
+    if (page === "manhwa" && (PREFIX || token)) loadManhwa();
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
   window.addEventListener("hashchange", route);
+
+  // --------------------------------------------------------------- manhwa
+
+  const manhwa = { run: storage.get("hawkH3ManhwaRun") || null, timer: null, series: storage.get("hawkH3ManhwaSeries") || "" };
+
+  function mhPage(hit) {
+    const said = (hit.dialogue || []).slice(0, 4).map((d) =>
+      `<div class="mh-said"><b>${esc(d.speaker || "?")}:</b> ${esc(d.text_en || d.text)}${d.text_en && d.text && d.text_en !== d.text ? ` <span class="hint">(${esc(d.text)})</span>` : ""}</div>`).join("");
+    const who = (hit.characters || []).map((c) => c.name).filter(Boolean);
+    const where = hit.chapter !== undefined ? `<strong>${esc(hit.series || "")} · ch ${esc(hit.chapter)}</strong> <span class="hint">tile ${hit.idx + 1}</span>` : `<span class="hint">tile ${hit.idx + 1}</span>`;
+    const img = hit.thumb_url ? `<a href="${esc(hit.file_url || hit.thumb_url)}" target="_blank" rel="noopener"><img src="${esc(hit.thumb_url)}" alt="" loading="lazy"></a>` : "<span></span>";
+    const body = hit.status === "failed" ? `<p class="hint">Not described: ${esc(hit.error || "the model refused")}</p>`
+      : `<p>${esc(hit.scene || "")}</p>${who.length ? `<div class="hint">${esc(who.join(", "))}${hit.setting ? " · " + esc(hit.setting) : ""}</div>` : ""}${said}`;
+    return `<div class="mh-hit">${img}<div>${where}${body}</div></div>`;
+  }
+
+  async function loadManhwa() {
+    try {
+      const { series } = await api("/v1/manhwa/series");
+      const names = series.map((s) => s.series);
+      $("mhSeriesList").innerHTML = names.map((n) => `<option value="${esc(n)}">`).join("");
+      $("mhSearchSeries").innerHTML = `<option value="">All series</option>` + names.map((n) => `<option>${esc(n)}</option>`).join("");
+      if (!names.includes(manhwa.series)) manhwa.series = names[0] || "";
+      $("mhSeriesPick").innerHTML = series.map((s) => `<option value="${esc(s.series)}">${esc(s.series)} (${s.done}/${s.chapters})</option>`).join("");
+      $("mhSeriesPick").value = manhwa.series;
+      await mhShowSeries();
+    } catch (error) { toast("Could not load the catalogue", error.message, "bad"); }
+    if (manhwa.run) mhPoll();
+  }
+
+  async function mhShowSeries() {
+    const series = manhwa.series;
+    if (!series) return;
+    storage.set("hawkH3ManhwaSeries", series);
+    const [{ chapters }, { characters }] = await Promise.all([
+      api(`/v1/manhwa/chapters?series=${encodeURIComponent(series)}`),
+      api(`/v1/manhwa/characters?series=${encodeURIComponent(series)}`),
+    ]);
+    $("mhChapters").innerHTML = chapters.length ? chapters.map((c) =>
+      `<button type="button" data-chapter="${esc(c.id)}"><div class="row"><strong>Ch ${esc(c.chapter || "?")}</strong><span class="badge ${c.status === "done" ? "done" : c.status === "failed" ? "failed" : "rendering"}">${esc(c.status)}</span><div class="spacer"></div><span class="hint">${c.tiles || 0} tiles</span></div>${c.summary ? `<div class="hint" style="margin-top:4px">${esc(c.summary.slice(0, 180))}${c.summary.length > 180 ? "…" : ""}</div>` : ""}</button>`).join("")
+      : `<span class="hint">Nothing catalogued yet.</span>`;
+    $("mhCharacters").innerHTML = characters.length ? characters.map((c) =>
+      `<div class="mh-char"><strong>${esc(c.name)}</strong>${(c.aliases || []).length ? ` <span class="hint">aka ${esc(c.aliases.join(", "))}</span>` : ""}<div class="hint">${esc(c.appearance || "")}</div><div class="hint">ch ${esc((c.chapters || []).join(", "))}</div></div>`).join("")
+      : `<span class="hint">No named characters yet.</span>`;
+  }
+
+  async function mhOpenChapter(id) {
+    try {
+      const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
+      $("mhResults").innerHTML = `<div><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p></div>`
+        + chapter.pages.map(mhPage).join("");
+    } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
+  }
+
+  function mhShowRun(run) {
+    $("mhRun").hidden = false;
+    const badge = $("mhRunBadge");
+    badge.className = `badge ${run.status === "running" ? "rendering" : run.status}`;
+    badge.textContent = run.status;
+    const cur = run.current;
+    const parts = [`${run.chapters_done} of up to ${run.max_chapters} chapter${run.max_chapters === 1 ? "" : "s"} done`];
+    if (run.skipped && run.skipped.length) parts.push(`${run.skipped.length} already catalogued`);
+    if (cur) parts.push(`ch ${cur.chapter || "?"}: ${cur.step}${cur.tiles_total ? ` ${cur.tiles_done}/${cur.tiles_total} tiles` : ""}`);
+    if (run.status !== "running" && run.stop_reason) parts.push(run.stop_reason);
+    $("mhRunText").textContent = parts.join(" · ");
+    const within = cur && cur.tiles_total ? cur.tiles_done / cur.tiles_total : 0;
+    const total = run.status === "done" ? 1 : (run.chapters_done + (run.skipped || []).length + within) / run.max_chapters;
+    $("mhRunBar").style.width = `${Math.round(Math.min(1, total) * 100)}%`;
+    $("mhRunErrors").textContent = (run.errors || []).slice(-3).join(" · ");
+    $("mhCancel").hidden = run.status !== "running";
+    $("manhwaBusy").hidden = run.status !== "running";
+  }
+
+  async function mhPoll() {
+    clearTimeout(manhwa.timer);
+    if (!manhwa.run) return;
+    try {
+      const run = await api(`/v1/manhwa/runs/${manhwa.run}`);
+      mhShowRun(run);
+      if (run.status === "running") { manhwa.timer = setTimeout(mhPoll, 4000); if (run.chapters_done !== manhwa.lastDone) { manhwa.lastDone = run.chapters_done; manhwa.series = run.series; mhShowSeries().catch(() => {}); } return; }
+      manhwa.series = run.series;
+      await loadManhwaLists();
+      if (run.status === "done") toast("Catalogue finished", run.stop_reason || "");
+      else if (run.status === "failed") toast("Catalogue failed", (run.errors || []).slice(-1)[0] || "", "bad");
+      manhwa.run = null;
+      storage.set("hawkH3ManhwaRun", "");
+    } catch (error) {
+      if (error.status === 404) { manhwa.run = null; storage.set("hawkH3ManhwaRun", ""); $("mhRun").hidden = true; return; }
+      manhwa.timer = setTimeout(mhPoll, 8000);
+    }
+  }
+
+  async function loadManhwaLists() {
+    const { series } = await api("/v1/manhwa/series");
+    $("mhSeriesPick").innerHTML = series.map((s) => `<option value="${esc(s.series)}">${esc(s.series)} (${s.done}/${s.chapters})</option>`).join("");
+    $("mhSeriesPick").value = manhwa.series;
+    await mhShowSeries();
+  }
+
+  $("mhForm").onsubmit = async (event) => {
+    event.preventDefault();
+    $("mhStart").disabled = true;
+    try {
+      const run = await post("/v1/manhwa/runs", {
+        url: $("mhUrl").value.trim(), series: $("mhSeries").value.trim(), chapter: $("mhChapter").value.trim(),
+        cookies: $("mhCookies").value.trim(), follow_next: $("mhFollow").checked,
+        max_chapters: Math.max(1, Math.min(50, Number($("mhMax").value) || 5)),
+      });
+      manhwa.run = run.id; manhwa.series = run.series; manhwa.lastDone = 0;
+      storage.set("hawkH3ManhwaRun", run.id);
+      mhShowRun(run);
+      manhwa.timer = setTimeout(mhPoll, 2000);
+      toast("Cataloguing started", run.follow_next ? `Up to ${run.max_chapters} chapters` : "One chapter");
+    } catch (error) { toast("Could not start", error.message, "bad"); }
+    finally { $("mhStart").disabled = false; }
+  };
+  $("mhCancel").onclick = async () => {
+    if (!manhwa.run) return;
+    try { mhShowRun(await post(`/v1/manhwa/runs/${manhwa.run}/cancel`, {})); toast("Stopping after this chapter"); }
+    catch (error) { toast("Could not cancel", error.message, "bad"); }
+  };
+  $("mhSeriesPick").onchange = (event) => { manhwa.series = event.target.value; mhShowSeries().catch((e) => toast("Could not load", e.message, "bad")); };
+  $("mhChapters").onclick = (event) => { const button = event.target.closest("[data-chapter]"); if (button) mhOpenChapter(button.dataset.chapter); };
+  $("mhSearchForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const q = $("mhQuery").value.trim();
+    if (!q) return;
+    try {
+      const { results } = await api(`/v1/manhwa/search?q=${encodeURIComponent(q)}&series=${encodeURIComponent($("mhSearchSeries").value)}`);
+      $("mhResults").innerHTML = results.length ? results.map(mhPage).join("") : `<span class="hint">No tiles match “${esc(q)}”.</span>`;
+    } catch (error) { toast("Search failed", error.message, "bad"); }
+  };
 
   // --------------------------------------------------------------- billing
 

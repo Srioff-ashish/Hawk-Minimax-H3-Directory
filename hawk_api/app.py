@@ -19,6 +19,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
+from .manhwa import ManhwaManager
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -30,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -97,10 +98,11 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     service = service or HawkService(settings)
     drive = DriveBrowser(settings.drive_root)
     imports = ImportManager(service, drive)
+    manhwa = ManhwaManager(service)
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
-    mcp = build_mcp(service, drive=drive, imports=imports)
+    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -124,6 +126,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             # In a finally: a shutdown that skipped these would also skip the last snapshot, which is
             # the one copy that matters when a Colab runtime is going away.
             await imports.stop()
+            await manhwa.stop()
             await exporter.stop()
             await agent.stop()
             await service.stop()
@@ -137,6 +140,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     )
     app.state.service = service
     app.state.agent = agent
+    app.state.manhwa = manhwa
     app.state.snapshots = snapshots
 
     @app.exception_handler(RequestError)
@@ -280,6 +284,47 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/imports/{import_id}", tags=["assets"])
     async def import_status(import_id: str):
         return imports.get(import_id)
+
+    # ------------------------------------------------------------- manhwa catalogue
+
+    @app.post("/v1/manhwa/runs", tags=["manhwa"], status_code=202)
+    async def manhwa_start(body: ManhwaCatalogIn):
+        """Catalogue a chapter (and, with follow_next, the chapters after it). Poll GET /v1/manhwa/runs/{id}."""
+        return await manhwa.start(body.url, body.series, body.chapter, cookies=body.cookies,
+                                  follow_next=body.follow_next, max_chapters=body.max_chapters)
+
+    @app.get("/v1/manhwa/runs", tags=["manhwa"])
+    async def manhwa_runs():
+        return {"runs": manhwa.recent()}
+
+    @app.get("/v1/manhwa/runs/{run_id}", tags=["manhwa"])
+    async def manhwa_run(run_id: str):
+        return manhwa.get(run_id)
+
+    @app.post("/v1/manhwa/runs/{run_id}/cancel", tags=["manhwa"])
+    async def manhwa_cancel(run_id: str):
+        """Stop after the chapter being catalogued now."""
+        return manhwa.cancel(run_id)
+
+    @app.get("/v1/manhwa/series", tags=["manhwa"])
+    async def manhwa_series():
+        return {"series": manhwa.store.series()}
+
+    @app.get("/v1/manhwa/chapters", tags=["manhwa"])
+    async def manhwa_chapters(series: str = ""):
+        return {"chapters": manhwa.store.list_chapters(series)}
+
+    @app.get("/v1/manhwa/chapters/{chapter_id}", tags=["manhwa"])
+    async def manhwa_chapter(chapter_id: str):
+        return manhwa.chapter_view(chapter_id)
+
+    @app.get("/v1/manhwa/search", tags=["manhwa"])
+    async def manhwa_search(q: str, series: str = "", limit: int = 30):
+        return {"results": manhwa.search(q, series, limit)}
+
+    @app.get("/v1/manhwa/characters", tags=["manhwa"])
+    async def manhwa_characters(series: str):
+        return {"characters": manhwa.characters(series)}
 
     @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
     async def asset_file(asset_id: str, w: int = 0):

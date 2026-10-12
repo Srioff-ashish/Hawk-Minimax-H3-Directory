@@ -59,7 +59,7 @@ def _error(exc: Exception) -> ToolError:
     return ToolError(message)
 
 
-def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
+def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
@@ -333,5 +333,54 @@ def build_mcp(service: HawkService, drive=None, imports=None) -> MCPServer:
                 return imports.get(import_id)
             except NotFound as exc:
                 raise ToolError(str(exc)) from None
+
+    if manhwa is not None:
+        @mcp.tool(description=(
+            "Catalogue a manhwa chapter from its reader page URL: downloads the panel images in order into the library "
+            "(collection manhwa/<series>/<chapter>), and a vision model writes per-tile scene, characters, dialogue "
+            "(original + English) and tags, plus a chapter summary and a running character roster. follow_next=true "
+            "keeps going through the next chapters (max_chapters, up to 50). cookies: an optional Cookie header for a "
+            "site the user is logged in to. Returns a run; poll get_manhwa_run. Chapters already catalogued are skipped."))
+        async def catalog_chapter(url: str, series: str, chapter: str = "", follow_next: bool = False,
+                                  max_chapters: int = 5, cookies: str = "", wait_seconds: int = 20) -> dict:
+            state = await run(manhwa.start(url, series, chapter, cookies=cookies, follow_next=follow_next,
+                                           max_chapters=max_chapters))
+            return await manhwa.wait(state["id"], max(0, min(wait_seconds, 120)))
+
+        @mcp.tool(description="Progress of a manhwa catalogue run: status, chapters_done, the chapter and tile being worked on, chapter_ids, stop_reason, errors.")
+        async def get_manhwa_run(run_id: str) -> dict:
+            try:
+                return manhwa.get(run_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description="Stop a manhwa catalogue run after the chapter it is on.")
+        async def cancel_manhwa_run(run_id: str) -> dict:
+            try:
+                return manhwa.cancel(run_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description="Catalogued manhwa: with no series, every series and its chapter count; with series, its chapters (id, number, status, summary).")
+        async def list_manhwa(series: str = "") -> dict:
+            if not series:
+                return {"series": manhwa.store.series()}
+            return {"chapters": [{k: c.get(k) for k in ("id", "chapter", "status", "summary", "tiles", "url")}
+                                 for c in manhwa.store.list_chapters(series)]}
+
+        @mcp.tool(description="One catalogued chapter in full: summary and every tile's scene, characters, dialogue and thumb_url.")
+        async def get_manhwa_chapter(chapter_id: str) -> dict:
+            try:
+                return manhwa.chapter_view(chapter_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description="Full-text search over catalogued manhwa tiles (scenes, dialogue in both languages, character names, tags). Every word must match. Returns tiles with chapter, scene, dialogue and thumb_url.")
+        async def search_manhwa(query: str, series: str = "", limit: int = 20) -> dict:
+            return {"results": manhwa.search(query, series, max(1, min(limit, 100)))}
+
+        @mcp.tool(description="The character roster of a catalogued series: name, aliases, appearance, chapters they appear in.")
+        async def manhwa_characters(series: str) -> dict:
+            return {"characters": manhwa.characters(series)}
 
     return mcp

@@ -321,3 +321,12 @@ class LLMSettingsUpdate(BaseModel):
     agent_vision_model_override: str | None = Field(
         None, description="Model chain for looking at images (inspect_image), used when the chat's own model "
         "cannot see. Only models the provider lists as accepting image input are tried.")
+
+
+class ManhwaCatalogIn(BaseModel):
+    url: str = Field(description="The chapter page's http(s) URL (the reader page whose <img> tags are the panels).")
+    series: str = Field(description="Series name. Groups chapters and their character roster.")
+    chapter: str = Field("", description="Chapter number for the first chapter. Blank: read from the URL or page title.")
+    cookies: str = Field("", description="Optional Cookie header for a site you are logged in to, e.g. 'session=abc; age_ok=1'.")
+    follow_next: bool = Field(False, description="Keep going to the next chapters by following the page's 'next' link.")
+    max_chapters: int = Field(5, ge=1, le=50, description="With follow_next: stop after this many chapters.")
