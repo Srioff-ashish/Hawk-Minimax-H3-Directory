@@ -16,7 +16,7 @@ from hawk_h3.script import max_segment_seconds
 
 from . import pose_guide as pose_guides
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
-from .schemas import ImageLoraIn, LoraIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
+from .schemas import ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 INSTRUCTIONS = """\
 Hawk H3 Director renders MiniMax H3 videos with native audio on the user's GPU pod, one clip or a long film of joined segments.
@@ -381,7 +381,8 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
 
         @mcp.tool(description=(
             "Delete a catalogued manhwa series, or one chapter of it (chapter_id from list_manhwa), with its "
-            "downloaded panel images (images=false keeps the images). Cancels runs on that series first. "
+            "downloaded pages, cut panels and the photographs made from them (images=false keeps the images). "
+            "Rendered videos are always kept. Cancels runs on that series first. "
             "Only when the user asks for it."))
         async def delete_manhwa(series: str, chapter_id: str = "", images: bool = True) -> dict:
             return await run(manhwa.delete(series, chapter_id, images=images))
@@ -399,16 +400,66 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
             "With plan_after (default) it then starts the chapter's video plans, as plan_manhwa_video does; their "
             "job ids are in the conversion's plans."))
         async def convert_manhwa_to_real(chapter_id: str, tile_ids: list[str] | None = None,
-                                         loras: list[dict] | None = None, prompt: str = "", realism: float = 0.5,
-                                         age_slider: float = 1.0, max_panels: int = 300, plan_after: bool = True,
-                                         analyze: bool = True, prompt_model: str = "",
-                                         wait_seconds: int = 20) -> dict:
+                                         loras: list[dict] | None = None, prompt: str | None = None,
+                                         realism: float | None = None, age_slider: float | None = None,
+                                         steps: int | None = None, cfg: float | None = None,
+                                         negative: str | None = None, max_panels: int = 300,
+                                         plan_after: bool | None = None, analyze: bool | None = None,
+                                         prompt_model: str | None = None, wait_seconds: int = 20) -> dict:
+            try:
+                ManhwaConvertIn(tile_ids=tile_ids or [], loras=loras, prompt=prompt, realism=realism,
+                                age_slider=age_slider, steps=steps, cfg=cfg, negative=negative,
+                                max_panels=max_panels)
+            except ValueError as exc:
+                raise ToolError(str(exc).splitlines()[0]) from None
             state = await run(manhwa.convert(chapter_id, tile_ids=tile_ids, loras=loras, prompt=prompt,
-                                             realism=max(0.0, min(realism, 1.0)),
-                                             age_slider=max(0.0, min(age_slider, 3.0)), max_panels=max_panels,
-                                             plan_after=plan_after, analyze=analyze,
-                                             prompt_model=prompt_model))
+                                             realism=realism, age_slider=age_slider, max_panels=max_panels,
+                                             plan_after=plan_after, analyze=analyze, prompt_model=prompt_model,
+                                             steps=steps, cfg=cfg, negative=negative))
             return await manhwa.wait_conversion(state["id"], max(0, min(wait_seconds, 120)))
+
+        @mcp.tool(description=(
+            "Render a manhwa chapter's video: one render job per finished video plan (from plan_manhwa_video or a "
+            "conversion's plan_after). Plans still being written come back in not_ready -- call again when they are "
+            "done. Parts already rendering or rendered are skipped unless force. settings: RenderSettings fields "
+            "over the Manhwa defaults, e.g. {\"unet_name\": \"beta6\"}. Poll each job with get_job."))
+        async def render_manhwa_chapter(chapter_id: str, parts: list[int] | None = None, force: bool = False,
+                                        settings: dict | None = None) -> dict:
+            return await run(manhwa.render_chapter(chapter_id, parts=parts, force=force, settings=settings))
+
+        @mcp.tool(description=(
+            "Give a catalogued manhwa chapter its scene context: characters (who, and how they look), setting (where "
+            "and when), action (what happens), and one_scene=true when the chapter is one continuous scene. Every "
+            "panel prompt in convert_manhwa_to_real and the chapter's video plans follow it. Empty strings clear it."))
+        async def set_manhwa_chapter_context(chapter_id: str, characters: str = "", setting: str = "",
+                                             action: str = "", one_scene: bool = False) -> dict:
+            try:
+                body = ManhwaContextIn(characters=characters, setting=setting, action=action, one_scene=one_scene)
+            except ValueError as exc:
+                raise ToolError(str(exc).splitlines()[0]) from None
+            try:
+                return manhwa.set_context(chapter_id, body.model_dump())
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description=(
+            "The Manhwa page's own Qwen Image 2.1 settings for converting panels (separate from image_options): "
+            "loras (null = automatic: newest Anime2Real + lenovo realism + age slider), realism, age_slider, steps, "
+            "cfg, negative, prompt, analyze, prompt_model, plan_after, aspect_ratio, segment_seconds; plus the LoRAs "
+            "automatic would pick now and every installed Qwen 2.1 LoRA."))
+        async def get_manhwa_settings() -> dict:
+            return await manhwa.settings_view()
+
+        @mcp.tool(description=(
+            "Change the Manhwa page's Qwen Image 2.1 settings: pass only the fields to change (see "
+            "get_manhwa_settings). loras=[] goes back to automatic. Only when the user asks."))
+        async def set_manhwa_settings(changes: dict) -> dict:
+            try:
+                valid = ManhwaSettingsIn(**changes).model_dump(exclude_unset=True)
+            except (ValueError, TypeError) as exc:
+                raise ToolError(str(exc).splitlines()[0]) from None
+            manhwa.save_settings(valid)
+            return await manhwa.settings_view()
 
         @mcp.tool(description=(
             "Plan a film from a manhwa chapter's converted photographs: story-planner jobs, one per nine photographs "

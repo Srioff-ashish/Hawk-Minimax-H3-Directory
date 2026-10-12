@@ -323,23 +323,74 @@ class LLMSettingsUpdate(BaseModel):
         "cannot see. Only models the provider lists as accepting image input are tried.")
 
 
+class ManhwaLoraIn(BaseModel):
+    name: str = Field(description="A Qwen Image 2.1 LoRA file from models/loras, or a unique part of its name.")
+    strength: float = Field(1.0, ge=-4, le=4)
+
+
+class ManhwaSettingsIn(BaseModel):
+    """The Manhwa page's own Qwen Image 2.1 settings. Only the fields sent are changed."""
+    loras: list[ManhwaLoraIn] | None = Field(None, description="LoRAs every panel is converted with. [] goes back to "
+                                             "automatic: the newest Anime2Real + lenovo realism + age slider from the folder.")
+    realism: float | None = Field(None, ge=0, le=1, description="Automatic LoRAs only: lenovo realism strength; 0 leaves it out.")
+    age_slider: float | None = Field(None, ge=0, le=3, description="Automatic LoRAs only: age slider strength; 0 leaves it out.")
+    steps: int | None = Field(None, ge=1, le=50, description="Sampling steps. Null: the engine's (or a LoRA's) own.")
+    cfg: float | None = Field(None, ge=0, le=15, description="Guidance. Null: the engine's own (1.0 with the adult LoRA).")
+    negative: str | None = Field(None, max_length=2000, description="Added to every panel's negative prompt.")
+    prompt: str | None = Field(None, max_length=2000, description="Added to every panel's prompt, e.g. 'soft evening light'.")
+    analyze: bool | None = Field(None, description="A vision model writes each panel's prompt; false uses the template.")
+    prompt_model: str | None = Field(None, description="The model that writes panel prompts, e.g. xai/grok-4.3 or deepseek-ai/deepseek-v4.1-flash.")
+    plan_after: bool | None = Field(None, description="Plan the chapter's video when its photographs are made.")
+    aspect_ratio: AspectRatio | None = Field(None, description="Video plans' aspect ratio (9:16 suits webtoon panels).")
+    segment_seconds: float | None = Field(None, ge=1, le=15, description="Video plans' segment length.")
+    planner_model: str | None = Field(None, description="Model that writes the chapter's video plans. \"\": the server's planner.")
+    render: dict | None = Field(None, description="Render chapter's video settings, as RenderSettings fields: unet_name, "
+                                "steps, megapixels, sampler_name, scheduler, continuity, attention, interpolation, "
+                                "carry_audio, loras [{name, strength}], lora_preset, use_default_loras. {} = server defaults.")
+
+    @model_validator(mode="after")
+    def _render_is_valid(self):
+        if self.render:
+            RenderSettings(**{k: v for k, v in self.render.items() if v not in (None, "")})
+        return self
+
+
 class ManhwaConvertIn(BaseModel):
+    """One conversion. Fields left out come from the Manhwa page's settings (GET /v1/manhwa/settings)."""
     tile_ids: list[str] = Field(default_factory=list, description="Only the panels in these tiles (ids from the chapter). Empty: the whole chapter.")
-    loras: list[dict] | None = Field(None, description="[{name, strength}] to use instead of the defaults (newest Anime2Real + lenovo realism + age slider).")
-    prompt: str = Field("", description="Extra instruction added to every panel's prompt, e.g. 'soft evening light'.")
-    realism: float = Field(0.5, ge=0, le=1, description="Strength of the photoreal lenovo LoRA; 0 leaves it out.")
-    age_slider: float = Field(1.0, ge=0, le=3, description="Age slider strength, so drawn faces read as adults; 0 leaves it out.")
+    loras: list[ManhwaLoraIn] | None = Field(None, description="[{name, strength}] for this run only.")
+    prompt: str | None = Field(None, description="Extra instruction added to every panel's prompt.")
+    realism: float | None = Field(None, ge=0, le=1)
+    age_slider: float | None = Field(None, ge=0, le=3)
+    steps: int | None = Field(None, ge=1, le=50)
+    cfg: float | None = Field(None, ge=0, le=15)
+    negative: str | None = Field(None, max_length=2000)
     max_panels: int = Field(300, ge=1, le=300)
-    plan_after: bool = Field(True, description="When the photographs are made, start the video plans for the chapter.")
-    analyze: bool = Field(True, description="Grok 4.3 (then the vision chain) looks at each panel and writes its own "
-                          "photograph prompt; false uses the fixed template with the catalogue's description.")
-    prompt_model: str = Field("", description="The model that analyses each panel, e.g. deepseek-ai/deepseek-v4.1-flash "
-                              "(reads images, about a quarter of Grok's price). Blank: xai/grok-4.3.")
+    plan_after: bool | None = Field(None, description="When the photographs are made, start the video plans for the chapter.")
+    analyze: bool | None = Field(None, description="A vision model looks at each panel and writes its own photograph prompt; "
+                                 "false uses the fixed template with the catalogue's description.")
+    prompt_model: str | None = Field(None, description="The model that analyses each panel, e.g. xai/grok-4.3 or "
+                                     "deepseek-ai/deepseek-v4.1-flash (reads images, about a quarter of Grok's price).")
+
+
+class ManhwaContextIn(BaseModel):
+    characters: str = Field("", max_length=2000, description="Who is in the chapter and how they look, e.g. 'Mrs. Cha: "
+                            "late 30s, auburn hair in a low bun; Dae-ho: early 20s, short dark hair'.")
+    setting: str = Field("", max_length=2000, description="Where and when, e.g. 'a small tiled bathroom at night, warm light'.")
+    action: str = Field("", max_length=2000, description="What happens across the chapter, in a sentence or two.")
+    one_scene: bool = Field(False, description="The chapter is one continuous scene: one place, the same people, no cuts.")
+
+
+class ManhwaRenderIn(BaseModel):
+    parts: list[int] = Field(default_factory=list, description="Only these plan parts. Empty: every finished plan.")
+    force: bool = Field(False, description="Render again a part that is already rendering or rendered.")
+    settings: dict = Field(default_factory=dict, description="RenderSettings fields over the Manhwa defaults "
+                           "(aspect ratio and segment length from the Photograph settings), e.g. {\"unet_name\": \"beta6\"}.")
 
 
 class ManhwaPlanIn(BaseModel):
-    aspect_ratio: AspectRatio = Field("9:16", description="Webtoon panels are tall: 9:16 by default.")
-    segment_seconds: float = Field(10.0, ge=1, le=15)
+    aspect_ratio: AspectRatio | None = Field(None, description="Default from the Manhwa settings (9:16).")
+    segment_seconds: float | None = Field(None, ge=1, le=15)
     model: str | None = Field(None, description="Planner model id. Default comes from the server.")
 
 

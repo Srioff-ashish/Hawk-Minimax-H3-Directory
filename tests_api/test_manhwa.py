@@ -393,7 +393,8 @@ class Panels(unittest.TestCase):
 
 
 class Lora(SimpleNamespace):
-    pass
+    def __init__(self, **kw):
+        super().__init__(**{"label": "", "kind": "other", "range": (0.0, 2.0), "notes": "", "trigger": "", **kw})
 
 
 class ConvertService(FakeService):
@@ -425,14 +426,15 @@ class ConvertService(FakeService):
     def update_asset(self, asset_id, *, collection=None, add_tags=None, **_kw):
         self.assets[asset_id].update(collection=collection, tags=add_tags)
 
-    async def generate_images(self, prompt, *, reference_asset_ids=(), engine=None, loras=None, negative="", **_kw):
+    async def generate_images(self, prompt, *, reference_asset_ids=(), engine=None, loras=None, negative="",
+                              steps=None, cfg=None, **_kw):
         from hawk_api.jobs import RequestError
 
         if self.busy:
             self.busy -= 1
             raise RequestError("Qwen Image 2.1: ComfyUI is busy (1 job(s) running or queued, usually a video render).")
         self.calls.append({"prompt": prompt, "refs": list(reference_asset_ids), "engine": engine, "loras": loras,
-                           "negative": negative})
+                           "negative": negative, "steps": steps, "cfg": cfg})
         if self.refuse_prompt and self.refuse_prompt in prompt:
             raise RequestError("Refused: the prompt mentions 'teen'.")
         made = await self.add_asset("gen.png", io.BytesIO(b"png"), collection="Generated",
@@ -518,7 +520,7 @@ class PlanService(ConvertService):
 class Plans(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_plan_")
-        self.service = PlanService(self.tmp)
+        self.service = getattr(self, "service_class", PlanService)(self.tmp)
         self.manager = ManhwaManager(self.service, delay=(0, 0))
         self.manager.busy_wait = 0
         self.manager.store.save_chapter({"id": "ch1", "series": "S", "chapter": "1", "url": "https://x/1",
@@ -572,6 +574,7 @@ class PanelChat:
 
     def __init__(self):
         self.calls, self.refuse, self.skip_call = [], set(), 0
+        self.drawn, self.identifiable = True, False
 
     async def chat(self, model, messages, *, purpose="", **_kw):
         self.calls.append((model, purpose))
@@ -580,7 +583,8 @@ class PanelChat:
         written = sum(1 for _, p in self.calls if p == "panel prompt" and _ not in self.refuse)
         if written == self.skip_call:
             return json.dumps({"skip": "one person looks like a teenager"}), {}
-        return json.dumps({"prompt": f"Turn this manhwa panel into a realistic photograph. A woman in her 30s with "
+        return json.dumps({"drawn": self.drawn, "identifiable": self.identifiable,
+                           "prompt": f"Turn this manhwa panel into a realistic photograph. A woman in her 30s with "
                                      f"short black hair stands at a rooftop rail at dusk, written by {model}.",
                            "negative": "anime, text, extra fingers"}), {}
 
@@ -618,6 +622,26 @@ class AnalyzedConvert(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.service.calls[0]["prompt"].startswith(manhwa.REAL_PROMPT))
         self.assertIn("Template prompt used", state["results"][0]["prompt_note"])
 
+    async def test_the_panel_prompt_call_is_the_person_check(self):
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        panel = self.service.assets[state["results"][0]["panel_asset_id"]]
+        check = panel["source"]["person_check"]
+        self.assertEqual((check["identifiable"], check["by"], check["model"]), (False, "panel prompt", "xai/grok-4.3"))
+        self.assertNotIn("person check", [p for _, p in self.chat.calls])
+
+    async def test_a_real_person_keeps_the_rules_and_an_unclear_answer_records_nothing(self):
+        self.chat.identifiable = True
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        panel = self.service.assets[state["results"][0]["panel_asset_id"]]
+        self.assertIs(panel["source"]["person_check"]["identifiable"], True)
+        self.chat.identifiable, self.chat.drawn = False, None
+        await self.manager.wait_conversion((await self.manager.convert("ch1", tile_ids=["ch1-0001"]))["id"], 30)
+        fresh = [a for a in self.service.assets.values()
+                 if (a.get("source") or {}).get("tile_id") == "ch1-0001"]
+        self.assertTrue(fresh)
+        self.assertTrue(all("person_check" not in a["source"] or a["source"]["person_check"]["identifiable"] is True
+                            for a in fresh))
+
     async def test_another_model_can_analyse(self):
         await self.manager.wait_conversion(
             (await self.manager.convert("ch1", prompt_model="deepseek-ai/deepseek-v4.1-flash"))["id"], 30)
@@ -626,3 +650,194 @@ class AnalyzedConvert(unittest.IsolatedAsyncioTestCase):
     async def test_analyze_off_never_calls_a_model(self):
         await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False))["id"], 30)
         self.assertEqual(self.chat.calls, [])
+
+
+class Settings(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)
+
+    asyncTearDown = Convert.asyncTearDown
+
+    async def test_saved_settings_govern_the_next_conversion(self):
+        view = await self.manager.settings_view()
+        self.assertIsNone(view["settings"]["loras"])
+        self.assertEqual(view["auto_loras"][0]["name"], "qwen21/Anime2Real_LAtest.safetensors")
+        self.assertIn("lenovo_qwen21.safetensors", [a["file"] for a in view["available"]])
+        mine = [{"name": "Qwen Image2.1_Anime2Real.safetensors", "strength": 0.9}]
+        self.manager.save_settings({"loras": mine, "steps": 20, "cfg": 1.5, "negative": "tattoos",
+                                    "prompt": "soft light", "analyze": False, "plan_after": False})
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual(state["loras"], mine)
+        call = self.service.calls[0]
+        self.assertEqual((call["loras"], call["steps"], call["cfg"]), (mine, 20, 1.5))
+        self.assertTrue(call["negative"].endswith(", tattoos"))
+        self.assertIn("soft light", call["prompt"])
+        self.assertEqual(state["plans"], [])
+
+    async def test_a_run_can_override_and_empty_loras_go_back_to_automatic(self):
+        self.manager.save_settings({"steps": 20, "loras": [{"name": "x", "strength": 1}]})
+        self.assertEqual(self.manager.save_settings({"loras": []})["loras"], None)
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", steps=12, analyze=False))["id"], 30)
+        self.assertEqual(self.service.calls[0]["steps"], 12)
+        self.assertEqual(state["loras"][0]["name"], "qwen21/Anime2Real_LAtest.safetensors")
+
+    async def test_the_settings_load_without_comfyui(self):
+        async def down(family=""):
+            raise OSError("ComfyUI is not reachable")
+        self.service.local_images.catalogue = down
+        view = await self.manager.settings_view()
+        self.assertEqual((view["auto_loras"], view["available"]), ([], []))
+        self.assertIn("not reachable", view["auto_error"])
+
+
+class Context(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)
+
+    asyncTearDown = Convert.asyncTearDown
+
+    CONTEXT = {"characters": "Mina: early 30s, short black hair, grey coat", "setting": "a rooftop at dusk",
+               "action": "Mina waits, then a stranger arrives", "one_scene": True}
+
+    async def test_context_goes_into_every_panel_prompt(self):
+        self.manager.set_context("ch1", self.CONTEXT)
+        self.assertEqual(self.manager.chapter_view("ch1")["context"]["setting"], "a rooftop at dusk")
+        chat = PanelChat()
+        self.service.atlas = chat
+        seen = []
+        original = chat.chat
+
+        async def spy(model, messages, **kw):
+            seen.append(messages[0]["content"][0]["text"])
+            return await original(model, messages, **kw)
+        chat.chat = spy
+        await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertIn("one continuous scene", seen[0])
+        self.assertIn("Mina: early 30s, short black hair, grey coat", seen[0])
+
+    async def test_template_prompt_and_plan_brief_use_it(self):
+        self.manager.set_context("ch1", self.CONTEXT)
+        await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False))["id"], 30)
+        self.assertIn("Setting: a rooftop at dusk.", self.service.calls[0]["prompt"])
+        brief = manhwa.plan_brief(self.manager.store.get_chapter("ch1"), [{"scene": "x"}], 1, 1)
+        self.assertIn("Action: Mina waits, then a stranger arrives", brief)
+        self.assertIn("no cuts", brief)
+
+    async def test_clearing_and_unknown_chapter(self):
+        self.manager.set_context("ch1", self.CONTEXT)
+        self.assertEqual(self.manager.set_context("ch1", {})["context"], {})
+        self.assertEqual(manhwa.context_text({}), "")
+        from hawk_api.jobs import NotFound
+        with self.assertRaises(NotFound):
+            self.manager.set_context("nope", self.CONTEXT)
+
+
+class RenderService(PlanService):
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        self.jobs: dict[str, dict] = {}
+        self.videos = []
+        self.store.get_job = self.jobs.get
+
+    async def create_plan(self, request):
+        job = await super().create_plan(request)
+        self.jobs[job["id"]] = {"id": job["id"], "kind": "plan", "status": "planning"}
+        return job
+
+    async def create_video(self, request):
+        self.videos.append(request)
+        job = {"id": f"vid{len(self.videos)}", "kind": "video", "status": "queued"}
+        self.jobs[job["id"]] = job
+        return job
+
+
+class RenderAndDelete(unittest.IsolatedAsyncioTestCase):
+    service_class = RenderService
+
+    async def asyncSetUp(self):
+        self.manager = None
+
+    async def asyncTearDown(self):
+        if self.manager is not None:
+            await self.manager.stop()
+
+    async def test_render_finished_plans_and_report_the_rest(self):
+        await Plans.asyncSetUp(self)  # twelve photographs over six tiles -> plans of 9 and 3
+        out = await self.manager.plan_chapter("ch1")
+        with self.assertRaises(Exception):
+            await self.manager.render_chapter("nope")
+        first, second = (p["job_id"] for p in out["plans"])
+        self.service.jobs[first]["status"] = "done"
+        result = await self.manager.render_chapter("ch1", settings={"unet_name": "beta6"})
+        self.assertEqual([r["part"] for r in result["started"]], [1])
+        self.assertEqual(result["not_ready"][0]["status"], "planning")
+        video = self.service.videos[0]
+        self.assertEqual((video.plan_job_id, video.settings.aspect_ratio, video.settings.unet_name), (first, "9:16", "beta6"))
+        self.service.jobs[second]["status"] = "done"
+        again = await self.manager.render_chapter("ch1")
+        self.assertEqual(([r["part"] for r in again["started"]], [r["part"] for r in again["already"]]), ([2], [1]))
+        self.service.jobs["vid1"]["status"] = "failed"
+        self.assertEqual([r["part"] for r in (await self.manager.render_chapter("ch1"))["started"]], [1])
+        self.assertEqual(len(self.manager.store.get_chapter("ch1")["renders"]), 2)
+
+    async def test_no_plans_is_a_request_error(self):
+        from hawk_api.jobs import RequestError
+
+        await Plans.asyncSetUp(self)
+        self.manager.store.save_chapter({"id": "c0", "series": "S", "chapter": "0", "url": "u", "status": "done",
+                                         "created_at": 1.0})
+        with self.assertRaises(RequestError):
+            await self.manager.render_chapter("c0")
+
+    async def test_deleting_a_chapter_takes_its_photographs_and_panels_but_not_videos(self):
+        await Convert.asyncSetUp(self)
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False,
+                                                                               plan_after=False))["id"], 30)
+        photo = state["results"][0]["asset_ids"][0]
+        panel = state["results"][0]["panel_asset_id"]
+        self.service.assets[photo]["collection"] = "Favourites"  # moved: still found through the catalogue
+        video = await self.service.add_asset("film.mp4", io.BytesIO(b"v"), collection="manhwa/S/1/real",
+                                             source={"type": "generated"})
+        video["kind"] = "video"
+        other = await self.service.add_asset("p.png", io.BytesIO(b"o"), collection="manhwa/S/10",
+                                             source={"type": "manhwa"})
+        out = await self.manager.delete("S", "ch1")
+        self.assertNotIn(photo, self.service.assets)
+        self.assertNotIn(panel, self.service.assets)
+        self.assertIn(video["id"], self.service.assets, "rendered videos are kept")
+        self.assertIn(other["id"], self.service.assets, "chapter 10 is not chapter 1")
+        self.assertGreaterEqual(out["images_deleted"], 4)
+
+
+class VideoSettings(unittest.IsolatedAsyncioTestCase):
+    service_class = RenderService
+
+    async def asyncSetUp(self):
+        await Plans.asyncSetUp(self)
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    async def test_saved_video_settings_drive_plans_and_renders(self):
+        self.manager.save_settings({"planner_model": "xai/grok-4.6", "aspect_ratio": "3:4", "segment_seconds": 8,
+                                    "render": {"unet_name": "beta6", "steps": 10, "continuity": "tail_39",
+                                               "loras": [{"name": "hmnsfw", "strength": 0.7}], "aspect_ratio": "16:9",
+                                               "megapixels": None}})
+        stored = self.manager.settings()["render"]
+        self.assertNotIn("aspect_ratio", stored, "the aspect ratio is set once, outside render")
+        self.assertNotIn("megapixels", stored, "blank means the server default")
+        out = await self.manager.plan_chapter("ch1")
+        self.assertEqual((self.service.plans[0].model, self.service.plans[0].aspect_ratio), ("xai/grok-4.6", "3:4"))
+        self.service.jobs[out["plans"][0]["job_id"]]["status"] = "done"
+        await self.manager.render_chapter("ch1", parts=[1], settings={"steps": 12})
+        render = self.service.videos[0].settings
+        self.assertEqual((render.unet_name, render.steps, render.continuity, render.aspect_ratio, render.default_seconds),
+                         ("beta6", 12, "tail_39", "3:4", 8))
+        self.assertEqual([(l.name, l.strength) for l in render.loras], [("hmnsfw", 0.7)])
+
+    def test_bad_render_settings_are_refused(self):
+        from hawk_api.schemas import ManhwaSettingsIn
+
+        with self.assertRaises(ValueError):
+            ManhwaSettingsIn(render={"continuity": "sideways"})
+        self.assertEqual(ManhwaSettingsIn(render={"steps": 8}).render, {"steps": 8})

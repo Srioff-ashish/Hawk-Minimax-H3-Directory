@@ -31,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, ManhwaConvertIn, ManhwaPlanIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -321,17 +321,42 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.delete("/v1/manhwa/series", tags=["manhwa"])
     async def manhwa_delete(name: str, chapter_id: str = "", images: bool = True):
         """Delete a series (or one chapter of it) from the catalogue; images=true also deletes its downloaded
-        panels from the library. Runs working on the series are cancelled first."""
+        pages, cut panels and the photographs made from them. Rendered videos are kept. Runs and conversions
+        working on it are cancelled first."""
         return await manhwa.delete(name, chapter_id, images=images)
 
     @app.post("/v1/manhwa/chapters/{chapter_id}/convert", tags=["manhwa"], status_code=202)
     async def manhwa_convert(chapter_id: str, body: ManhwaConvertIn):
         """Turn the chapter's panels into photographs with Qwen Image 2.1 on this GPU (newest Anime2Real LoRA
         from models/loras). Poll GET /v1/manhwa/conversions/{id}."""
-        return await manhwa.convert(chapter_id, tile_ids=body.tile_ids, loras=body.loras, prompt=body.prompt,
-                                    realism=body.realism, age_slider=body.age_slider, max_panels=body.max_panels,
-                                    plan_after=body.plan_after, analyze=body.analyze,
-                                    prompt_model=body.prompt_model)
+        return await manhwa.convert(chapter_id, tile_ids=body.tile_ids,
+                                    loras=[l.model_dump() for l in body.loras] if body.loras else None,
+                                    prompt=body.prompt, realism=body.realism, age_slider=body.age_slider,
+                                    max_panels=body.max_panels, plan_after=body.plan_after, analyze=body.analyze,
+                                    prompt_model=body.prompt_model, steps=body.steps, cfg=body.cfg,
+                                    negative=body.negative)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/render", tags=["manhwa"], status_code=202)
+    async def manhwa_render(chapter_id: str, body: ManhwaRenderIn):
+        """Render every finished video plan of the chapter, one video job per plan part. Plans still being written
+        come back in not_ready; parts already rendering or rendered are skipped unless force."""
+        return await manhwa.render_chapter(chapter_id, parts=body.parts, force=body.force, settings=body.settings)
+
+    @app.put("/v1/manhwa/chapters/{chapter_id}/context", tags=["manhwa"])
+    async def manhwa_context(chapter_id: str, body: ManhwaContextIn):
+        """The chapter's scene context (characters, setting, action, one continuous scene), used by every panel
+        prompt and the chapter's video plans. Empty fields clear it."""
+        return manhwa.set_context(chapter_id, body.model_dump())
+
+    @app.get("/v1/manhwa/settings", tags=["manhwa"])
+    async def manhwa_settings():
+        """The Manhwa page's Qwen Image 2.1 settings, the LoRAs "automatic" would pick now, and the installed ones."""
+        return await manhwa.settings_view()
+
+    @app.put("/v1/manhwa/settings", tags=["manhwa"])
+    async def manhwa_settings_put(body: ManhwaSettingsIn):
+        manhwa.save_settings(body.model_dump(exclude_unset=True))
+        return await manhwa.settings_view()
 
     @app.post("/v1/manhwa/chapters/{chapter_id}/plan", tags=["manhwa"], status_code=202)
     async def manhwa_plan(chapter_id: str, body: ManhwaPlanIn):

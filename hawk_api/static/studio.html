@@ -132,6 +132,13 @@
   .mh-hit { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
   .mh-hit img { width: 96px; height: 128px; object-fit: cover; object-position: top; border-radius: 6px; background: var(--surface-3); }
   .mh-hit p { margin: 4px 0 0; font-size: 13px; }
+  .mh-context { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; background: var(--surface); }
+  .mh-context summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+  .mh-loras { display: grid; gap: 6px; }
+  .mh-lora { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px; align-items: center; gap: 8px; font-size: 13px; }
+  .mh-lora > span:first-child { overflow-wrap: anywhere; }
+  div.mh-lora { grid-template-columns: minmax(0, 1fr) auto; }
+  .mh-lora .input { height: 30px; }
   .mh-real { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .mh-real img { width: 72px; height: 96px; object-fit: cover; border-radius: 6px; background: var(--surface-3); }
   .mh-said { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
@@ -1028,6 +1035,59 @@
               </div>
             </form>
           </section>
+          <section class="card" aria-label="Photograph settings">
+            <div class="card-head"><h2>Photograph settings</h2><span class="hint">Qwen Image 2.1 for Make photographs only; the Images page is separate</span></div>
+            <form class="card-body grid" id="mhSettingsForm" autocomplete="off">
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Panel prompt written by</span><select class="select" id="mhSetPromptModel"></select></label>
+                <div class="grid grid-2">
+                  <label class="field"><span class="label">Steps <span class="hint">blank: default</span></span><input class="input" id="mhSetSteps" type="number" min="1" max="50" placeholder="30"></label>
+                  <label class="field"><span class="label">CFG <span class="hint">blank: default</span></span><input class="input" id="mhSetCfg" type="number" min="0" max="15" step="0.1" placeholder="2.0"></label>
+                </div>
+              </div>
+              <div class="field"><div class="row"><span class="label">LoRAs</span><div class="spacer"></div><label class="check"><input type="checkbox" id="mhSetAuto">Automatic</label></div>
+                <div class="grid grid-2" id="mhSetAutoKnobs">
+                  <label class="field"><span class="label">Realism (lenovo) <span class="hint">0 off</span></span><input class="input" id="mhSetRealism" type="number" min="0" max="1" step="0.05"></label>
+                  <label class="field"><span class="label">Age slider <span class="hint">0 off</span></span><input class="input" id="mhSetAge" type="number" min="0" max="3" step="0.1"></label>
+                </div>
+                <div class="mh-loras" id="mhSetLoras"><span class="hint">Loading…</span></div>
+              </div>
+              <label class="field"><span class="label">Added to every prompt</span><input class="input" id="mhSetPrompt" placeholder="e.g. soft evening light, 35mm film"></label>
+              <label class="field"><span class="label">Added to every negative</span><input class="input" id="mhSetNegative" placeholder="e.g. tattoos, glasses"></label>
+              <div class="row"><div class="spacer"></div><button class="btn btn-primary" type="submit">Save</button></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Video settings">
+            <div class="card-head"><h2>Video settings</h2><span class="hint">plans and Render chapter for manhwa only; blank = server default</span></div>
+            <form class="card-body grid" id="mhVideoForm" autocomplete="off">
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Plan written by</span><select class="select" id="mhVidPlanner"></select></label>
+                <label class="field"><span class="label">Base model</span><select class="select" id="mhVidUnet"></select></label>
+              </div>
+              <div class="grid grid-3">
+                <label class="field"><span class="label">Aspect ratio</span><select class="select" id="mhSetAspect"></select></label>
+                <label class="field"><span class="label">Seconds per segment</span><input class="input" id="mhSetSeconds" type="number" min="1" max="15" step="0.5"></label>
+                <label class="field"><span class="label">Megapixels</span><input class="input" id="mhVidMp" type="number" min="0.1" max="2.2" step="0.01"></label>
+                <label class="field"><span class="label">Steps</span><input class="input" id="mhVidSteps" type="number" min="1" max="100"></label>
+                <label class="field"><span class="label">Sampler</span><select class="select" id="mhVidSampler"></select></label>
+                <label class="field"><span class="label">Scheduler</span><select class="select" id="mhVidScheduler"></select></label>
+                <label class="field"><span class="label">Continuity</span><select class="select" id="mhVidContinuity"></select></label>
+                <label class="field"><span class="label">Attention</span><select class="select" id="mhVidAttention"></select></label>
+                <label class="field"><span class="label">Interpolation</span><select class="select" id="mhVidInterp"></select></label>
+              </div>
+              <div class="field"><div class="row"><span class="label">Video LoRAs</span><div class="spacer"></div>
+                <select class="select" id="mhVidPreset" style="width:auto;height:30px" aria-label="LoRA preset"></select>
+                <label class="check"><input type="checkbox" id="mhVidDefaults">Server default LoRAs</label></div>
+                <div class="mh-loras" id="mhVidLoras"><span class="hint">Loading…</span></div>
+              </div>
+              <div class="row">
+                <label class="check"><input type="checkbox" id="mhSetPlanAfter">Plan the video after Make photographs</label>
+                <label class="check"><input type="checkbox" id="mhVidAudio">Carry audio between segments</label>
+                <div class="spacer"></div>
+                <button class="btn btn-primary" type="submit">Save</button>
+              </div>
+            </form>
+          </section>
           <section class="card" aria-label="Search the catalogue">
             <div class="card-head"><h2>Search</h2><div class="spacer"></div><select class="select" id="mhSearchSeries" style="width:auto;height:30px"><option value="">All series</option></select></div>
             <div class="card-body grid">
@@ -1607,7 +1667,7 @@
     if (page === "library") renderLibrary();
     if (BILLING_PAGES[page] && (PREFIX || token)) loadBilling(page);
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
-    if (page === "manhwa" && (PREFIX || token)) loadManhwa();
+    if (page === "manhwa" && (PREFIX || token)) { loadManhwa(); mhLoadSettings(); }
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
@@ -1653,7 +1713,7 @@
 
   async function mhDelete(series, chapterId) {
     const what = chapterId ? "this chapter" : `the series “${series}”`;
-    if (!await confirmAction(`Delete ${what}?`, "Removes its catalogue (scenes, dialogue, characters) and its downloaded images from Media. A run working on it is cancelled first. This cannot be undone.", "Delete")) return;
+    if (!await confirmAction(`Delete ${what}?`, "Removes its catalogue (scenes, dialogue, characters), its downloaded pages, the cut panels and the photographs made from them. Rendered videos are kept. A run or conversion working on it is cancelled first. This cannot be undone.", "Delete")) return;
     try {
       const out = await api(`/v1/manhwa/series?name=${encodeURIComponent(series)}${chapterId ? `&chapter_id=${encodeURIComponent(chapterId)}` : ""}&images=true`, { method: "DELETE" });
       toast("Deleted", `${out.chapters_deleted} chapter(s), ${out.images_deleted} image(s)${out.runs_cancelled.length ? `, ${out.runs_cancelled.length} run(s) cancelled` : ""}`);
@@ -1682,7 +1742,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><select class="select" id="mhPromptModel" title="Who writes each panel's photograph prompt" style="width:auto;height:30px">${MH_PROMPT_MODELS.map(([v, l]) => `<option value="${v}"${v === manhwa.promptModel ? " selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans)}</div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1750,16 +1810,13 @@
     finally { $("mhStart").disabled = false; }
   };
   $("mhDeleteSeries").onclick = () => { if (manhwa.series) mhDelete(manhwa.series, ""); };
-  $("mhResults").addEventListener("change", (event) => {
-    if (event.target.id !== "mhPromptModel") return;
-    manhwa.promptModel = event.target.value;
-    storage.set("hawkH3ManhwaPromptModel", manhwa.promptModel);
-  });
   $("mhResults").addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-chapter]");
     if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
     const job = event.target.closest("[data-open-job]");
     if (job && state.jobs.has(job.dataset.openJob)) { event.preventDefault(); openDrawer(job.dataset.openJob); }  // else the link opens Jobs
+    const render = event.target.closest("[data-render-chapter]");
+    if (render) mhRender(render.dataset.renderChapter);
     const plan = event.target.closest("[data-plan-chapter]");
     if (plan) mhPlan(plan.dataset.planChapter);
     const convert = event.target.closest("[data-convert-chapter]");
@@ -1768,14 +1825,182 @@
     if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
 
+  // ------------------------------------------------ Photograph settings: the Manhwa page's own Qwen 2.1 config
   // Who looks at each panel and writes its prompt; "" is the fixed template, with no model call.
-  const MH_PROMPT_MODELS = [["xai/grok-4.3", "Prompt: Grok 4.3"], ["deepseek-ai/deepseek-v4.1-flash", "Prompt: DeepSeek V4.1 Flash (cheaper)"],
-                            ["", "Prompt: template (no analysis)"]];
-  manhwa.promptModel = storage.get("hawkH3ManhwaPromptModel") ?? "xai/grok-4.3";
+  const MH_PROMPT_MODELS = [["xai/grok-4.3", "Grok 4.3"], ["deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash (cheaper)"],
+                            ["", "Template (no analysis)"]];
+  const MH_ASPECTS = ["9:16", "3:4", "1:1", "4:3", "16:9", "match first picture"];
 
-  function mhPlans(plans) {
+  async function mhLoadSettings() {
+    try { mhPaintSettings(await api("/v1/manhwa/settings")); }
+    catch (error) { $("mhSetLoras").innerHTML = `<span class="hint">Could not load: ${esc(error.message)}</span>`; }
+  }
+
+  function mhPaintSettings(view) {
+    manhwa.settingsView = view;
+    const set = view.settings;
+    const model = set.analyze ? (set.prompt_model || "xai/grok-4.3") : "";
+    const models = MH_PROMPT_MODELS.some(([v]) => v === model) ? MH_PROMPT_MODELS : [[model, model], ...MH_PROMPT_MODELS];
+    $("mhSetPromptModel").innerHTML = models.map(([v, l]) => `<option value="${esc(v)}"${v === model ? " selected" : ""}>${esc(l)}</option>`).join("");
+    $("mhSetAuto").checked = !set.loras;
+    $("mhSetRealism").value = set.realism;
+    $("mhSetAge").value = set.age_slider;
+    $("mhSetSteps").value = set.steps ?? "";
+    $("mhSetCfg").value = set.cfg ?? "";
+    $("mhSetPrompt").value = set.prompt || "";
+    $("mhSetNegative").value = set.negative || "";
+    mhPaintLoras();
+    mhPaintVideo();
+  }
+
+  async function mhPaintVideo() {
+    const view = manhwa.settingsView;
+    if (!view) return;
+    const set = view.settings, r = set.render || {}, d = view.render_defaults || {};
+    if (!state.options) { try { state.options = await api("/v1/options"); } catch { state.options = null; } }
+    const o = state.options || {};
+    const pick = (id, values, current, blank = "Server default") => {
+      const list = (values || []).slice();
+      if (current && !list.includes(current)) list.unshift(current);
+      $(id).innerHTML = `<option value="">${esc(blank)}</option>` + list.map((v) => `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(shortName(String(v)))}</option>`).join("");
+    };
+    $("mhVidPlanner").innerHTML = `<option value="">Server default${o.default_planner_model ? ` (${esc(o.default_planner_model)})` : ""}</option>`
+      + modelOptions(o.planner_models || [], set.planner_model, set.planner_model || "");
+    $("mhVidPlanner").value = set.planner_model || "";
+    pick("mhVidUnet", o.diffusion_models, r.unet_name, `Server default${o.default_unet ? ` (${shortName(o.default_unet)})` : ""}`);
+    $("mhSetAspect").innerHTML = MH_ASPECTS.map((a) => `<option${a === set.aspect_ratio ? " selected" : ""}>${esc(a)}</option>`).join("");
+    $("mhSetSeconds").value = set.segment_seconds;
+    $("mhVidMp").value = r.megapixels ?? ""; $("mhVidMp").placeholder = d.megapixels ?? "";
+    $("mhVidSteps").value = r.steps ?? ""; $("mhVidSteps").placeholder = "8 turbo / 30";
+    pick("mhVidSampler", o.samplers, r.sampler_name, `Default (${d.sampler_name || "res_multistep"})`);
+    pick("mhVidScheduler", o.schedulers, r.scheduler, `Default (${d.scheduler || "simple"})`);
+    pick("mhVidContinuity", o.continuity_modes || ["off", "last_frame", "tail_5", "tail_22", "tail_39"], r.continuity, `Default (${d.continuity || "tail_22"})`);
+    pick("mhVidAttention", ["comfy default", "sage", "sol scheduled", "sol scheduled + sage"], r.attention, "Server default");
+    pick("mhVidInterp", ["off", "48 fps (RIFE)", "60 fps (RIFE)"], r.interpolation, "Default (off)");
+    $("mhVidPreset").innerHTML = `<option value="">No preset</option>` + Object.keys(o.lora_presets || {}).map((n) => `<option${n === r.lora_preset ? " selected" : ""}>${esc(n)}</option>`).join("");
+    $("mhVidDefaults").checked = r.use_default_loras !== false;
+    $("mhVidAudio").checked = r.carry_audio !== false;
+    $("mhSetPlanAfter").checked = !!set.plan_after;
+    const chosen = new Map((r.loras || []).map((l) => [l.name, l.strength]));
+    const files = (o.available_loras || []).slice();
+    for (const name of chosen.keys()) if (!files.includes(name)) files.unshift(name);
+    $("mhVidLoras").innerHTML = files.map((f) => `<label class="mh-lora"><input type="checkbox" data-vlora="${esc(f)}"${chosen.has(f) ? " checked" : ""}><span>${esc(shortName(f))}</span><input class="input" type="number" step="0.05" min="-10" max="10" value="${chosen.has(f) ? chosen.get(f) : 1}" data-vstrength="${esc(f)}" aria-label="Strength"></label>`).join("")
+      || `<span class="hint">${state.options ? "No video LoRAs installed." : "Could not list them: the GPU is unreachable."}</span>`;
+  }
+
+  $("mhVideoForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const num = (id) => ($(id).value.trim() === "" ? null : Number($(id).value));
+    const render = {
+      unet_name: $("mhVidUnet").value || null, megapixels: num("mhVidMp"), steps: num("mhVidSteps"),
+      sampler_name: $("mhVidSampler").value || null, scheduler: $("mhVidScheduler").value || null,
+      continuity: $("mhVidContinuity").value || null, attention: $("mhVidAttention").value || null,
+      interpolation: $("mhVidInterp").value || null, lora_preset: $("mhVidPreset").value || null,
+      use_default_loras: $("mhVidDefaults").checked, carry_audio: $("mhVidAudio").checked,
+      loras: [...$("mhVidLoras").querySelectorAll("[data-vlora]:checked")].map((box) => ({ name: box.dataset.vlora,
+        strength: Number($("mhVidLoras").querySelector(`[data-vstrength="${CSS.escape(box.dataset.vlora)}"]`).value || 1) })),
+    };
+    const body = { render, planner_model: $("mhVidPlanner").value, aspect_ratio: $("mhSetAspect").value,
+                   segment_seconds: Number($("mhSetSeconds").value || 10), plan_after: $("mhSetPlanAfter").checked };
+    try {
+      mhPaintSettings(await api("/v1/manhwa/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+      toast("Saved", "Used by the next Plan video and Render chapter");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  };
+
+  function mhPaintLoras() {
+    const view = manhwa.settingsView;
+    if (!view) return;
+    const auto = $("mhSetAuto").checked;
+    $("mhSetAutoKnobs").hidden = !auto;
+    if (auto) {
+      $("mhSetLoras").innerHTML = view.auto_loras.length
+        ? view.auto_loras.map((l) => `<div class="mh-lora"><span>${esc(l.name.split("/").pop())}</span><span class="hint">${l.strength}</span></div>`).join("")
+          + `<div class="hint">Picked from models/loras/qwen21 each run; the repair LoRA and the adult default are added by the engine.</div>`
+        : `<span class="hint">${esc(view.auto_error || "No anime-to-real LoRA installed.")}</span>`;
+      return;
+    }
+    const chosen = new Map((view.settings.loras || view.auto_loras || []).map((l) => [l.name.split("/").pop(), l.strength]));
+    $("mhSetLoras").innerHTML = view.available.map((l) => {
+      const base = l.file.split("/").pop();
+      const on = chosen.has(base);
+      return `<label class="mh-lora" title="${esc(l.notes || "")}"><input type="checkbox" data-lora="${esc(l.file)}"${on ? " checked" : ""}>`
+        + `<span>${esc(l.label)} <span class="hint">${esc(l.kind)}</span></span>`
+        + `<input class="input" type="number" step="0.05" min="-4" max="4" value="${on ? chosen.get(base) : l.strength}" data-strength="${esc(l.file)}" aria-label="Strength"></label>`;
+    }).join("") || `<span class="hint">No Qwen 2.1 LoRAs installed.</span>`;
+  }
+
+  function mhSettingsBody() {
+    const number = (id) => ($(id).value.trim() === "" ? null : Number($(id).value));
+    const model = $("mhSetPromptModel").value;
+    const body = {
+      analyze: !!model, realism: Number($("mhSetRealism").value || 0), age_slider: Number($("mhSetAge").value || 0),
+      steps: number("mhSetSteps"), cfg: number("mhSetCfg"), prompt: $("mhSetPrompt").value, negative: $("mhSetNegative").value,
+    };
+    if (model) body.prompt_model = model;
+    body.loras = $("mhSetAuto").checked ? [] : [...$("mhSetLoras").querySelectorAll("[data-lora]:checked")].map((box) => ({
+      name: box.dataset.lora, strength: Number($("mhSetLoras").querySelector(`[data-strength="${CSS.escape(box.dataset.lora)}"]`).value || 1) }));
+    return body;
+  }
+
+  $("mhSetAuto").onchange = mhPaintLoras;
+  $("mhSettingsForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const body = mhSettingsBody();
+    if (!$("mhSetAuto").checked && !body.loras.length) { toast("Pick at least one LoRA", "or switch back to automatic", "bad"); return; }
+    try {
+      mhPaintSettings(await api("/v1/manhwa/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+      toast("Saved", "Used by the next Make photographs");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  };
+
+  function mhContextForm(chapter) {
+    const c = chapter.context || {};
+    const filled = ["characters", "setting", "action"].some((k) => c[k]);
+    const area = (key, label, hint) => `<label class="field"><span class="label">${label} <span class="hint">${hint}</span></span><textarea class="textarea" rows="2" style="min-height:56px" data-context="${key}" maxlength="2000">${esc(c[key] || "")}</textarea></label>`;
+    return `<details class="mh-context"${filled ? "" : " open"}><summary>Scene context${filled ? ` <span class="hint">— ${esc([c.characters, c.setting].filter(Boolean).join(" · ").slice(0, 120))}</span>` : ` <span class="hint">— optional: helps the photographs and the video plan</span>`}</summary>
+      <form class="grid" data-context-form="${esc(chapter.id)}" style="margin-top:8px">
+        ${area("characters", "Characters", "who, and how they look")}
+        ${area("setting", "Setting", "where and when, the light")}
+        ${area("action", "Action", "what happens across the chapter")}
+        <div class="row"><label class="check"><input type="checkbox" data-context="one_scene"${c.one_scene ? " checked" : ""}>The whole chapter is one continuous scene</label><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save context</button></div>
+      </form></details>`;
+  }
+
+  $("mhResults").addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-context-form]");
+    if (!form) return;
+    event.preventDefault();
+    const body = { one_scene: form.querySelector('[data-context="one_scene"]').checked };
+    for (const key of ["characters", "setting", "action"]) body[key] = form.querySelector(`[data-context="${key}"]`).value;
+    try {
+      await api(`/v1/manhwa/chapters/${encodeURIComponent(form.dataset.contextForm)}/context`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      toast("Context saved", "Used by the next Make photographs and Plan video");
+    } catch (error) { toast("Could not save", error.message, "bad"); }
+  });
+
+  function mhPlans(plans, renders, chapterId) {
     if (!plans || !plans.length) return `<div id="mhPlans"></div>`;
-    return `<div id="mhPlans" class="hint" style="margin-top:6px">Video plans: ${plans.map((p) => `<a href="#jobs" data-open-job="${esc(p.job_id)}">part ${p.part} (${p.segments} segments)</a>`).join(" · ")} <span>— open one to read it and render it</span></div>`;
+    const rendered = new Map((renders || []).map((r) => [r.plan_job_id, r.job_id]));
+    const status = (id) => (state.jobs.get(id) || {}).status || "";
+    const parts = plans.map((p) => {
+      const video = rendered.get(p.job_id);
+      return `<a href="#jobs" data-open-job="${esc(p.job_id)}">part ${p.part} plan${status(p.job_id) ? ` (${esc(status(p.job_id))})` : ""}</a>`
+        + (video ? ` → <a href="#jobs" data-open-job="${esc(video)}">video${status(video) ? ` (${esc(status(video))})` : ""}</a>` : "");
+    }).join(" · ");
+    return `<div id="mhPlans" class="hint" style="margin-top:6px"><div class="row">Video: ${parts}<div class="spacer"></div><button class="btn btn-sm btn-primary" type="button" data-render-chapter="${esc(chapterId || "")}" title="Render every finished plan of this chapter">Render chapter</button></div></div>`;
+  }
+
+  async function mhRender(chapterId) {
+    try {
+      const out = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/render`, {});
+      const said = [];
+      if (out.started.length) said.push(`${out.started.length} part${out.started.length === 1 ? "" : "s"} rendering`);
+      if (out.already.length) said.push(`${out.already.length} already rendered or rendering`);
+      if (out.not_ready.length) said.push(`${out.not_ready.length} plan${out.not_ready.length === 1 ? "" : "s"} not ready (${out.not_ready.map((n) => n.status).join(", ")})`);
+      toast(out.started.length ? "Rendering the chapter" : "Nothing new to render", said.join(" · "), out.started.length ? "" : "bad");
+      setTimeout(() => mhOpenChapter(chapterId), 1500);
+    } catch (error) { toast("Could not render", error.message, "bad"); }
   }
 
   async function mhPlan(chapterId) {
@@ -1783,14 +2008,13 @@
       const out = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/plan`, {});
       toast("Planning the video", `${out.plans.length} plan${out.plans.length === 1 ? "" : "s"} from ${out.photographs} photographs`);
       const box = $("mhPlans");
-      if (box) box.outerHTML = mhPlans(out.plans);
+      if (box) box.outerHTML = mhPlans(out.plans, [], chapterId);
     } catch (error) { toast("Could not plan", error.message, "bad"); }
   }
 
   async function mhConvert(chapterId) {
     try {
-      const model = $("mhPromptModel") ? $("mhPromptModel").value : manhwa.promptModel;
-      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, { analyze: !!model, prompt_model: model });
+      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, {});
       toast("Converting panels", `With ${state.loras.map((l) => l.name.split("/").pop().replace(/\.safetensors$/, "")).join(", ")}`);
       mhConvShow(state);
     } catch (error) { toast("Could not start", error.message, "bad"); }
@@ -1806,7 +2030,7 @@
     if (state.refused) counts.push(`${state.refused} refused`);
     if (state.skipped) counts.push(`${state.skipped} skipped`);
     if (state.failed) counts.push(`${state.failed} failed`);
-    if (state.plans && state.plans.length && $("mhPlans")) $("mhPlans").outerHTML = mhPlans(state.plans);
+    if (state.plans && state.plans.length && $("mhPlans")) $("mhPlans").outerHTML = mhPlans(state.plans, [], state.chapter_id);
     const last = (state.results || []).filter((r) => r.error).slice(-2).map((r) => `${r.page}: ${r.error}`);
     box.innerHTML = `<span class="badge ${state.status === "running" ? "rendering" : state.status}">${esc(state.status)}</span> ${esc(counts.join(" · "))} → Media → ${esc(state.collection)}${left}`
       + (last.length || (state.errors || []).length ? `<div>${esc([...last, ...(state.errors || [])].slice(-3).join(" · "))}</div>` : "");
