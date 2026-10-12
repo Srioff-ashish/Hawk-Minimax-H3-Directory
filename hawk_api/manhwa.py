@@ -718,14 +718,20 @@ class ManhwaManager:
 
     async def delete(self, series: str, chapter_id: str = "", *, images: bool = True) -> dict:
         """Delete one chapter, or a whole series, from the catalogue; with images, its downloaded panels too.
-        Runs working on that series are cancelled first, so nothing writes the rows back afterwards."""
+        A run working on what is deleted is cancelled first, so nothing writes the rows back afterwards: for a
+        series, every run on it; for one chapter, only a run cataloguing that chapter right now -- deleting
+        chapter 55 must not stop the run that is busy with chapter 86."""
         key = series_key(series)
         series = next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
+        target = self.store.get_chapter(chapter_id) if chapter_id else None
         cancelled = []
         for run in list(self.runs.values()):
-            if run["status"] == "running" and series_key(run["series"]) == key:
-                await self.cancel_and_wait(run["id"])
-                cancelled.append(run["id"])
+            if run["status"] != "running" or series_key(run["series"]) != key:
+                continue
+            if chapter_id and not (target and (run.get("current") or {}).get("url") == target["url"]):
+                continue
+            await self.cancel_and_wait(run["id"])
+            cancelled.append(run["id"])
         for state in list(self.conversions.values()):  # or it would write photographs back into a deleted chapter
             if state["status"] == "running" and series_key(state["series"]) == key and (
                     not chapter_id or state["chapter_id"] == chapter_id):

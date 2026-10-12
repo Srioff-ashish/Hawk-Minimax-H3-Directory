@@ -347,6 +347,22 @@ class Runs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.manager.store.series(), [])
         self.assertEqual(self.service.assets, {})
 
+    async def test_deleting_another_chapter_leaves_the_run_alone(self):
+        await self.run_to_end()  # chapter 1 catalogued
+        done = self.manager.store.list_chapters("Test Series")[0]
+        self.service.atlas.delay = 0.3
+        state = await self.manager.start("https://read.example/series/test/chapter-2", "Test Series")
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if (state["current"] or {}).get("step") == "cataloguing":
+                break
+        out = await self.manager.delete("Test Series", done["id"])
+        self.assertEqual(out["runs_cancelled"], [])
+        self.assertEqual(state["status"], "running")
+        busy = next(c for c in self.manager.store.list_chapters("Test Series") if c["chapter"] == "2")
+        out = await self.manager.delete("Test Series", busy["id"])
+        self.assertEqual(out["runs_cancelled"], [state["id"]], "the chapter being catalogued stops its run")
+
 
 if __name__ == "__main__":
     unittest.main()
