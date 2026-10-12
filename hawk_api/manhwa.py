@@ -35,6 +35,8 @@ import httpx
 
 from . import models_llm
 from .atlas import AtlasError
+from hawk_h3.script import ScriptError, max_segment_seconds, parse_script
+
 from .jobs import NotFound, RequestError, Unavailable
 from .schemas import PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
@@ -78,7 +80,22 @@ SETTINGS_DEFAULTS = {
     "qa": True, "qa_model": "deepseek-ai/deepseek-v4.1-flash", "qa_retries": 2, "qa_min_score": 7,
     # The autopilot drafts a chapter's scene context from its catalogue when none was given.
     "auto_context": True,
+    # Cast sheet: one photoreal portrait per character, given to Qwen as an extra reference on every panel that
+    # character is in, so a face stays the same across panels and chapters. The autopilot makes missing ones.
+    "cast_refs": True, "auto_cast": True, "cast_size": 8,
+    # Panel triage: text-only and blank panels, and near-duplicates of the panel before, are not converted.
+    "triage": True,
+    # Video plans group neighbouring panels of one tile into a shot (up to 3 pictures) and time each shot by its
+    # dialogue (about 2.5 words a second), instead of one fixed-length segment per panel.
+    "group_shots": True,
+    # Chapter films get subtitles from the catalogue's dialogue: "file" (an .srt beside the film), "burn" (drawn
+    # into the picture), or "off".
+    "subtitles": "file",
 }
+SHOT_PICTURES = 3
+WORDS_PER_SECOND = 2.5
+SILENT_SHOT_SECONDS = 5.0
+MIN_SHOT_SECONDS = 4.0
 #: Render settings the Manhwa page sets elsewhere: aspect_ratio and segment_seconds above.
 RENDER_OWN_KEYS = ("aspect_ratio", "default_seconds")
 #: Autopilot: how long it waits on the slow steps before giving up on them, and how often it looks.
@@ -158,7 +175,11 @@ Write "prompt" (80-180 words, plain English, no lists) that:
   sound-effect lettering and drawn effect (hearts, speed lines, sparkles, sweat drops).
 Write "negative": 10-25 comma-separated things to keep out (drawn styles, text, artefacts, anatomy errors).
 
-Also answer two questions about the panel itself:
+Also answer these about the panel itself:
+- "people": the roster names of everyone visible in it (only names from the roster; [] when no one listed is there).
+- "content": "people" when it shows a person or part of one, "scenery" for a place or object with no one in it,
+  "text_only" when it is only speech bubbles, captions or sound-effect lettering, "blank" when there is nothing
+  to see.
 - "drawn": true when it is a drawing, illustration or comic art; false when it is a photograph or photoreal.
 - "identifiable": true when it shows a real, recognisable person (a photo of someone, or a likeness of a real
   celebrity); false for fictional drawn characters.
@@ -171,7 +192,8 @@ Roster (name: appearance):
 What the catalogue says about this panel: {scene}
 What happens in the chapter: {summary}
 {context}
-Reply with only JSON: {{"drawn": true, "identifiable": false, "prompt": "", "negative": ""}}
+Reply with only JSON: {{"drawn": true, "identifiable": false, "people": [], "content": "people", "prompt": "",
+"negative": ""}}
 """
 
 QA_PROMPT = """\
@@ -196,6 +218,12 @@ Every character is an adult. If anyone in either image looks like a child or a t
 
 Reply with only JSON: {{"score": 0, "problems": [], "minor": false, "revised_prompt": ""}}
 """
+
+CAST_PROMPT = ("Make a photorealistic head-and-shoulders portrait photograph of {name}, the person in <image1>: a real "
+               "adult, {appearance}. Keep their face shape, eyes, hair style and colour, and skin tone exactly as drawn. "
+               "Facing the camera, calm expression, fully clothed in their usual clothes, plain light-grey studio "
+               "background, soft even light, 85mm lens. Only {name} in the picture, no text.")
+CAST_REF_LINE = "<image{n}> is a photograph of {name}: give {name} exactly that face and hair."
 
 CONTEXT_PROMPT = """\
 From this catalogue of one manhwa chapter, write the scene context an image model and a film planner will follow.
@@ -466,6 +494,26 @@ def context_text(context: dict | None) -> str:
         + "\n".join(lines)
 
 
+def panel_fingerprint(jpeg: bytes) -> tuple[int, float]:
+    """(16x16 average hash, grey-level spread) of a panel: the hash finds a near-duplicate of the panel before,
+    the spread an empty one."""
+    from PIL import Image, ImageStat
+
+    grey = Image.open(io.BytesIO(jpeg)).convert("L")
+    # the spread at a readable size: a 16 x 16 thumbnail averages any texture into flat grey
+    detail = grey.resize((256, max(1, round(grey.height * 256 / max(1, grey.width)))))
+    pixels = list(grey.resize((16, 16)).getdata())
+    mean = sum(pixels) / len(pixels)
+    bits = 0
+    for value in pixels:
+        bits = (bits << 1) | (value > mean)
+    return bits, ImageStat.Stat(detail).stddev[0]
+
+
+def near_duplicate(a: int, b: int, bits: int = 12) -> bool:
+    return bin(a ^ b).count("1") <= bits
+
+
 def real_prompt(tile: dict | None, extra: str = "", context: dict | None = None) -> str:
     """REAL_PROMPT plus what the catalogue says is in the panel, so the people keep their looks."""
     parts = [REAL_PROMPT]
@@ -487,14 +535,65 @@ def real_prompt(tile: dict | None, extra: str = "", context: dict | None = None)
     return " ".join(parts)[:2000]
 
 
-def plan_brief(chapter: dict, shots: list[dict], part: int, parts: int) -> str:
-    """The story planner's brief for one part of a chapter: one segment per photograph, in reading order,
-    with the panel's dialogue as the exact lines to speak."""
+def _spoken(shot: dict) -> list[dict]:
+    lines = []
+    for said in shot.get("dialogue") or []:
+        text = (said.get("text_en") or said.get("text") or "").strip()
+        if text:
+            lines.append({"speaker": said.get("speaker") or "narration", "text": text})
+    return lines
+
+
+def shot_seconds(lines: list[dict], cap: float) -> float:
+    """How long a shot runs: long enough to say its lines at a natural pace, never past the segment cap."""
+    words = sum(len(line["text"].split()) for line in lines)
+    if not words:
+        return min(cap, SILENT_SHOT_SECONDS)
+    return round(max(MIN_SHOT_SECONDS, min(cap, 2.0 + words / WORDS_PER_SECOND)), 1)
+
+
+def group_shots(shots: list[dict], cap: float, together: bool = True, fixed: float | None = None) -> list[dict]:
+    """Shots for the film: neighbouring photographs of one tile (one moment) share a segment, up to SHOT_PICTURES,
+    unless their lines would run past the cap. Each group: {shots, lines, duration}."""
+    groups: list[dict] = []
+    for shot in shots:
+        lines = _spoken(shot)
+        last = groups[-1] if groups else None
+        if (together and last and last["shots"][-1].get("tile_id") == shot.get("tile_id")
+                and len(last["shots"]) < SHOT_PICTURES
+                and shot_seconds(last["lines"] + lines, 10_000) <= cap):
+            last["shots"].append(shot)
+            last["lines"] += lines
+        else:
+            groups.append({"shots": [shot], "lines": lines})
+    for group in groups:
+        group["duration"] = fixed if fixed else shot_seconds(group["lines"], cap)
+    return groups
+
+
+def pack_groups(groups: list[dict], pictures: int = PLAN_PICTURES) -> list[list[dict]]:
+    """Plans of whole groups, each with at most ``pictures`` photographs (a render's limit)."""
+    parts: list[list[dict]] = []
+    for group in groups:
+        if parts and sum(len(g["shots"]) for g in parts[-1]) + len(group["shots"]) <= pictures:
+            parts[-1].append(group)
+        else:
+            parts.append([group])
+    return parts
+
+
+def plan_brief(chapter: dict, shots: list[dict], part: int, parts: int, groups: list[dict] | None = None) -> str:
+    """The story planner's brief for one part of a chapter: one segment per shot, in reading order, each starting
+    from its first photograph, timed by its dialogue, with the lines to speak word for word."""
+    if groups is None:  # one shot per photograph
+        groups = [{"shots": [shot], "lines": _spoken(shot), "duration": None} for shot in shots]
     lines = [f"A live-action film of {chapter['series']}, chapter {chapter.get('chapter') or '?'}"
              + (f", part {part} of {parts}" if parts > 1 else "") + ".",
-             "The attached pictures are photographs made from the comic's panels, in reading order. Write exactly "
-             "one segment per picture, in the same order: segment N starts from <Picture N>, uses only that picture "
-             "(\"pictures\": [N]) and plays out what the panel shows, with the people looking as they do in it.",
+             f"The attached pictures are photographs made from the comic's panels, in reading order. Write exactly "
+             f"{len(groups)} segment{'s' if len(groups) != 1 else ''}, one per shot below, in the same order. A shot "
+             "names its pictures: the segment starts from the first, moves through the others in order, sets "
+             "\"pictures\" to exactly those numbers and \"duration\" to the seconds given, and plays out what the "
+             "panels show, with the people looking as they do in them.",
              "Characters speak the dialogue below word for word, in English, in the order given; narration is a "
              "voice-over. Keep segments with no dialogue free of speech. Leave references_to_make empty.",
              "All characters are adults."]
@@ -507,18 +606,73 @@ def plan_brief(chapter: dict, shots: list[dict], part: int, parts: int) -> str:
                          "\"inherit\").")
     if chapter.get("summary"):
         lines.append(f"Chapter so far: {chapter['summary']}")
-    for number, shot in enumerate(shots, 1):
-        lines.append(f"\n<Picture {number}>: {shot.get('scene') or 'see the picture'}")
-        people = [f"{p['name']} ({p.get('appearance', '')})" for p in shot.get("characters") or [] if p.get("name")]
-        if people:
-            lines.append("People: " + "; ".join(people))
-        for said in shot.get("dialogue") or []:
-            text = (said.get("text_en") or said.get("text") or "").strip()
-            if not text:
-                continue
-            who = said.get("speaker") or "narration"
-            lines.append(f'{"Narration (voice-over)" if who.lower() == "narration" else who}: "{text}"')
+    number = 0
+    for index, group in enumerate(groups, 1):
+        first = number + 1
+        number += len(group["shots"])
+        pictures = ", ".join(str(n) for n in range(first, number + 1))
+        timing = f", {group['duration']:g} s" if group.get("duration") else ""
+        lines.append(f"\nShot {index} -- pictures [{pictures}]{timing}:")
+        for offset, shot in enumerate(group["shots"]):
+            lines.append(f"<Picture {first + offset}>: {shot.get('scene') or 'see the picture'}")
+            people = [f"{p['name']} ({p.get('appearance', '')})" for p in shot.get("characters") or [] if p.get("name")]
+            if people and offset == 0:
+                lines.append("People: " + "; ".join(people))
+        for said in group["lines"]:
+            who = said["speaker"]
+            lines.append(f'{"Narration (voice-over)" if who.lower() == "narration" else who}: "{said["text"]}"')
     return "\n".join(lines)
+
+
+def _srt_time(seconds: float) -> str:
+    ms = max(0, int(round(seconds * 1000)))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+
+
+def build_srt(parts: list[dict]) -> str:
+    """Subtitles for a chapter film. Each part: {"duration": its real length in seconds, "segments": [{"seconds":
+    planned length, "lines": [{speaker, text}]}]}. A part's segments are stretched to its real length (renders
+    trim and blend at the joins), and each segment's lines share its time by word count."""
+    cues, offset = [], 0.0
+    for part in parts:
+        segments = part["segments"]
+        planned = sum(max(0.1, s["seconds"]) for s in segments) or 1.0
+        scale = part["duration"] / planned if part.get("duration") else 1.0
+        start = offset
+        for segment in segments:
+            length = max(0.1, segment["seconds"]) * scale
+            lines = [l for l in segment.get("lines") or [] if l.get("text")]
+            words = sum(max(1, len(l["text"].split())) for l in lines) or 1
+            at = start + 0.2
+            usable = max(0.5, length - 0.4)
+            for line in lines:
+                span = usable * max(1, len(line["text"].split())) / words
+                text = line["text"] if line.get("speaker", "").lower() != "narration" else f"<i>{line['text']}</i>"
+                cues.append((at, at + span, text))
+                at += span
+            start += length
+        offset += part["duration"] if part.get("duration") else planned
+    return "".join(f"{n}\n{_srt_time(a)} --> {_srt_time(b)}\n{text}\n\n" for n, (a, b, text) in enumerate(cues, 1))
+
+
+def media_seconds(path: str) -> float:
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                         capture_output=True, text=True)
+    try:
+        return float(out.stdout.strip())
+    except ValueError:
+        return 0.0
+
+
+def burn_subtitles(video: str, srt: str, out: str) -> None:
+    """Draw the subtitles into the picture (re-encodes the video; audio is copied)."""
+    escaped = srt.replace("\\", "/").replace(":", "\\:").replace("'", "\\'")
+    result = subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-i", video, "-vf",
+                             f"subtitles='{escaped}':force_style='Fontsize=14,Outline=1,MarginV=40'",
+                             "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+                             "-c:a", "copy", "-movflags", "+faststart", out], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg could not burn the subtitles: {result.stderr.strip()[-300:]}")
 
 
 class SkipPanel(Exception):
@@ -568,6 +722,8 @@ class ManhwaStore:
     CREATE TABLE IF NOT EXISTS manhwa_characters (
         series TEXT NOT NULL, name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (series, name));
     CREATE VIRTUAL TABLE IF NOT EXISTS manhwa_fts USING fts5(page_id UNINDEXED, series UNINDEXED, body);
+    CREATE TABLE IF NOT EXISTS manhwa_pipelines (
+        id TEXT PRIMARY KEY, status TEXT NOT NULL, data TEXT NOT NULL, inputs TEXT NOT NULL, created_at REAL NOT NULL);
     """
 
     def __init__(self, path: str):
@@ -642,6 +798,23 @@ class ManhwaStore:
             rows = self._db.execute(sql, args).fetchall()
         return [dict(json.loads(data), chapter_id=cid, series=s, chapter=ch, chapter_url=url)
                 for data, cid, s, ch, url in rows]
+
+    def save_pipeline(self, state: dict, inputs: dict) -> None:
+        """An autopilot's progress, and what it needs to start again (inputs: chapter, cookies, context -- kept
+        out of the state the API shows)."""
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO manhwa_pipelines VALUES (?, ?, ?, ?, ?)",
+                             (state["id"], state["status"], json.dumps(state, ensure_ascii=False),
+                              json.dumps(inputs, ensure_ascii=False), state["created_at"]))
+            self._db.commit()
+
+    def pipelines(self, statuses: tuple[str, ...] = ()) -> list[tuple[dict, dict]]:
+        sql, args = "SELECT data, inputs FROM manhwa_pipelines", ()
+        if statuses:
+            sql, args = sql + f" WHERE status IN ({','.join('?' * len(statuses))})", statuses
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY created_at DESC LIMIT 50", args).fetchall()
+        return [(json.loads(data), json.loads(inputs)) for data, inputs in rows]
 
     def characters(self, series: str) -> dict[str, dict]:
         with self._lock:
@@ -735,6 +908,9 @@ class ManhwaManager:
                                           "manhwa_settings.json")
         self.conversions: dict[str, dict] = {}
         self.pipelines: dict[str, dict] = {}
+        self.cast_runs: dict[str, dict] = {}
+        self._pipeline_inputs: dict[str, dict] = {}
+        self._cast_tasks: dict[str, asyncio.Task] = {}
         self._pipeline_tasks: dict[str, asyncio.Task] = {}
         self.poll = PIPELINE_POLL
         self._convert_tasks: dict[str, asyncio.Task] = {}
@@ -890,7 +1066,8 @@ class ManhwaManager:
         return self.get(run_id)
 
     async def stop(self) -> None:
-        tasks = list(self._tasks.values()) + list(self._convert_tasks.values()) + list(self._pipeline_tasks.values())
+        tasks = (list(self._tasks.values()) + list(self._convert_tasks.values()) + list(self._pipeline_tasks.values())
+                 + list(self._cast_tasks.values()))
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -919,19 +1096,66 @@ class ManhwaManager:
             "cancel_requested": False, "created_at": time.time(), "finished_at": None,
         }
         self.pipelines[state["id"]] = state
-        self._pipeline_tasks[state["id"]] = asyncio.create_task(
-            self._pipeline(state, (chapter or "").strip(), (cookies or "").strip(), context or {}))
+        self._launch_pipeline(state, {"chapter": (chapter or "").strip(), "cookies": (cookies or "").strip(),
+                                      "context": context or {}})
         return state
 
+    def _launch_pipeline(self, state: dict, inputs: dict) -> None:
+        self._pipeline_inputs[state["id"]] = inputs
+        self._persist(state)
+        self._pipeline_tasks[state["id"]] = asyncio.create_task(
+            self._pipeline(state, inputs.get("chapter", ""), inputs.get("cookies", ""), inputs.get("context") or {}))
+
+    def _persist(self, state: dict) -> None:
+        """Save the autopilot's progress, so a runtime that restarts carries on from it."""
+        try:
+            # Cookies are a login to someone's site: kept in memory only, never in the database (or its Drive copy).
+            inputs = {k: v for k, v in self._pipeline_inputs.get(state["id"], {}).items() if k != "cookies"}
+            self.store.save_pipeline(state, inputs)
+        except Exception as exc:  # never fail the run over its bookkeeping
+            log.warning("manhwa: could not save autopilot %s: %s", state["id"], exc)
+
+    async def resume_pipelines(self, wait_for_gpu: float = 600.0) -> list[str]:
+        """Start again every autopilot a restart interrupted (saved as running or interrupted), once ComfyUI
+        answers. Each step skips what is already done: catalogued chapters, converted panels, written plans,
+        rendered parts, merged films."""
+        saved = [(state, inputs) for state, inputs in self.store.pipelines(("running", "interrupted"))
+                 if state["id"] not in self.pipelines]
+        if not saved:
+            return []
+        deadline = time.monotonic() + wait_for_gpu
+        while time.monotonic() < deadline:
+            try:
+                if await self.service.comfy.object_info("KSampler"):
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(10)
+        resumed = []
+        for state, inputs in saved[:1]:  # one autopilot at a time, as when started by hand
+            state.update(status="running", resumed_at=time.time(), finished_at=None, cancel_requested=False)
+            state["errors"] = state.get("errors", [])[-5:]
+            self.pipelines[state["id"]] = state
+            self._launch_pipeline(state, inputs)
+            resumed.append(state["id"])
+        for state, inputs in saved[1:]:
+            state["status"] = "interrupted"
+            self.store.save_pipeline(state, inputs)
+        return resumed
+
     def pipeline(self, pipeline_id: str) -> dict:
-        state = self.pipelines.get(pipeline_id)
+        state = self.pipelines.get(pipeline_id) or next(
+            (saved for saved, _ in self.store.pipelines() if saved["id"] == pipeline_id), None)
         if state is None:
             raise NotFound(f"No autopilot {pipeline_id!r} (forgotten when the API restarts; its chapters, "
                            "photographs and videos are kept).")
         return state
 
     def recent_pipelines(self) -> list[dict]:
-        return sorted(self.pipelines.values(), key=lambda s: s["created_at"], reverse=True)[:20]
+        known = dict(self.pipelines)
+        for state, _ in self.store.pipelines():  # earlier runtimes' autopilots too
+            known.setdefault(state["id"], state)
+        return sorted(known.values(), key=lambda s: s["created_at"], reverse=True)[:20]
 
     async def cancel_pipeline(self, pipeline_id: str) -> dict:
         """Stop the autopilot and whatever step it is on. Renders already queued keep going (cancel them in Jobs);
@@ -956,6 +1180,7 @@ class ManhwaManager:
             if run["errors"]:
                 state["errors"] += [f"catalogue: {e}" for e in run["errors"][-3:]]
             ids = list(dict.fromkeys(run["chapter_ids"] + [s["id"] for s in run["skipped"]]))
+            state["chapters"] = []  # rebuilt on a resume: chapters done before come back as skipped by the run
             for chapter_id in ids:
                 row = self.store.get_chapter(chapter_id) or {}
                 state["chapters"].append({"chapter_id": chapter_id, "chapter": row.get("chapter", ""),
@@ -963,10 +1188,22 @@ class ManhwaManager:
                                           "conversion_id": "", "plans": [], "renders": [], "error":
                                           "" if row.get("status") == "done" else f"catalogue {row.get('status')}"})
             work = [c for c in state["chapters"] if c["stage"] == "catalogued"]
+            self._persist(state)
             if not work:
                 raise RequestError(run["stop_reason"] or "No chapter was catalogued.")
 
-            # 2. photographs, then the plans (LLM only) while the next chapter converts on the GPU
+            # 2. the cast sheet first, so every chapter's photographs share one face per character
+            conf = self.settings()
+            if conf["cast_refs"] and conf["auto_cast"]:
+                state["stage"] = "cast portraits"
+                cast = {"id": "", "series": state["series"], "done": [], "skipped": [], "errors": []}
+                try:
+                    await self._cast(cast, None, False)
+                except Exception as exc:  # no portraits: the photographs are made without them
+                    cast["errors"].append(str(exc))
+                state["cast"] = {"made": [c["name"] for c in cast["done"]], "errors": cast["errors"][:3]}
+
+            # 3. photographs, then the plans (LLM only) while the next chapter converts on the GPU
             for item in work:
                 state["stage"] = f"photographs: ch {item['chapter']}"
                 has_context = bool((self.store.get_chapter(item["chapter_id"]) or {}).get("context"))
@@ -978,19 +1215,16 @@ class ManhwaManager:
                         self.set_context(item["chapter_id"], await self.draft_context(item["chapter_id"]))
                     except Exception as exc:
                         item["context"] = f"not drafted: {exc}"[:200]
-                if self.shots(item["chapter_id"]):
-                    item["stage"] = "photographs (already made)"
-                else:
-                    item["stage"] = "photographs"
-                    conversion = await self.convert(item["chapter_id"], plan_after=False)
-                    item["conversion_id"] = conversion["id"]
-                    while conversion["status"] == "running":
-                        await asyncio.sleep(self.poll)
-                    if not conversion["converted"]:
-                        item.update(stage="failed", error="No photographs were made: " + "; ".join(
-                            [r.get("error", "") for r in conversion["results"] if r.get("error")][:2]
-                            + conversion["errors"][:1])[:400])
-                        continue
+                item["stage"] = "photographs"
+                conversion = await self.convert(item["chapter_id"], plan_after=False, skip_done=True)
+                item["conversion_id"] = conversion["id"]
+                while conversion["status"] == "running":
+                    await asyncio.sleep(self.poll)
+                if not self.shots(item["chapter_id"]):
+                    item.update(stage="failed", error="No photographs were made: " + "; ".join(
+                        [r.get("error", "") for r in conversion["results"] if r.get("error")][:2]
+                        + conversion["errors"][:1])[:400])
+                    continue
                 existing = (self.store.get_chapter(item["chapter_id"]) or {}).get("plans") or []
                 usable = [p for p in existing if (self.service.store.get_job(p["job_id"]) or {}).get("status")
                           in ("planning", "queued", "done")]
@@ -999,6 +1233,7 @@ class ManhwaManager:
                 else:
                     item["plans"] = (await self.plan_chapter(item["chapter_id"]))["plans"]
                 item["stage"] = "planning"
+                self._persist(state)
 
             # 3. render each chapter as soon as all its plans are written
             if state["render"]:
@@ -1014,6 +1249,7 @@ class ManhwaManager:
                     item["stage"] = "rendering" if item["renders"] else "failed"
                     if not item["renders"]:
                         item["error"] = "No plan could be rendered."
+                    self._persist(state)
 
                 # 4. watch the videos until they are finished
                 state["stage"] = "waiting for videos"
@@ -1037,6 +1273,7 @@ class ManhwaManager:
                             item.update(stage="done", film_asset_id=film["asset_id"])
                         except Exception as exc:  # the parts are rendered; the film can be merged again by hand
                             item.update(stage="failed", error=f"Merge: {exc}"[:400])
+                    self._persist(state)
                     if not pending:
                         break
                     await asyncio.sleep(self.poll * 6)
@@ -1047,6 +1284,9 @@ class ManhwaManager:
             state["stage"] = "finished"
             state["status"] = "done"
         except asyncio.CancelledError:
+            if not state["cancel_requested"]:  # the API is shutting down: carry on after the restart
+                state["status"] = "interrupted"
+                raise
             state["status"] = "cancelled"
             state["stage"] = "cancelled"
             for run_id in [state.get("run_id")]:
@@ -1064,6 +1304,7 @@ class ManhwaManager:
         finally:
             state["finished_at"] = time.time()
             self._pipeline_tasks.pop(state["id"], None)
+            self._persist(state)
 
     async def _wait_plans(self, item: dict) -> bool:
         """Wait for a chapter's plan jobs; a failed one is retried once. False when none can be rendered."""
@@ -1178,7 +1419,7 @@ class ManhwaManager:
                       max_panels: int = MAX_CONVERT_PANELS, plan_after: bool | None = None,
                       analyze: bool | None = None, prompt_model: str | None = None, steps: int | None = None,
                       cfg: float | None = None, negative: str | None = None, qa: bool | None = None,
-                      qa_retries: int | None = None) -> dict:
+                      qa_retries: int | None = None, skip_done: bool = False) -> dict:
         """Turn a catalogued chapter's panels into photographs with Qwen Image 2.1 on this GPU. Runs in the
         background, one panel at a time; poll conversion(). tile_ids limits it to the panels in those tiles.
         Anything left as None comes from the Manhwa page's settings."""
@@ -1212,6 +1453,7 @@ class ManhwaManager:
             "qa": bool(pick(qa, "qa")), "qa_model": conf["qa_model"] or "deepseek-ai/deepseek-v4.1-flash",
             "qa_retries": max(0, min(int(pick(qa_retries, "qa_retries") or 0), 5)),
             "qa_min_score": float(conf["qa_min_score"] or 7), "retried": 0,
+            "cast_refs": bool(conf["cast_refs"]), "triage": bool(conf["triage"]), "skip_done": bool(skip_done),
         }
         self.conversions[state["id"]] = state
         self._convert_tasks[state["id"]] = asyncio.create_task(
@@ -1272,16 +1514,36 @@ class ManhwaManager:
                     if wanted and (tile or {}).get("id") not in wanted:
                         continue
                     work.append((asset, number, jpeg, tile))
+            if state["skip_done"]:  # resuming: panels already turned into photographs are left as they are
+                done = self._converted_panels(pages)
+                work = [w for w in work if (w[0]["id"], w[1]) not in done]
             work = work[:max_panels]
             state["panels_total"] = len(work)
+            portraits = self._portraits(series) if state["cast_refs"] else {}
+            previous_hash = None
             for asset, number, jpeg, tile in work:
+                if state["triage"]:
+                    fingerprint, spread = await asyncio.to_thread(panel_fingerprint, jpeg)
+                    reason = ("blank panel" if spread < 6 else
+                              "same picture as the panel before" if previous_hash is not None
+                              and near_duplicate(previous_hash, fingerprint) else "")
+                    previous_hash = fingerprint
+                    if reason:
+                        state["results"].append({"tile_id": (tile or {}).get("id", ""), "page": asset.get("filename"),
+                                                 "panel": number, "status": "skipped", "error": f"Triage: {reason}"})
+                        state["skipped"] += 1
+                        state["panels_done"] += 1
+                        self._mark_skipped(tile, asset["id"], number, reason, pages, chapter_id, series)
+                        continue
                 stem = (asset.get("filename") or "page").rsplit(".", 1)[0]
                 panel = await self.service.add_asset(
                     f"{stem}_panel{number:02d}.jpg", io.BytesIO(jpeg), "image/jpeg", len(jpeg),
                     collection=state["collection"].rsplit("/", 1)[0] + "/panels", tags=["manhwa", series, "panel"],
                     source={"type": "manhwa", "from_asset": asset["id"], "panel": number,
                             "tile_id": (tile or {}).get("id", "")})
-                row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename")}
+                row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename"),
+                       "panel": number}
+                refs: list[tuple[str, str]] = []
                 prompt, negative = real_prompt(tile, extra, context), REAL_NEGATIVE
                 if models:
                     written = await self._panel_prompt(jpeg, tile, roster, models, context, summary)
@@ -1291,6 +1553,17 @@ class ManhwaManager:
                         state["results"].append(row)
                         state["panels_done"] += 1
                         continue
+                    if state["triage"] and written.get("content") in ("text_only", "blank"):
+                        self._drop(panel["id"])
+                        self._mark_skipped(tile, asset["id"], number, written["content"], pages, chapter_id, series)
+                        row.update(status="skipped", error=f"Triage: {written['content'].replace('_', ' ')} panel")
+                        state["skipped"] += 1
+                        state["results"].append(row)
+                        state["panels_done"] += 1
+                        continue
+                    refs = [(portraits[n], n) for n in written.get("people") or [] if n in portraits][:3]
+                    if refs:
+                        row["cast"] = [n for _, n in refs]
                     if written.get("prompt"):
                         self._record_person_check(panel["id"], written)
                         prompt = (written["prompt"] + (" " + extra.strip() if extra.strip() else ""))[:2000]
@@ -1302,10 +1575,12 @@ class ManhwaManager:
                 try:
                     if state["negative"].strip():
                         negative = f"{negative}, {state['negative'].strip()}"
-                    ids = await self._make_photo(state, panel["id"], jpeg, prompt, negative, row, qa_models)
+                    ids = await self._make_photo(state, panel["id"], jpeg, prompt, negative, row, qa_models,
+                                                 refs if models else [])
                 except SkipPanel as exc:
                     row.update(status="skipped", error=f"Not converted: {exc}"[:400])
                     state["skipped"] += 1
+                    self._mark_skipped(tile, asset["id"], number, str(exc), pages, chapter_id, series)
                 except Exception as exc:  # one panel failing (a refusal, ComfyUI down) does not end the run
                     refused = isinstance(exc, RequestError) and str(exc).startswith("Refused")
                     row.update(status="refused" if refused else "failed", error=str(exc)[:400])
@@ -1319,7 +1594,8 @@ class ManhwaManager:
                                thumb_url=self.service.asset_view(shown).get("thumb_url") if shown else None)
                     state["converted"] += 1
                     if tile is not None:
-                        tile.setdefault("real", []).append({"panel_asset_id": panel["id"], "asset_ids": ids})
+                        tile.setdefault("real", []).append({"panel_asset_id": panel["id"], "asset_ids": ids,
+                                                            "page_asset_id": asset["id"], "panel": number})
                         self.store.save_pages(chapter_id, series, pages)
                 state["results"].append(row)
                 state["panels_done"] += 1
@@ -1375,16 +1651,23 @@ class ManhwaManager:
         shots = self.shots(chapter_id)
         if not shots:
             raise RequestError("This chapter has no photographs yet: convert its panels first.")
-        parts = [shots[i:i + PLAN_PICTURES] for i in range(0, len(shots), PLAN_PICTURES)]
+        cap = min(max_segment_seconds(), 15.0)
+        groups = group_shots(shots, cap, together=bool(conf["group_shots"]),
+                             fixed=None if conf["group_shots"] else min(cap, float(segment_seconds)))
+        parts = pack_groups(groups)
         plans = []
         for number, part in enumerate(parts, 1):
+            pictures = [shot for group in part for shot in group["shots"]]
             try:
-                request = self._plan_request(chapter, part, number, len(parts), aspect_ratio, segment_seconds, model)
+                request = self._plan_request(chapter, pictures, number, len(parts), aspect_ratio, segment_seconds,
+                                             model, part)
             except ValueError as exc:  # pydantic: an aspect ratio or length the planner does not take
                 raise RequestError(str(exc).splitlines()[0] if str(exc) else "Bad plan settings.") from None
             job = await self.service.create_plan(request)
-            plans.append({"part": number, "job_id": job["id"], "pictures": [s["asset_id"] for s in part],
-                          "segments": len(part)})
+            plans.append({"part": number, "job_id": job["id"], "pictures": [s["asset_id"] for s in pictures],
+                          "segments": len(part),
+                          # kept for the chapter film's subtitles: what is said in each segment, and for how long
+                          "shots": [{"duration": g["duration"], "lines": g["lines"]} for g in part]})
         chapter["plans"] = plans
         self.store.save_chapter(chapter)
         return {"chapter_id": chapter_id, "photographs": len(shots), "plans": plans}
@@ -1465,6 +1748,20 @@ class ManhwaManager:
                      for n, job_id in enumerate(jobs, 1)]
             out = os.path.join(work, "film.mp4")
             copied = await asyncio.to_thread(concat_videos, parts, out)
+            mode = str(self.settings().get("subtitles") or "off")
+            srt, burned = "", False
+            if mode in ("file", "burn"):
+                srt = await self._chapter_srt(chapter, renders, parts)
+            if srt and mode == "burn":
+                srt_path = os.path.join(work, "film.srt")
+                with open(srt_path, "w", encoding="utf-8") as handle:
+                    handle.write(srt)
+                try:
+                    burned_path = os.path.join(work, "film_subtitled.mp4")
+                    await asyncio.to_thread(burn_subtitles, out, srt_path, burned_path)
+                    out, burned = burned_path, True
+                except Exception as exc:  # no libass in this ffmpeg: the .srt still goes beside the film
+                    log.warning("manhwa: subtitles not burned: %s", exc)
             name = f"{re.sub(r'[^0-9A-Za-z]+', '-', chapter['series']).strip('-').lower()}_ch{chapter['chapter'] or 'x'}.mp4"
             with open(out, "rb") as handle:
                 asset = await self.service.add_asset(
@@ -1474,12 +1771,56 @@ class ManhwaManager:
                     source={"type": "generated", "engine": "ffmpeg", "generator": "chapter film",
                             "chapter_id": chapter_id, "jobs": jobs})
             drive = await self._film_to_drive(out, name)
+            srt_drive = ""
+            if srt:
+                srt_file = self._srt_path(chapter_id)
+                os.makedirs(os.path.dirname(srt_file), exist_ok=True)
+                with open(srt_file, "w", encoding="utf-8") as handle:
+                    handle.write(srt)
+                if drive:
+                    srt_drive = await self._film_to_drive(srt_file, name.rsplit(".", 1)[0] + ".srt")
         finally:
             shutil.rmtree(work, ignore_errors=True)
         chapter["film"] = {"asset_id": asset["id"], "jobs": jobs, "parts": len(jobs), "created_at": time.time(),
-                           "stream_copy": copied, "drive": drive}
+                           "stream_copy": copied, "drive": drive,
+                           "subtitles": ("burned" if burned else "file") if srt else "", "srt_drive": srt_drive}
         self.store.save_chapter(chapter)
         return {"chapter_id": chapter_id, "film": chapter["film"], "merged": True}
+
+    def _srt_path(self, chapter_id: str) -> str:
+        return os.path.join(os.path.dirname(self.settings_path), "manhwa_subtitles", f"{chapter_id}.srt")
+
+    def subtitles(self, chapter_id: str) -> str:
+        path = self._srt_path(chapter_id)
+        if not os.path.isfile(path):
+            raise NotFound("This chapter's film has no subtitles yet: merge it with subtitles on.")
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read()
+
+    async def _chapter_srt(self, chapter: dict, renders: list[dict], files: list[str]) -> str:
+        """Subtitles from what each plan says is spoken in each segment, timed by the render's own script."""
+        plans = {p["job_id"]: p for p in chapter.get("plans") or []}
+        parts = []
+        for render, path in zip(renders, files):
+            plan = plans.get(render["plan_job_id"]) or {}
+            shots = plan.get("shots") or []
+            job = self.service.store.get_job(render["job_id"]) or {}
+            plan_job = self.service.store.get_job(render["plan_job_id"]) or {}
+            seconds: list[float] = []
+            try:
+                script = parse_script(job.get("script") or plan_job.get("script") or "")
+                default = float(((job.get("request") or {}).get("settings") or {}).get("default_seconds") or 10)
+                seconds = [float(seg.duration or default) for seg in script.segments]
+            except (ScriptError, TypeError, ValueError):
+                pass
+            if len(seconds) != len(shots):  # the planner wrote a different number of segments: spread the lines
+                lines = [line for shot in shots for line in shot.get("lines") or []]
+                total = sum(seconds) or sum(float(s.get("duration") or 5) for s in shots) or 5.0
+                segments = [{"seconds": total, "lines": lines}]
+            else:
+                segments = [{"seconds": sec, "lines": shot.get("lines") or []} for sec, shot in zip(seconds, shots)]
+            parts.append({"duration": await asyncio.to_thread(media_seconds, path), "segments": segments})
+        return build_srt(parts)
 
     async def _part_file(self, job_id: str, target: str) -> str:
         """A rendered part on disk: ComfyUI's own file when its output folder is here, else downloaded."""
@@ -1510,9 +1851,10 @@ class ManhwaManager:
             return ""
 
     @staticmethod
-    def _plan_request(chapter, part, number, parts, aspect_ratio, segment_seconds, model) -> PlanRequest:
+    def _plan_request(chapter, part, number, parts, aspect_ratio, segment_seconds, model,
+                      groups: list[dict] | None = None) -> PlanRequest:
         return PlanRequest(
-            story=plan_brief(chapter, part, number, parts), segment_count=len(part),
+            story=plan_brief(chapter, part, number, parts, groups), segment_count=len(groups or part),
             segment_seconds=segment_seconds, aspect_ratio=aspect_ratio, model=model,
             references=[ReferenceIn(asset_id=shot["asset_id"], role="picture",
                                     label=(shot["scene"] or f"panel photo {k}")[:200])
@@ -1552,21 +1894,27 @@ class ManhwaManager:
             if len(prompt) >= 40:
                 negative = " ".join(str(answer.get("negative") or "").split())[:600]
                 return {"prompt": prompt[:1800], "negative": negative, "model": model,
-                        "drawn": answer.get("drawn"), "identifiable": answer.get("identifiable")}
+                        "drawn": answer.get("drawn"), "identifiable": answer.get("identifiable"),
+                        "people": [str(n) for n in answer.get("people") or [] if isinstance(n, str)][:6],
+                        "content": str(answer.get("content") or "people")}
             failures.append(f"{model}: no usable prompt")
         return {"error": "; ".join(failures) or "No vision model is configured."}
 
     async def _make_photo(self, state: dict, panel_id: str, jpeg: bytes, prompt: str, negative: str, row: dict,
-                          qa_models: list[str]) -> list[str]:
+                          qa_models: list[str], refs: list[tuple[str, str]] | None = None) -> list[str]:
         """Make the panel's photograph; with the quality check on, a vision model scores it against the panel and,
         below the bar, rewrites the prompt (pose, limbs, camera) for another try. The best attempt is kept, the
         others are deleted. Raises SkipPanel when someone reads as a minor, deleting what was made."""
         tries = 1 + (state["qa_retries"] if state["qa"] and qa_models else 0)
         best: tuple[float, list[str], str] | None = None
         attempts = []
+        refs = refs or []
+        # the cast portraits ride along as <image2>.. on every try, whatever the checker rewrote
+        cast = " ".join(CAST_REF_LINE.format(n=k, name=name) for k, (_, name) in enumerate(refs, 2))
         for attempt in range(1, tries + 1):
-            result = await self._convert_panel(panel_id, prompt, state["loras"], negative,
-                                               steps=state["steps"], cfg=state["cfg"])
+            result = await self._convert_panel(panel_id, f"{prompt} {cast}".strip()[:2400], state["loras"], negative,
+                                               steps=state["steps"], cfg=state["cfg"],
+                                               refs=[asset_id for asset_id, _ in refs])
             ids = [a["id"] for a in result.get("assets") or []]
             if not (state["qa"] and qa_models and ids):
                 row["prompt"] = prompt
@@ -1667,6 +2015,134 @@ class ManhwaManager:
         draft["one_scene"] = answer.get("one_scene") is True
         return draft
 
+    # ----------------------------------------------------------------- cast sheet
+
+    def _portraits(self, series: str) -> dict[str, str]:
+        """Character name -> portrait asset id, for the portraits still in the library."""
+        return {name: data["portrait_asset_id"] for name, data in self.store.characters(series).items()
+                if data.get("portrait_asset_id") and self.service.store.get_asset(data["portrait_asset_id"])}
+
+    @staticmethod
+    def _converted_panels(pages: list[dict]) -> set[tuple[str, int]]:
+        """(page asset id, panel number) of every panel already dealt with: given a photograph, or skipped on
+        purpose (triage, someone who reads as a minor) -- a resumed run must not try those again either."""
+        done = set()
+        for page in pages:
+            for made in (page.get("real") or []) + (page.get("skipped_panels") or []):
+                if (made.get("asset_ids") or made.get("why")) and made.get("page_asset_id") and made.get("panel") is not None:
+                    done.add((made["page_asset_id"], int(made["panel"])))
+        return done
+
+    def _mark_skipped(self, tile: dict | None, page_asset_id: str, panel: int, why: str, pages: list[dict],
+                      chapter_id: str, series: str) -> None:
+        if tile is None:
+            return
+        tile.setdefault("skipped_panels", []).append({"page_asset_id": page_asset_id, "panel": panel,
+                                                      "why": why[:200] or "skipped"})
+        self.store.save_pages(chapter_id, series, pages)
+
+    def _cast_source(self, series: str, name: str) -> tuple[str, int] | None:
+        """The tile that shows this character most plainly: the first one with the fewest other people in it."""
+        best = None
+        for chapter in self.store.list_chapters(series):
+            for page in self.store.pages(chapter["id"]):
+                people = [p.get("name") for p in page.get("characters") or []]
+                if name in people and page.get("asset_id"):
+                    key = (len(people), chapter["created_at"], page["idx"])
+                    if best is None or key < best[0]:
+                        best = (key, page["asset_id"], int(page.get("part") or 0))
+        return (best[1], best[2]) if best else None
+
+    async def make_cast(self, series: str, *, names: list[str] | None = None, force: bool = False) -> dict:
+        """Make the photoreal portraits of a series' main characters in the background. Poll cast_run()."""
+        key = series_key(series)
+        series = next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
+        if not self.store.characters(series):
+            raise RequestError(f"No characters catalogued for {series!r} yet.")
+        for other in self.cast_runs.values():
+            if other["status"] == "running":
+                raise RequestError(f"Cast run {other['id']} is still running.", {"cast_run_id": other["id"]})
+        state = {"id": uuid.uuid4().hex[:12], "status": "running", "series": series, "done": [], "skipped": [],
+                 "errors": [], "created_at": time.time(), "finished_at": None}
+        self.cast_runs[state["id"]] = state
+        self._cast_tasks[state["id"]] = asyncio.create_task(self._cast_task(state, names, force))
+        return state
+
+    def cast_run(self, run_id: str) -> dict:
+        state = self.cast_runs.get(run_id)
+        if state is None:
+            raise NotFound(f"No cast run {run_id!r}.")
+        return state
+
+    async def _cast_task(self, state: dict, names, force: bool) -> None:
+        try:
+            await self._cast(state, names, force)
+            state["status"] = "done"
+        except asyncio.CancelledError:
+            state["status"] = "cancelled"
+            raise
+        except Exception as exc:
+            log.exception("manhwa cast %s failed", state["id"])
+            state["status"] = "failed"
+            state["errors"].append(f"{type(exc).__name__}: {exc}"[:400])
+        finally:
+            state["finished_at"] = time.time()
+            self._cast_tasks.pop(state["id"], None)
+
+    async def _cast(self, state: dict, names: list[str] | None, force: bool) -> None:
+        series, conf = state["series"], self.settings()
+        roster = self.store.characters(series)
+        named = [n for n in roster if not re.fullmatch(r"unknown-\d+", n, re.I)]
+        wanted = [n for n in (names or sorted(named, key=lambda n: -int(roster[n].get("tiles") or 0)))
+                  if n in roster][:max(1, int(conf["cast_size"] or 8)) if not names else None]
+        loras = [dict(l) for l in conf["loras"]] if conf["loras"] else await self.real_loras(conf["realism"],
+                                                                                              conf["age_slider"])
+        have = self._portraits(series)
+        for name in wanted:
+            if name in have and not force:
+                state["skipped"].append({"name": name, "why": "already has a portrait"})
+                continue
+            source = self._cast_source(series, name)
+            page = self.service.store.get_asset(source[0]) if source else None
+            if page is None:
+                state["skipped"].append({"name": name, "why": "no panel shows them"})
+                continue
+            tiles = await asyncio.to_thread(slice_image, await self.service.asset_bytes(page))
+            crop = tiles[min(source[1], len(tiles) - 1)]
+            ref = await self.service.add_asset(
+                f"cast_{series_key(name)[:30] or 'person'}_source.jpg", io.BytesIO(crop), "image/jpeg", len(crop),
+                collection=f"manhwa/{series}/cast/source", tags=["manhwa", series, "cast"],
+                source={"type": "manhwa", "from_asset": page["id"], "cast_of": name})
+            appearance = " ".join(str(roster[name].get("appearance") or "as drawn").split())[:400]
+            try:
+                result = await self._convert_panel(ref["id"], CAST_PROMPT.format(name=name, appearance=appearance),
+                                                   loras, REAL_NEGATIVE, steps=conf["steps"], cfg=conf["cfg"])
+            except Exception as exc:  # a refusal or a busy GPU: the next character still gets theirs
+                state["errors"].append(f"{name}: {exc}"[:300])
+                continue
+            ids = [a["id"] for a in result.get("assets") or []]
+            if not ids:
+                state["errors"].append(f"{name}: no image came back")
+                continue
+            self.service.update_asset(ids[0], collection=f"manhwa/{series}/cast", add_tags=["manhwa", series, "cast", name])
+            self.set_portrait(series, name, ids[0])
+            state["done"].append({"name": name, "asset_id": ids[0]})
+
+    def set_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
+        """Use this image as the character's portrait (None removes it)."""
+        roster = self.store.characters(series)
+        if name not in roster:
+            raise NotFound(f"No character {name!r} in {series!r}.")
+        if asset_id and self.service.store.get_asset(asset_id) is None:
+            raise NotFound(f"No asset {asset_id!r}.")
+        data = roster[name]
+        if asset_id:
+            data["portrait_asset_id"] = asset_id
+        else:
+            data.pop("portrait_asset_id", None)
+        self.store.save_characters(series, {name: data})
+        return dict(data, name=name)
+
     def _record_person_check(self, panel_id: str, written: dict) -> None:
         """The panel-prompt call already looked at the panel, so its answer is the panel's person check and the
         separate check (another vision call, often a 429 on Atlas) never runs. A drawing with no real person in it
@@ -1690,10 +2166,11 @@ class ManhwaManager:
             save(asset)
 
     async def _convert_panel(self, panel_id: str, prompt: str, loras: list[dict], negative: str = REAL_NEGATIVE, *,
-                             steps: int | None = None, cfg: float | None = None) -> dict:
+                             steps: int | None = None, cfg: float | None = None, refs: list[str] | None = None) -> dict:
         for attempt in range(BUSY_RETRIES + 1):
             try:
-                return await self.service.generate_images(prompt, reference_asset_ids=[panel_id], engine="qwen21",
+                return await self.service.generate_images(prompt, reference_asset_ids=[panel_id, *(refs or [])],
+                                                          engine="qwen21",
                                                           loras=loras, negative=negative, steps=steps, cfg=cfg)
             except RequestError as exc:
                 if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
@@ -1718,8 +2195,15 @@ class ManhwaManager:
 
     def characters(self, series: str) -> list[dict]:
         roster = self.store.characters(series)
-        return sorted((dict(data, name=name) for name, data in roster.items()),
-                      key=lambda c: (-len(c.get("chapters") or []), c["name"].lower()))
+        out = []
+        for name, data in roster.items():
+            row = dict(data, name=name)
+            asset = self.service.store.get_asset(data.get("portrait_asset_id") or "") if data.get("portrait_asset_id") else None
+            if asset is not None:
+                shown = self.service.asset_view(asset)
+                row.update(portrait_thumb=shown.get("thumb_url"), portrait_url=shown.get("file_url"))
+            out.append(row)
+        return sorted(out, key=lambda c: (-len(c.get("chapters") or []), c["name"].lower()))
 
     def _with_thumb(self, page: dict) -> dict:
         asset = self.service.store.get_asset(page["asset_id"]) if page.get("asset_id") else None

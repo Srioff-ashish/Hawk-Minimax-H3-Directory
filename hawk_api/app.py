@@ -5,6 +5,7 @@ Run with ``uvicorn --factory hawk_api.app:create_app`` (deploy/start_pod.sh does
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -31,7 +32,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -119,12 +120,15 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         await service.start()
         await agent.start()
         await snapshots.start()
+        # An autopilot the last runtime was in the middle of carries on once ComfyUI answers.
+        resume = asyncio.create_task(manhwa.resume_pipelines())
         try:
             async with mcp.session_manager.run():
                 yield
         finally:
             # In a finally: a shutdown that skipped these would also skip the last snapshot, which is
             # the one copy that matters when a Colab runtime is going away.
+            resume.cancel()
             await imports.stop()
             await manhwa.stop()
             await exporter.stop()
@@ -375,6 +379,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """A scene context drafted from the chapter's catalogue (summary, cast, scenes). Not saved: PUT it to keep it."""
         return {"chapter_id": chapter_id, "context": await manhwa.draft_context(chapter_id)}
 
+    @app.get("/v1/manhwa/chapters/{chapter_id}/subtitles.srt", tags=["manhwa"])
+    async def manhwa_subtitles(chapter_id: str, download: int = 0):
+        """The chapter film's subtitles, from the catalogue's dialogue timed by the renders' scripts."""
+        disposition = "attachment" if download else "inline"
+        return Response(manhwa.subtitles(chapter_id), media_type="application/x-subrip; charset=utf-8",
+                        headers={"content-disposition": f'{disposition}; filename="chapter_{chapter_id}.srt"'})
+
     @app.put("/v1/manhwa/chapters/{chapter_id}/context", tags=["manhwa"])
     async def manhwa_context(chapter_id: str, body: ManhwaContextIn):
         """The chapter's scene context (characters, setting, action, one continuous scene), used by every panel
@@ -414,6 +425,21 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/manhwa/search", tags=["manhwa"])
     async def manhwa_search(q: str, series: str = "", limit: int = 30):
         return {"results": manhwa.search(q, series, limit)}
+
+    @app.post("/v1/manhwa/cast", tags=["manhwa"], status_code=202)
+    async def manhwa_cast(body: ManhwaCastIn):
+        """Make photoreal portraits of a series' main characters, used as references so faces stay the same.
+        Poll GET /v1/manhwa/cast-runs/{id}."""
+        return await manhwa.make_cast(body.series, names=body.names or None, force=body.force)
+
+    @app.get("/v1/manhwa/cast-runs/{run_id}", tags=["manhwa"])
+    async def manhwa_cast_run(run_id: str):
+        return manhwa.cast_run(run_id)
+
+    @app.put("/v1/manhwa/cast/portrait", tags=["manhwa"])
+    async def manhwa_cast_portrait(body: ManhwaPortraitIn):
+        """Choose (or with asset_id null, remove) a character's portrait."""
+        return manhwa.set_portrait(body.series, body.name, body.asset_id)
 
     @app.get("/v1/manhwa/characters", tags=["manhwa"])
     async def manhwa_characters(series: str):

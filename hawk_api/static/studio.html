@@ -137,6 +137,9 @@
   .mh-context { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; background: var(--surface); }
   .mh-context summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
   .mh-loras { display: grid; gap: 6px; }
+  .mh-portrait { width: 48px; height: 48px; object-fit: cover; border-radius: 50%; float: left; margin-right: 8px; background: var(--surface-3); }
+  .mh-char [data-clear-portrait] { float: right; padding: 0 6px; height: 22px; }
+  .mh-char::after { content: ""; display: block; clear: both; }
   .mh-lora { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px; align-items: center; gap: 8px; font-size: 13px; }
   .mh-lora > span:first-child { overflow-wrap: anywhere; }
   div.mh-lora { grid-template-columns: minmax(0, 1fr) auto; }
@@ -1078,6 +1081,10 @@
                 <span class="hint">Compares pose, camera angle, anatomy and photographic look with the panel; below the bar it rewrites the prompt and Qwen tries again. The best attempt is kept.</span>
               </div>
               <label class="check"><input type="checkbox" id="mhSetAutoContext">Autopilot drafts each chapter's scene context from its catalogue summary</label>
+              <div class="row"><label class="check"><input type="checkbox" id="mhSetCastRefs">Use cast portraits so faces stay the same</label>
+                <label class="check"><input type="checkbox" id="mhSetAutoCast">Autopilot makes missing portraits</label>
+                <label class="check">for the top <input class="input" id="mhSetCastSize" type="number" min="1" max="20" style="width:64px;height:30px"> characters</label></div>
+              <label class="check"><input type="checkbox" id="mhSetTriage">Skip text-only, blank and repeated panels</label>
               <label class="field"><span class="label">Added to every prompt</span><input class="input" id="mhSetPrompt" placeholder="e.g. soft evening light, 35mm film"></label>
               <label class="field"><span class="label">Added to every negative</span><input class="input" id="mhSetNegative" placeholder="e.g. tattoos, glasses"></label>
               <div class="row"><div class="spacer"></div><button class="btn btn-primary" type="submit">Save</button></div>
@@ -1092,7 +1099,7 @@
               </div>
               <div class="grid grid-3">
                 <label class="field"><span class="label">Aspect ratio</span><select class="select" id="mhSetAspect"></select></label>
-                <label class="field"><span class="label">Seconds per segment</span><input class="input" id="mhSetSeconds" type="number" min="1" max="15" step="0.5"></label>
+                <label class="field"><span class="label">Seconds <span class="hint">ungrouped</span></span><input class="input" id="mhSetSeconds" type="number" min="1" max="15" step="0.5"></label>
                 <label class="field"><span class="label">Megapixels</span><input class="input" id="mhVidMp" type="number" min="0.1" max="2.2" step="0.01"></label>
                 <label class="field"><span class="label">Steps</span><input class="input" id="mhVidSteps" type="number" min="1" max="100"></label>
                 <label class="field"><span class="label">Sampler</span><select class="select" id="mhVidSampler"></select></label>
@@ -1108,6 +1115,8 @@
               </div>
               <div class="row">
                 <label class="check"><input type="checkbox" id="mhSetPlanAfter">Plan the video after Make photographs</label>
+                <label class="check" title="Neighbouring panels of one moment share a shot, timed by its dialogue; off: one fixed-length segment per panel"><input type="checkbox" id="mhSetGroup">Group panels into shots</label>
+                <label class="check">Subtitles <select class="select" id="mhSetSubs" style="width:auto;height:30px"><option value="file">.srt beside the film</option><option value="burn">burned into the film</option><option value="off">off</option></select></label>
                 <label class="check"><input type="checkbox" id="mhVidAudio">Carry audio between segments</label>
                 <div class="spacer"></div>
                 <button class="btn btn-primary" type="submit">Save</button>
@@ -1128,7 +1137,7 @@
             <div class="card-body"><div class="mh-list" id="mhChapters"><span class="hint">Nothing catalogued yet.</span></div></div>
           </section>
           <section class="card" aria-label="Characters">
-            <div class="card-head"><h2>Characters</h2></div>
+            <div class="card-head"><h2>Characters</h2><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhMakeCast" title="One photoreal portrait per main character, used as a reference so faces stay the same">Make cast portraits</button></div>
             <div class="card-body" id="mhCharacters"><span class="hint">Pick a series.</span></div>
           </section>
         </aside>
@@ -1761,7 +1770,7 @@
       `<button type="button" data-chapter="${esc(c.id)}"><div class="row"><strong>Ch ${esc(c.chapter || "?")}</strong><span class="badge ${c.status === "done" ? "done" : c.status === "failed" ? "failed" : "rendering"}">${esc(c.status)}</span><div class="spacer"></div><span class="hint">${c.tiles || 0} tiles</span></div>${c.summary ? `<div class="hint" style="margin-top:4px">${esc(c.summary.slice(0, 180))}${c.summary.length > 180 ? "…" : ""}</div>` : ""}</button>`).join("")
       : `<span class="hint">Nothing catalogued yet.</span>`;
     $("mhCharacters").innerHTML = characters.length ? characters.map((c) =>
-      `<div class="mh-char"><strong>${esc(c.name)}</strong>${(c.aliases || []).length ? ` <span class="hint">aka ${esc(c.aliases.join(", "))}</span>` : ""}<div class="hint">${esc(c.appearance || "")}</div><div class="hint">ch ${esc((c.chapters || []).join(", "))}</div></div>`).join("")
+      `<div class="mh-char">${c.portrait_thumb ? `<a href="${esc(c.portrait_url || c.portrait_thumb)}" target="_blank" rel="noopener"><img class="mh-portrait" src="${esc(c.portrait_thumb)}" alt="" loading="lazy"></a><button class="btn btn-sm" type="button" data-clear-portrait="${esc(c.name)}" title="Stop using this portrait">×</button>` : ""}<strong>${esc(c.name)}</strong>${(c.aliases || []).length ? ` <span class="hint">aka ${esc(c.aliases.join(", "))}</span>` : ""}<div class="hint">${esc(c.appearance || "")}</div><div class="hint">ch ${esc((c.chapters || []).join(", "))}</div></div>`).join("")
       : `<span class="hint">No named characters yet.</span>`;
   }
 
@@ -1921,6 +1930,15 @@
         .catch((e) => toast("Could not draft", e.message, "bad"))
         .finally(() => { draft.disabled = false; });
     }
+    const srt = event.target.closest("[data-download-srt]");
+    if (srt) {
+      event.preventDefault();
+      const headers = !PREFIX && token ? { Authorization: `Bearer ${token}` } : {};
+      fetch(`${PREFIX}/v1/manhwa/chapters/${encodeURIComponent(srt.dataset.downloadSrt)}/subtitles.srt`, { headers })
+        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+        .then((blob) => { const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `chapter_${srt.dataset.downloadSrt}.srt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); })
+        .catch((e) => toast("Could not download", e.message, "bad"));
+    }
     const merge = event.target.closest("[data-merge-chapter]");
     if (merge) {
       merge.disabled = true;
@@ -1968,6 +1986,10 @@
     $("mhSetQaMin").value = set.qa_min_score ?? 7;
     $("mhSetQaKnobs").hidden = !set.qa;
     $("mhSetAutoContext").checked = set.auto_context !== false;
+    $("mhSetCastRefs").checked = set.cast_refs !== false;
+    $("mhSetAutoCast").checked = set.auto_cast !== false;
+    $("mhSetCastSize").value = set.cast_size ?? 8;
+    $("mhSetTriage").checked = set.triage !== false;
     $("mhSetNegative").value = set.negative || "";
     mhPaintLoras();
     mhPaintVideo();
@@ -2001,6 +2023,8 @@
     $("mhVidDefaults").checked = r.use_default_loras !== false;
     $("mhVidAudio").checked = r.carry_audio !== false;
     $("mhSetPlanAfter").checked = !!set.plan_after;
+    $("mhSetGroup").checked = set.group_shots !== false;
+    $("mhSetSubs").value = set.subtitles || "file";
     const chosen = new Map((r.loras || []).map((l) => [l.name, l.strength]));
     const files = (o.available_loras || []).slice();
     for (const name of chosen.keys()) if (!files.includes(name)) files.unshift(name);
@@ -2021,7 +2045,8 @@
         strength: Number($("mhVidLoras").querySelector(`[data-vstrength="${CSS.escape(box.dataset.vlora)}"]`).value || 1) })),
     };
     const body = { render, planner_model: $("mhVidPlanner").value, aspect_ratio: $("mhSetAspect").value,
-                   segment_seconds: Number($("mhSetSeconds").value || 10), plan_after: $("mhSetPlanAfter").checked };
+                   segment_seconds: Number($("mhSetSeconds").value || 10), plan_after: $("mhSetPlanAfter").checked,
+                   group_shots: $("mhSetGroup").checked, subtitles: $("mhSetSubs").value };
     try {
       mhPaintSettings(await api("/v1/manhwa/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
       toast("Saved", "Used by the next Plan video and Render chapter");
@@ -2058,6 +2083,8 @@
       steps: number("mhSetSteps"), cfg: number("mhSetCfg"), prompt: $("mhSetPrompt").value, negative: $("mhSetNegative").value,
       qa: $("mhSetQa").checked, qa_model: $("mhSetQaModel").value, qa_retries: Number($("mhSetQaRetries").value || 0),
       qa_min_score: Number($("mhSetQaMin").value || 7), auto_context: $("mhSetAutoContext").checked,
+      cast_refs: $("mhSetCastRefs").checked, auto_cast: $("mhSetAutoCast").checked,
+      cast_size: Number($("mhSetCastSize").value || 8), triage: $("mhSetTriage").checked,
     };
     if (model) body.prompt_model = model;
     body.loras = $("mhSetAuto").checked ? [] : [...$("mhSetLoras").querySelectorAll("[data-lora]:checked")].map((box) => ({
@@ -2104,7 +2131,7 @@
 
   function mhPlans(plans, renders, chapterId, film) {
     if (!plans || !plans.length) return `<div id="mhPlans"></div>`;
-    const filmLine = film ? `<div class="row" style="margin-top:4px"><strong>Chapter film:</strong> <a href="${esc(film.file_url)}" target="_blank" rel="noopener">${film.parts} part${film.parts === 1 ? "" : "s"} joined</a>${film.drive ? ` <span class="hint">· Drive: ${esc(film.drive)}</span>` : ""}</div>` : "";
+    const filmLine = film ? `<div class="row" style="margin-top:4px"><strong>Chapter film:</strong> <a href="${esc(film.file_url)}" target="_blank" rel="noopener">${film.parts} part${film.parts === 1 ? "" : "s"} joined</a>${film.subtitles === "file" ? ` · <a href="#manhwa" data-download-srt="${esc(chapterId || "")}">subtitles (.srt)</a>` : film.subtitles === "burned" ? ` <span class="hint">· subtitles burned in</span>` : ""}${film.drive ? ` <span class="hint">· Drive: ${esc(film.drive)}</span>` : ""}</div>` : "";
     const rendered = new Map((renders || []).map((r) => [r.plan_job_id, r.job_id]));
     const status = (id) => (state.jobs.get(id) || {}).status || "";
     const parts = plans.map((p) => {
@@ -2171,6 +2198,24 @@
     try { mhShowRun(await post(`/v1/manhwa/runs/${manhwa.run}/cancel`, {})); toast("Cancelled", "Tiles already described are kept."); mhPoll(); }
     catch (error) { toast("Could not cancel", error.message, "bad"); }
   };
+  $("mhMakeCast").onclick = async () => {
+    if (!manhwa.series) { toast("Pick a series", "", "bad"); return; }
+    $("mhMakeCast").disabled = true;
+    try {
+      let run = await post("/v1/manhwa/cast", { series: manhwa.series });
+      toast("Making cast portraits", "One per main character; this takes a minute or two each");
+      while (run.status === "running") { await new Promise((r) => setTimeout(r, 5000)); run = await api(`/v1/manhwa/cast-runs/${run.id}`); }
+      toast(`Cast: ${run.done.length} made`, [run.skipped.length ? `${run.skipped.length} skipped` : "", ...(run.errors || []).slice(0, 2)].filter(Boolean).join(" · "), run.errors.length ? "bad" : "");
+      mhShowSeries();
+    } catch (error) { toast("Could not make the cast", error.message, "bad"); }
+    finally { $("mhMakeCast").disabled = false; }
+  };
+  $("mhCharacters").addEventListener("click", async (event) => {
+    const clear = event.target.closest("[data-clear-portrait]");
+    if (!clear) return;
+    try { await api("/v1/manhwa/cast/portrait", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ series: manhwa.series, name: clear.dataset.clearPortrait, asset_id: null }) }); mhShowSeries(); }
+    catch (error) { toast("Could not remove", error.message, "bad"); }
+  });
   $("mhSeriesPick").onchange = (event) => { manhwa.series = event.target.value; mhShowSeries().catch((e) => toast("Could not load", e.message, "bad")); };
   $("mhChapters").onclick = (event) => { const button = event.target.closest("[data-chapter]"); if (button) mhOpenChapter(button.dataset.chapter); };
   $("mhSearchForm").onsubmit = async (event) => {

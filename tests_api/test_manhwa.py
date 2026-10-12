@@ -554,11 +554,14 @@ class Plans(unittest.IsolatedAsyncioTestCase):
                           "real": [{"panel_asset_id": f"p{n}{k}", "asset_ids": [photos[k]]} for k in range(2)]})
         self.manager.store.save_pages("ch1", "S", pages)
 
-    async def test_one_plan_per_nine_photographs_with_dialogue_spoken_once(self):
+    async def test_one_shot_per_tile_packed_nine_pictures_a_plan_with_dialogue_spoken_once(self):
         out = await self.manager.plan_chapter("ch1")
-        self.assertEqual([p["segments"] for p in out["plans"]], [9, 3])
+        # six tiles of two photographs each: six two-picture shots, packed four (8 pictures) and two
+        self.assertEqual([p["segments"] for p in out["plans"]], [4, 2])
         first, second = self.service.plans
-        self.assertEqual((first.segment_count, first.aspect_ratio, len(first.references)), (9, "9:16", 9))
+        self.assertEqual((first.segment_count, first.aspect_ratio, len(first.references)), (4, "9:16", 8))
+        self.assertIn("Shot 1 -- pictures [1, 2], 4 s:", first.story, "two words of dialogue: the 4 s minimum")
+        self.assertEqual(out["plans"][0]["shots"][0]["lines"][0], {"speaker": "Mina", "text": "line 0"})
         self.assertTrue(all(r.role == "picture" for r in first.references))
         self.assertEqual(first.references[0].asset_id, self.manager.shots("ch1")[0]["asset_id"])
         self.assertIn("part 1 of 2", first.story)
@@ -567,6 +570,26 @@ class Plans(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Mina meets a stranger.", first.story)
         self.assertIn('Mina: "line 5"', second.story)
         self.assertEqual(self.manager.store.get_chapter("ch1")["plans"][1]["job_id"], "job2")
+
+    async def test_grouping_off_is_one_fixed_segment_per_photograph(self):
+        self.manager.save_settings({"group_shots": False, "segment_seconds": 8})
+        out = await self.manager.plan_chapter("ch1")
+        self.assertEqual([p["segments"] for p in out["plans"]], [9, 3])
+        self.assertIn("Shot 1 -- pictures [1], 8 s:", self.service.plans[0].story)
+
+    def test_shot_timing_and_grouping_rules(self):
+        say = lambda words: [{"speaker": "Mina", "text": " ".join(["word"] * words)}]
+        self.assertEqual(manhwa.shot_seconds([], 12), 5.0)
+        self.assertEqual(manhwa.shot_seconds(say(5), 12), 4.0)
+        self.assertEqual(manhwa.shot_seconds(say(20), 12), 10.0)
+        self.assertEqual(manhwa.shot_seconds(say(80), 12), 12)
+        shot = lambda tile, words=0: {"tile_id": tile, "dialogue": [{"speaker": "A", "text_en": " ".join(["w"] * words)}] if words else []}
+        groups = manhwa.group_shots([shot("t1"), shot("t1"), shot("t1"), shot("t1"), shot("t2")], 12)
+        self.assertEqual([len(g["shots"]) for g in groups], [3, 1, 1], "at most three pictures, a new tile is a new shot")
+        groups = manhwa.group_shots([shot("t1", 20), shot("t1", 20)], 12)
+        self.assertEqual(len(groups), 2, "lines that would run past the cap split the shot")
+        parts = manhwa.pack_groups([{"shots": [1, 2, 3]}] * 4)
+        self.assertEqual([sum(len(g["shots"]) for g in p) for p in parts], [9, 3])
 
     async def test_no_photographs_and_bad_settings_are_request_errors(self):
         from hawk_api.jobs import RequestError
@@ -593,6 +616,7 @@ class PanelChat:
     def __init__(self):
         self.calls, self.refuse, self.skip_call = [], set(), 0
         self.drawn, self.identifiable = True, False
+        self.people, self.content = [], "people"
 
     async def chat(self, model, messages, *, purpose="", **_kw):
         self.calls.append((model, purpose))
@@ -601,7 +625,8 @@ class PanelChat:
         written = sum(1 for _, p in self.calls if p == "panel prompt" and _ not in self.refuse)
         if written == self.skip_call:
             return json.dumps({"skip": "one person looks like a teenager"}), {}
-        return json.dumps({"drawn": self.drawn, "identifiable": self.identifiable,
+        return json.dumps({"drawn": self.drawn, "identifiable": self.identifiable, "people": self.people,
+                           "content": self.content,
                            "prompt": f"Turn this manhwa panel into a realistic photograph. A woman in her 30s with "
                                      f"short black hair stands at a rooftop rail at dusk, written by {model}.",
                            "negative": "anime, text, extra fingers"}), {}
@@ -1125,3 +1150,183 @@ class QualityCheck(unittest.IsolatedAsyncioTestCase):
         draft = await self.manager.draft_context("ch1")
         self.assertEqual((draft["setting"], draft["one_scene"]), ("a rooftop at dusk", True))
         self.assertIsNone(self.manager.store.get_chapter("ch1").get("context"), "a draft is not saved")
+
+
+def page_with(panels: list) -> bytes:
+    """A strip of the given panel images (PIL), with white gutters."""
+    gutter, width = 80, 800
+    total = gutter + sum(p.height + gutter for p in panels)
+    page = Image.new("RGB", (width, total), (255, 255, 255))
+    y = gutter
+    for panel in panels:
+        page.paste(panel.resize((width, panel.height)), (0, y))
+        y += panel.height + gutter
+    buffer = io.BytesIO()
+    page.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class CastAndTriage(unittest.IsolatedAsyncioTestCase):
+    asyncTearDown = Convert.asyncTearDown
+
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)
+        self.chat = PanelChat()
+        self.service.atlas = self.chat
+        self.manager.store.save_characters("S", {"Mina": {"appearance": "short black hair, grey coat", "tiles": 4},
+                                                 "unknown-1": {"appearance": "hooded", "tiles": 9}})
+        for page in self.manager.store.pages("ch1"):
+            page["characters"] = [{"name": "Mina", "appearance": "short black hair"}]
+        self.manager.store.save_pages("ch1", "S", [dict(p, characters=[{"name": "Mina"}])
+                                                   for p in self.manager.store.pages("ch1")])
+        self.manager.save_settings({"qa": False})
+
+    async def test_a_portrait_per_named_character(self):
+        state = await self.manager.make_cast("S")
+        while state["status"] == "running":
+            await asyncio.sleep(0.02)
+        self.assertEqual([d["name"] for d in state["done"]], ["Mina"], state)
+        call = self.service.calls[0]
+        self.assertIn("portrait photograph of Mina", call["prompt"])
+        source = self.service.assets[call["refs"][0]]
+        self.assertEqual((source["source"]["type"], source["source"]["cast_of"]), ("manhwa", "Mina"))
+        portrait = self.service.assets[state["done"][0]["asset_id"]]
+        self.assertEqual(portrait["collection"], "manhwa/S/cast")
+        roster = {c["name"]: c for c in self.manager.characters("S")}
+        self.assertEqual(roster["Mina"]["portrait_asset_id"], portrait["id"])
+        self.assertIn("portrait_thumb", roster["Mina"])
+        again = await self.manager.make_cast("S")
+        while again["status"] == "running":
+            await asyncio.sleep(0.02)
+        self.assertEqual((again["done"], again["skipped"][0]["name"]), ([], "Mina"), "not remade unless forced")
+
+    async def test_the_portrait_rides_along_on_panels_with_that_character(self):
+        portrait = await self.service.add_asset("mina.png", io.BytesIO(b"p"), source={"type": "generated"})
+        self.manager.set_portrait("S", "Mina", portrait["id"])
+        self.chat.people = ["Mina", "Nobody"]
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
+        call = self.service.calls[0]
+        self.assertEqual(call["refs"][1:], [portrait["id"]])
+        self.assertIn("<image2> is a photograph of Mina", call["prompt"])
+        self.assertEqual(state["results"][0]["cast"], ["Mina"])
+
+    async def test_text_only_panels_and_repeats_are_skipped(self):
+        self.chat.content = "text_only"
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
+        self.assertEqual((state["converted"], state["skipped"], self.service.calls), (0, 2, []), state)
+        self.assertTrue(all(r["error"].startswith("Triage") for r in state["results"]))
+        self.chat.content = "people"
+        same = Image.effect_noise((800, 900), 80).convert("RGB")
+        page = await self.service.add_asset("p002.png", io.BytesIO(page_with([same, same])), source={"type": "manhwa"})
+        self.manager.store.save_pages("ch1", "S", [{"id": "ch1-0000", "idx": 0, "asset_id": page["id"], "part": 0,
+                                                     "status": "ok", "scene": "x"}])
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
+        self.assertEqual((state["converted"], state["skipped"]), (1, 1), state)
+        self.assertIn("same picture as the panel before", state["results"][1]["error"])
+
+    async def test_resuming_only_converts_what_is_missing(self):
+        first = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
+        self.assertEqual(first["converted"], 2)
+        again = await self.manager.wait_conversion(
+            (await self.manager.convert("ch1", plan_after=False, skip_done=True))["id"], 30)
+        self.assertEqual((again["panels_total"], len(self.service.calls)), (0, 2))
+
+
+class Resume(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        await Autopilot.asyncSetUp(self)
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    finish = Autopilot.finish
+
+    async def until(self, state, stage, seconds=30):
+        for _ in range(int(seconds / 0.05)):
+            if state["stage"] == stage:
+                return
+            await asyncio.sleep(0.05)
+        self.fail(f"never reached {stage}: {state}")
+
+    async def test_a_restart_carries_on_without_redoing_work(self):
+        self.service.finish_videos = False
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series",
+                                                  cookies="session=secret")
+        await self.until(state, "waiting for videos")
+        made, renders = len(self.service.calls), len(self.service.videos)
+        await self.manager.stop()  # the runtime goes away
+        saved = self.manager.store.pipelines()
+        self.assertEqual(saved[0][0]["status"], "interrupted")
+        self.assertNotIn("cookies", saved[0][1], "a site login is never written to the database")
+
+        for job in self.service.jobs.values():  # the queued videos finished while it was down
+            job["status"] = "done"
+        self.manager = ManhwaManager(self.service, transport=httpx.MockTransport(self.site.handler), delay=(0, 0))
+        self.manager.poll = 0.01
+        resumed = await self.manager.resume_pipelines(wait_for_gpu=0)
+        self.assertEqual(resumed, [state["id"]])
+        again = self.manager.pipeline(state["id"])
+        await self.finish(again)
+        self.assertEqual(again["status"], "done", again)
+        self.assertEqual((len(self.service.calls), len(self.service.videos)), (made, renders),
+                         "no panel converted twice, no part rendered twice")
+        self.assertEqual(again["chapters"][0]["stage"], "done")
+
+    async def test_a_stopped_autopilot_is_not_resumed(self):
+        self.service.finish_videos = False
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series")
+        await self.until(state, "waiting for videos")
+        await self.manager.cancel_pipeline(state["id"])
+        self.assertEqual(self.manager.store.pipelines()[0][0]["status"], "cancelled")
+        fresh = ManhwaManager(self.service, delay=(0, 0))
+        self.assertEqual(await fresh.resume_pipelines(wait_for_gpu=0), [])
+        self.assertEqual(fresh.recent_pipelines()[0]["id"], state["id"], "earlier runtimes' autopilots are listed")
+
+
+class Subtitles(unittest.IsolatedAsyncioTestCase):
+    asyncTearDown = Merge.asyncTearDown
+
+    async def asyncSetUp(self):
+        await Merge.asyncSetUp(self)
+        chapter = self.manager.store.get_chapter("ch1")
+        chapter["plans"] = [{"part": 1, "job_id": "p1", "shots": [
+            {"duration": 4, "lines": [{"speaker": "Mina", "text": "You are late again"}]},
+            {"duration": 5, "lines": []}]},
+            {"part": 2, "job_id": "p2", "shots": [
+                {"duration": 4, "lines": [{"speaker": "narration", "text": "Later that night"}]}]}]
+        self.manager.store.save_chapter(chapter)
+        script = lambda secs: json.dumps({"segments": [{"prompt": f"shot {n}", "duration": s} for n, s in enumerate(secs)]})
+        self.service.jobs["p1"]["script"] = script([0.5, 0.5])
+        self.service.jobs["p2"]["script"] = script([1])
+
+    def test_cues_follow_the_parts_and_narration_is_italic(self):
+        srt = manhwa.build_srt([{"duration": 2.0, "segments": [{"seconds": 1, "lines": [{"speaker": "Mina", "text": "Hi"}]},
+                                                               {"seconds": 1, "lines": []}]},
+                                {"duration": 3.0, "segments": [{"seconds": 1, "lines": [{"speaker": "narration", "text": "Later"}]}]}])
+        self.assertEqual(srt.count(" --> "), 2)
+        self.assertIn("00:00:00,200 --> 00:00:00,800\nHi", srt, "two 1 s segments stretched to the part's 2 s: 1 s each")
+        self.assertIn("00:00:02,200 --> 00:00:04,800\n<i>Later</i>", srt, "a 1 s segment stretched to 3 s")
+        self.assertIn("00:00:02,200 --> ", srt, "part two starts after part one's real length")
+        self.assertIn("<i>Later</i>", srt)
+
+    async def test_the_film_gets_an_srt(self):
+        await self.manager.render_chapter("ch1")
+        film = (await self.manager.merge_chapter("ch1"))["film"]
+        self.assertEqual(film["subtitles"], "file")
+        srt = self.manager.subtitles("ch1")
+        self.assertIn("You are late again", srt)
+        self.assertIn("<i>Later that night</i>", srt)
+        last_start = srt.strip().split("\n\n")[-1].split("\n")[1].split(" --> ")[0]
+        self.assertTrue(last_start.startswith("00:00:01"), "the second part's line comes after the first 1 s clip")
+
+    async def test_subtitles_off_and_burned(self):
+        self.manager.save_settings({"subtitles": "off"})
+        await self.manager.render_chapter("ch1")
+        self.assertEqual((await self.manager.merge_chapter("ch1"))["film"]["subtitles"], "")
+        self.manager.save_settings({"subtitles": "burn"})
+        film = (await self.manager.merge_chapter("ch1", force=True))["film"]
+        import subprocess
+        has_libass = " subtitles " in subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True,
+                                                     text=True).stdout
+        self.assertEqual(film["subtitles"], "burned" if has_libass else "file",
+                         "burned when this ffmpeg can, else the .srt beside the film")

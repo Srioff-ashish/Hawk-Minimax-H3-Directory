@@ -536,6 +536,29 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
             except NotFound as exc:
                 raise ToolError(str(exc)) from None
 
+        @mcp.tool(description=(
+            "Make the cast sheet of a catalogued manhwa series: one photoreal head-and-shoulders portrait per main "
+            "character (cast_size from the settings, or names), made from the panel that shows them most plainly. "
+            "Every later conversion gives Qwen the portraits of the people in a panel as extra references, so faces "
+            "stay the same across panels and chapters. Characters with a portrait are skipped unless force. "
+            "Runs in the background; poll get_manhwa_cast_run."))
+        async def make_manhwa_cast(series: str, names: list[str] | None = None, force: bool = False) -> dict:
+            return await run(manhwa.make_cast(series, names=names, force=force))
+
+        @mcp.tool(description="Progress of a cast run: done (name, asset_id), skipped, errors.")
+        async def get_manhwa_cast_run(run_id: str) -> dict:
+            try:
+                return manhwa.cast_run(run_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description="Use an image as a manhwa character's cast portrait (asset_id), or remove it (asset_id empty). Only when the user asks.")
+        async def set_manhwa_cast_portrait(series: str, name: str, asset_id: str = "") -> dict:
+            try:
+                return manhwa.set_portrait(series, name, asset_id or None)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
         @mcp.tool(description="The character roster of a catalogued series: name, aliases, appearance, chapters they appear in.")
         async def manhwa_characters(series: str) -> dict:
             return {"characters": manhwa.characters(series)}

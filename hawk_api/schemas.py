@@ -351,6 +351,14 @@ class ManhwaSettingsIn(BaseModel):
     qa_retries: int | None = Field(None, ge=0, le=5, description="Extra tries per panel after a low score.")
     qa_min_score: float | None = Field(None, ge=0, le=10, description="Score (0-10) a photograph needs to be kept without a retry.")
     auto_context: bool | None = Field(None, description="The autopilot drafts a chapter's scene context from its catalogue when none was given.")
+    cast_refs: bool | None = Field(None, description="Give Qwen each character's cast portrait as an extra reference on the panels they are in.")
+    auto_cast: bool | None = Field(None, description="The autopilot makes missing cast portraits before converting.")
+    cast_size: int | None = Field(None, ge=1, le=20, description="How many main characters get a portrait.")
+    triage: bool | None = Field(None, description="Skip text-only and blank panels, and near-duplicates of the panel before.")
+    subtitles: Literal["file", "burn", "off"] | None = Field(None, description="Chapter films: an .srt beside the film "
+                                                         "(file), drawn into the picture (burn), or none (off).")
+    group_shots: bool | None = Field(None, description="Video plans join neighbouring panels of one moment into a shot "
+                                     "and time each shot by its dialogue; false is one segment of segment_seconds per panel.")
     render: dict | None = Field(None, description="Render chapter's video settings, as RenderSettings fields: unet_name, "
                                 "steps, megapixels, sampler_name, scheduler, continuity, attention, interpolation, "
                                 "carry_audio, loras [{name, strength}], lora_preset, use_default_loras. {} = server defaults.")
@@ -406,6 +414,18 @@ class ManhwaPipelineIn(BaseModel):
     max_chapters: int = Field(1, ge=1, le=50, description="With follow_next: how many chapters in all.")
     context: ManhwaContextIn | None = Field(None, description="Scene context for every chapter that has none yet.")
     render: bool = Field(True, description="Render the videos; false stops after the plans are written.")
+
+
+class ManhwaCastIn(BaseModel):
+    series: str
+    names: list[str] = Field(default_factory=list, description="Only these characters. Empty: the main cast (cast_size).")
+    force: bool = Field(False, description="Make a new portrait even for characters that have one.")
+
+
+class ManhwaPortraitIn(BaseModel):
+    series: str
+    name: str
+    asset_id: str | None = Field(None, description="The image to use as this character's portrait; null removes it.")
 
 
 class ManhwaMergeIn(BaseModel):
