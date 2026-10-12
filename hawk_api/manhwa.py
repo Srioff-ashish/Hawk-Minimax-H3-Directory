@@ -25,7 +25,7 @@ import threading
 import time
 import uuid
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import httpx
 
@@ -56,6 +56,11 @@ NOT_PANEL = re.compile(r"logo|avatar|icon|banner|sprite|emoji|badge|button|loadi
 NEXT_TEXT = re.compile(r"\bnext\b|다음|次|下一|›|»|→", re.I)
 #: "Next page" inside a paged reader moves within the chapter, which is not what a run follows.
 NOT_NEXT = re.compile(r"\bpage\b|\bprev|\bprevious\b|이전", re.I)
+#: An <img> whose class or id says it is page furniture: the other episodes' thumbnails, avatars, logos.
+NOT_PANEL_CLASS = re.compile(r"thumb|avatar|logo|icon|banner|profile|cover", re.I)
+#: Query parameters that hold the chapter number (Webtoon: ?title_no=95&episode_no=1), checked before the slug,
+#: whose "ep-0" is the title's own numbering and not the episode's.
+CHAPTER_PARAMS = ("episode_no", "episode", "ep", "chapter_no", "chapter", "ch", "no")
 CHAPTER_NUMBER = re.compile(r"(?<![a-z])(?:chapter|chap|ch|episode|ep)[-_/ .=]?(\d+(?:\.\d+)?)", re.I)
 
 CATALOG_PROMPT = """\
@@ -117,6 +122,11 @@ class _ChapterParser(HTMLParser):
         if tag == "title":
             self._in_title = True
         elif tag == "img":
+            if NOT_PANEL_CLASS.search(f"{attrs.get('class', '')} {attrs.get('id', '')}"):
+                return
+            declared = re.match(r"\d+", attrs.get("width", ""))
+            if declared and int(declared.group()) < MIN_IMAGE_WIDTH:
+                return
             src = (attrs.get("data-src") or attrs.get("data-lazy-src") or attrs.get("data-original")
                    or attrs.get("data-url") or _largest_srcset(attrs.get("srcset") or attrs.get("data-srcset", ""))
                    or attrs.get("src", ""))
@@ -179,8 +189,20 @@ def parse_chapter(html: str, base_url: str) -> dict:
     return {"images": list(seen)[:MAX_IMAGES], "next_url": next_url, "title": " ".join(parser.title.split())}
 
 
+def _chapter_param(url: str) -> tuple[str, str] | None:
+    """(name, value) of the query parameter that numbers the chapter, if the URL has one."""
+    params = dict(parse_qsl(urlparse(url).query))
+    for name in CHAPTER_PARAMS:
+        if re.fullmatch(r"\d+(?:\.\d+)?", params.get(name, "")):
+            return name, params[name]
+    return None
+
+
 def chapter_number(url: str, title: str = "") -> str:
     """The chapter number as written in the URL or title ("12", "12.5"), or ""."""
+    param = _chapter_param(url)
+    if param:
+        return param[1]
     for text in (urlparse(url).path + "?" + urlparse(url).query, title):
         match = CHAPTER_NUMBER.search(text or "")
         if match:
@@ -192,6 +214,10 @@ def chapter_number(url: str, title: str = "") -> str:
 def increment_url(url: str) -> str | None:
     """The URL with its chapter number plus one: the guess used when a page has no "next" link."""
     parsed = urlparse(url)
+    param = _chapter_param(url)
+    if param:
+        pairs = [(k, str(int(float(v)) + 1) if k == param[0] else v) for k, v in parse_qsl(parsed.query)]
+        return parsed._replace(query=urlencode(pairs)).geturl()
     target = parsed.path + ("?" + parsed.query if parsed.query else "")
     match = CHAPTER_NUMBER.search(target)
     if match:

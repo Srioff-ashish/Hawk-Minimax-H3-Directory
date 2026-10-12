@@ -58,6 +58,19 @@ class Parsing(unittest.TestCase):
             "https://cdn.example.com/3.webp",
         ])
 
+    def test_thumbnails_and_small_declared_images_dropped(self):
+        html = ('<div id="_imageList"><img class="_images" width="700" src="bg.png" data-url="https://cdn.example/p1.jpg">'
+                '<img class="_images" width="700" src="bg.png" data-url="https://cdn.example/p2.jpg"></div>'
+                '<img class="_thumbnailImages" width="92" data-url="https://cdn.example/ep2-thumb.jpg">'
+                '<img class="author" width="40" src="https://cdn.example/a.jpg">')
+        self.assertEqual(parse_chapter(html, "https://s.example/v?episode_no=1")["images"],
+                         ["https://cdn.example/p1.jpg", "https://cdn.example/p2.jpg"])
+
+    def test_chapter_number_from_query_parameter_first(self):
+        url = "https://www.webtoons.com/en/fantasy/x/season-1-ep-0/viewer?title_no=95&episode_no=1"
+        self.assertEqual(chapter_number(url, "[Season 1] Ep. 0 | X"), "1")
+        self.assertEqual(increment_url(url), url.replace("episode_no=1", "episode_no=2"))
+
     def test_next_link_prefers_rel_next_and_ignores_prev_and_paging(self):
         html = ('<a href="/c/3">« Previous</a><a href="?page=2">Next page</a><a class="next-btn" href="/c/5">›</a>'
                 '<link rel="next" href="/c/5-real"><img src="/p.jpg">')
