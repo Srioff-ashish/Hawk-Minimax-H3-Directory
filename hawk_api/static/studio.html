@@ -1682,7 +1682,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans)}</div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><select class="select" id="mhPromptModel" title="Who writes each panel's photograph prompt" style="width:auto;height:30px">${MH_PROMPT_MODELS.map(([v, l]) => `<option value="${v}"${v === manhwa.promptModel ? " selected" : ""}>${l}</option>`).join("")}</select><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1750,6 +1750,11 @@
     finally { $("mhStart").disabled = false; }
   };
   $("mhDeleteSeries").onclick = () => { if (manhwa.series) mhDelete(manhwa.series, ""); };
+  $("mhResults").addEventListener("change", (event) => {
+    if (event.target.id !== "mhPromptModel") return;
+    manhwa.promptModel = event.target.value;
+    storage.set("hawkH3ManhwaPromptModel", manhwa.promptModel);
+  });
   $("mhResults").addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-chapter]");
     if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
@@ -1762,6 +1767,11 @@
     const stop = event.target.closest("[data-cancel-conversion]");
     if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
+
+  // Who looks at each panel and writes its prompt; "" is the fixed template, with no model call.
+  const MH_PROMPT_MODELS = [["xai/grok-4.3", "Prompt: Grok 4.3"], ["deepseek-ai/deepseek-v4.1-flash", "Prompt: DeepSeek V4.1 Flash (cheaper)"],
+                            ["", "Prompt: template (no analysis)"]];
+  manhwa.promptModel = storage.get("hawkH3ManhwaPromptModel") ?? "xai/grok-4.3";
 
   function mhPlans(plans) {
     if (!plans || !plans.length) return `<div id="mhPlans"></div>`;
@@ -1779,7 +1789,8 @@
 
   async function mhConvert(chapterId) {
     try {
-      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, {});
+      const model = $("mhPromptModel") ? $("mhPromptModel").value : manhwa.promptModel;
+      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, { analyze: !!model, prompt_model: model });
       toast("Converting panels", `With ${state.loras.map((l) => l.name.split("/").pop().replace(/\.safetensors$/, "")).join(", ")}`);
       mhConvShow(state);
     } catch (error) { toast("Could not start", error.message, "bad"); }
@@ -1793,6 +1804,7 @@
     const left = state.status === "running" ? ` <button class="btn btn-sm" type="button" data-cancel-conversion="${esc(state.id)}">Cancel</button>` : "";
     const counts = [`${state.panels_done}/${state.panels_total || "?"} panels`, `${state.converted} made`];
     if (state.refused) counts.push(`${state.refused} refused`);
+    if (state.skipped) counts.push(`${state.skipped} skipped`);
     if (state.failed) counts.push(`${state.failed} failed`);
     if (state.plans && state.plans.length && $("mhPlans")) $("mhPlans").outerHTML = mhPlans(state.plans);
     const last = (state.results || []).filter((r) => r.error).slice(-2).map((r) => `${r.page}: ${r.error}`);

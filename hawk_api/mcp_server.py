@@ -388,6 +388,9 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
 
         @mcp.tool(description=(
             "Turn a catalogued manhwa chapter's panels into realistic photographs with Qwen Image 2.1 on this GPU. "
+            "With analyze (default) Grok 4.3 first looks at each panel and writes its prompt (people, poses, "
+            "clothing, light, camera); a panel where someone reads as a minor is skipped. prompt_model picks another "
+            "model for that, e.g. deepseek-ai/deepseek-v4.1-flash (reads images, cheaper). "
             "Each page is cut into its panels at the gutters; each panel is edited with the newest anime-to-real LoRA "
             "in models/loras/qwen21, the lenovo realism LoRA (realism, 0 = off) and the age slider (age_slider, "
             "0 = off), using the tile's catalogued scene and character looks in the prompt. loras=[{name, strength}] "
@@ -398,11 +401,13 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
         async def convert_manhwa_to_real(chapter_id: str, tile_ids: list[str] | None = None,
                                          loras: list[dict] | None = None, prompt: str = "", realism: float = 0.5,
                                          age_slider: float = 1.0, max_panels: int = 300, plan_after: bool = True,
+                                         analyze: bool = True, prompt_model: str = "",
                                          wait_seconds: int = 20) -> dict:
             state = await run(manhwa.convert(chapter_id, tile_ids=tile_ids, loras=loras, prompt=prompt,
                                              realism=max(0.0, min(realism, 1.0)),
                                              age_slider=max(0.0, min(age_slider, 3.0)), max_panels=max_panels,
-                                             plan_after=plan_after))
+                                             plan_after=plan_after, analyze=analyze,
+                                             prompt_model=prompt_model))
             return await manhwa.wait_conversion(state["id"], max(0, min(wait_seconds, 120)))
 
         @mcp.tool(description=(

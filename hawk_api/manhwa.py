@@ -109,6 +109,36 @@ REAL_PROMPT = ("Turn this manhwa panel into a realistic photograph of real adult
 REAL_NEGATIVE = ("anime, cartoon, illustration, drawing, comic, manga, cel shading, line art, speech bubble, text, "
                  "letters, watermark, childlike, young-looking")
 
+#: The model that looks at each panel and writes its photograph prompt; the vision chain follows it.
+#: deepseek-ai/deepseek-v4.1-flash also reads images, at about a quarter of the price.
+PANEL_PROMPT_MODEL = "xai/grok-4.3"
+PANEL_PROMPT_MAX_TOKENS = 3000  # a reasoning model spends part of this before the JSON
+
+PANEL_PROMPT = """\
+You write the instruction for an image-editing model (Qwen Image 2.1 Edit with an anime-to-real LoRA). It
+receives the attached manhwa panel as its canvas and must turn it into a realistic photograph of the same
+moment. Look at the panel closely and describe exactly what is there, so nothing is lost or invented.
+
+Write "prompt" (80-180 words, plain English, no lists) that:
+- starts with "Turn this manhwa panel into a realistic photograph."
+- for each person, left to right: an adult age (20s, 30s...), gender, hair, face and expression, clothing (or
+  what they wear or don't), pose, what they are doing, and any contact with another person. Use their roster
+  names and looks below when they match.
+- the setting, time of day, lighting, camera angle and framing (close-up, medium, wide), depth of field.
+- says to keep the composition, poses and framing exactly, and to remove every speech bubble, caption,
+  sound-effect lettering and drawn effect (hearts, speed lines, sparkles, sweat drops).
+Write "negative": 10-25 comma-separated things to keep out (drawn styles, text, artefacts, anatomy errors).
+
+Every character in this series is an adult; describe them as adults. If anyone in the panel looks like a child
+or a teenager, do not write a prompt: reply {{"skip": "why"}} instead.
+
+Roster (name: appearance):
+{roster}
+What the catalogue says about this panel: {scene}
+
+Reply with only JSON: {{"prompt": "", "negative": ""}}
+"""
+
 WRAPUP_PROMPT = """\
 Below is a scene-by-scene catalogue of one manhwa chapter. Write the chapter summary and settle the cast.
 
@@ -722,7 +752,8 @@ class ManhwaManager:
 
     async def convert(self, chapter_id: str, *, tile_ids: list[str] | None = None, loras: list[dict] | None = None,
                       prompt: str = "", realism: float = 0.5, age_slider: float = 1.0,
-                      max_panels: int = MAX_CONVERT_PANELS, plan_after: bool = True) -> dict:
+                      max_panels: int = MAX_CONVERT_PANELS, plan_after: bool = True,
+                      analyze: bool = True, prompt_model: str = "") -> dict:
         """Turn a catalogued chapter's panels into photographs with Qwen Image 2.1 on this GPU. Runs in the
         background, one panel at a time; poll conversion(). tile_ids limits it to the panels in those tiles."""
         chapter = self.store.get_chapter(chapter_id)
@@ -740,7 +771,8 @@ class ManhwaManager:
             "panels_total": 0, "panels_done": 0, "converted": 0, "refused": 0, "failed": 0, "results": [],
             "errors": [], "cancel_requested": False, "created_at": time.time(), "finished_at": None,
             "collection": f"manhwa/{chapter['series']}/{chapter['chapter'] or 'chapter'}/real",
-            "plan_after": bool(plan_after), "plans": [],
+            "plan_after": bool(plan_after), "plans": [], "analyze": bool(analyze), "skipped": 0,
+            "prompt_model": (prompt_model or "").strip() or PANEL_PROMPT_MODEL,
         }
         self.conversions[state["id"]] = state
         self._convert_tasks[state["id"]] = asyncio.create_task(
@@ -776,6 +808,8 @@ class ManhwaManager:
         pages = self.store.pages(chapter_id)
         tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
         wanted = set(state["tile_ids"])
+        roster = self.store.characters(series) if state["analyze"] else {}
+        models = await self._panel_prompt_models(state["prompt_model"]) if state["analyze"] else []
         try:
             work: list[tuple[dict, int, bytes, dict | None]] = []
             for asset_id in dict.fromkeys(p.get("asset_id") for p in pages if p.get("asset_id")):
@@ -805,8 +839,24 @@ class ManhwaManager:
                     source={"type": "manhwa", "from_asset": asset["id"], "panel": number,
                             "tile_id": (tile or {}).get("id", "")})
                 row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename")}
+                prompt, negative = real_prompt(tile, extra), REAL_NEGATIVE
+                if models:
+                    written = await self._panel_prompt(jpeg, tile, roster, models)
+                    if written.get("skip"):
+                        row.update(status="skipped", error=f"Not converted: {written['skip']}"[:400])
+                        state["skipped"] += 1
+                        state["results"].append(row)
+                        state["panels_done"] += 1
+                        continue
+                    if written.get("prompt"):
+                        prompt = (written["prompt"] + (" " + extra.strip() if extra.strip() else ""))[:2000]
+                        negative = written.get("negative") or REAL_NEGATIVE
+                        row["prompt_by"] = written["model"]
+                    elif written.get("error"):
+                        row["prompt_note"] = f"Template prompt used: {written['error']}"[:300]
+                row["prompt"] = prompt
                 try:
-                    result = await self._convert_panel(panel["id"], real_prompt(tile, extra), state["loras"])
+                    result = await self._convert_panel(panel["id"], prompt, state["loras"], negative)
                 except Exception as exc:  # one panel failing (a refusal, ComfyUI down) does not end the run
                     refused = isinstance(exc, RequestError) and str(exc).startswith("Refused")
                     row.update(status="refused" if refused else "failed", error=str(exc)[:400])
@@ -895,11 +945,43 @@ class ManhwaManager:
                                     label=(shot["scene"] or f"panel photo {k}")[:200])
                         for k, shot in enumerate(part, 1)])
 
-    async def _convert_panel(self, panel_id: str, prompt: str, loras: list[dict]) -> dict:
+    async def _panel_prompt_models(self, first: str = PANEL_PROMPT_MODEL) -> list[str]:
+        llm = self.service.llm()
+        configured = llm.agent_vision_model_override or self.service.settings.agent_vision_model
+        return models_llm.resolve_many("vision", f"{first}, {configured or ''}",
+                                       await self.service.model_catalogue())
+
+    async def _panel_prompt(self, jpeg: bytes, tile: dict | None, roster: dict, models: list[str]) -> dict:
+        """Grok (then the vision chain) looks at the panel and writes its photograph prompt.
+        Returns {prompt, negative, model}, {skip} when someone in it reads as a minor, or {error}."""
+        scene = (tile or {}).get("scene") or "(not catalogued)"
+        text = PANEL_PROMPT.format(roster=_roster_text(roster), scene=scene)
+        content = [{"type": "text", "text": text},
+                   {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode("ascii")}}]
+        failures = []
+        for model in models:
+            try:
+                reply, _usage = await self.service.atlas.chat(model, [{"role": "user", "content": content}],
+                                                              json_mode=True, max_tokens=PANEL_PROMPT_MAX_TOKENS,
+                                                              temperature=0.3, max_retries=1, purpose="panel prompt")
+            except AtlasError as exc:
+                failures.append(f"{model}: {exc}"[:200])
+                continue
+            answer = parse_json(reply) or {}
+            if isinstance(answer.get("skip"), str) and answer["skip"].strip():
+                return {"skip": answer["skip"].strip()[:300], "model": model}
+            prompt = " ".join(str(answer.get("prompt") or "").split())
+            if len(prompt) >= 40:
+                negative = " ".join(str(answer.get("negative") or "").split())[:600]
+                return {"prompt": prompt[:1800], "negative": negative, "model": model}
+            failures.append(f"{model}: no usable prompt")
+        return {"error": "; ".join(failures) or "No vision model is configured."}
+
+    async def _convert_panel(self, panel_id: str, prompt: str, loras: list[dict], negative: str = REAL_NEGATIVE) -> dict:
         for attempt in range(BUSY_RETRIES + 1):
             try:
                 return await self.service.generate_images(prompt, reference_asset_ids=[panel_id], engine="qwen21",
-                                                          loras=loras, negative=REAL_NEGATIVE)
+                                                          loras=loras, negative=negative)
             except RequestError as exc:
                 if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
                     raise

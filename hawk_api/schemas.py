@@ -331,6 +331,10 @@ class ManhwaConvertIn(BaseModel):
     age_slider: float = Field(1.0, ge=0, le=3, description="Age slider strength, so drawn faces read as adults; 0 leaves it out.")
     max_panels: int = Field(300, ge=1, le=300)
     plan_after: bool = Field(True, description="When the photographs are made, start the video plans for the chapter.")
+    analyze: bool = Field(True, description="Grok 4.3 (then the vision chain) looks at each panel and writes its own "
+                          "photograph prompt; false uses the fixed template with the catalogue's description.")
+    prompt_model: str = Field("", description="The model that analyses each panel, e.g. deepseek-ai/deepseek-v4.1-flash "
+                              "(reads images, about a quarter of Grok's price). Blank: xai/grok-4.3.")
 
 
 class ManhwaPlanIn(BaseModel):

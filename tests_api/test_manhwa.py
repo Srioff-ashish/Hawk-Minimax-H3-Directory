@@ -565,3 +565,64 @@ class Plans(unittest.IsolatedAsyncioTestCase):
         state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
         self.assertEqual([p["segments"] for p in state["plans"]], [2], state)
         self.assertEqual(len(self.service.plans), 1)
+
+
+class PanelChat:
+    """Writes a panel prompt; models in ``refuse`` fail, and the panel numbered ``skip_call`` reads as a minor."""
+
+    def __init__(self):
+        self.calls, self.refuse, self.skip_call = [], set(), 0
+
+    async def chat(self, model, messages, *, purpose="", **_kw):
+        self.calls.append((model, purpose))
+        if model in self.refuse:
+            raise AtlasError("Atlas error 429: too many requests")
+        written = sum(1 for _, p in self.calls if p == "panel prompt" and _ not in self.refuse)
+        if written == self.skip_call:
+            return json.dumps({"skip": "one person looks like a teenager"}), {}
+        return json.dumps({"prompt": f"Turn this manhwa panel into a realistic photograph. A woman in her 30s with "
+                                     f"short black hair stands at a rooftop rail at dusk, written by {model}.",
+                           "negative": "anime, text, extra fingers"}), {}
+
+
+class AnalyzedConvert(unittest.IsolatedAsyncioTestCase):
+    asyncTearDown = Convert.asyncTearDown
+
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)  # the same chapter, without re-running Convert's tests
+        self.chat = PanelChat()
+        self.service.atlas = self.chat
+
+    async def test_grok_writes_each_panel_prompt(self):
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual(state["converted"], 2, state)
+        self.assertEqual([m for m, p in self.chat.calls if p == "panel prompt"], ["xai/grok-4.3"] * 2)
+        first = self.service.calls[0]
+        self.assertIn("written by xai/grok-4.3", first["prompt"])
+        self.assertEqual(first["negative"], "anime, text, extra fingers")
+        self.assertEqual(state["results"][0]["prompt_by"], "xai/grok-4.3")
+
+    async def test_the_vision_chain_takes_over_and_a_minor_is_skipped(self):
+        self.chat.refuse = {"xai/grok-4.3"}
+        self.chat.skip_call = 2
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual((state["converted"], state["skipped"]), (1, 1), state)
+        self.assertEqual(state["results"][0]["prompt_by"], "vis-a")
+        self.assertEqual(len(self.service.calls), 1, "the skipped panel never reaches the image engine")
+        self.assertIn("teenager", state["results"][1]["error"])
+
+    async def test_no_answer_falls_back_to_the_template(self):
+        self.chat.refuse = {"xai/grok-4.3", "vis-a", "vis-b"}
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual(state["converted"], 2)
+        self.assertTrue(self.service.calls[0]["prompt"].startswith(manhwa.REAL_PROMPT))
+        self.assertIn("Template prompt used", state["results"][0]["prompt_note"])
+
+    async def test_another_model_can_analyse(self):
+        await self.manager.wait_conversion(
+            (await self.manager.convert("ch1", prompt_model="deepseek-ai/deepseek-v4.1-flash"))["id"], 30)
+        self.assertEqual({m for m, p in self.chat.calls if p == "panel prompt"}, {"deepseek-ai/deepseek-v4.1-flash"})
+
+    async def test_analyze_off_never_calls_a_model(self):
+        await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False))["id"], 30)
+        self.assertEqual(self.chat.calls, [])

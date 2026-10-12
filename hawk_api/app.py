@@ -330,7 +330,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         from models/loras). Poll GET /v1/manhwa/conversions/{id}."""
         return await manhwa.convert(chapter_id, tile_ids=body.tile_ids, loras=body.loras, prompt=body.prompt,
                                     realism=body.realism, age_slider=body.age_slider, max_panels=body.max_panels,
-                                    plan_after=body.plan_after)
+                                    plan_after=body.plan_after, analyze=body.analyze,
+                                    prompt_model=body.prompt_model)
 
     @app.post("/v1/manhwa/chapters/{chapter_id}/plan", tags=["manhwa"], status_code=202)
     async def manhwa_plan(chapter_id: str, body: ManhwaPlanIn):
