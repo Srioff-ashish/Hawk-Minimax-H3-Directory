@@ -300,8 +300,8 @@ def from_upload(asset: dict, lookup=None, depth: int = 0) -> bool:
     identifiable people, and such a picture is a reference for what it shows, not a photo of someone."""
     source = asset.get("source") or {}
     if source.get("type") != "generated":
-        return not (source.get("type") == "upload"
-                    and (source.get("person_check") or {}).get("identifiable") is False)
+        # anything brought in from outside -- an upload, a URL import, a catalogued manhwa page
+        return (source.get("person_check") or {}).get("identifiable") is not False
     if lookup is None or depth > 20:
         return depth > 20
     for ref_id in source.get("references") or []:

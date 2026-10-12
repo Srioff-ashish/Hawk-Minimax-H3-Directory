@@ -120,6 +120,16 @@ class Service(unittest.IsolatedAsyncioTestCase):
         await self.service.person_check(skirt["id"])
         self.assertEqual(len(chat.calls), 1, "checked once, then read back")
 
+    async def test_manhwa_pages_and_url_imports_are_checked_like_uploads(self):
+        self.provider(FakeChat('{"identifiable": false, "reason": "a drawn comic panel"}'))
+        for color, kind in (((7, 8, 9), "manhwa"), ((9, 8, 7), "url")):
+            page = await self.add(color, {"type": kind})
+            self.assertTrue(self.flagged(page["id"]), f"an unchecked {kind} image counts as a possible photo")
+            made = await self.add((color[0], 0, 1), {"type": "generated", "references": [page["id"]]})
+            await self.service._check_upload_roots([self.service.store.get_asset(made["id"])])
+            self.assertFalse(self.flagged(page["id"]), kind)
+            self.assertFalse(self.flagged(made["id"]), f"made from a cleared {kind} image")
+
     async def test_a_visible_face_stays_flagged(self):
         self.provider(FakeChat('{"identifiable": true, "reason": "a woman\'s face is visible"}'))
         photo = await self.add((4, 5, 6), {"type": "upload"})

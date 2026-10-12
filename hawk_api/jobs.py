@@ -961,7 +961,7 @@ class HawkService:
         return {"id": asset["id"],
                 "from_upload": local_images.from_upload(asset, self.store.lineage),
                 # what the refusal is actually pointing at, which the message never used to name
-                "upload_roots": [row["id"] for row in chain if row["type"] in ("upload", "missing")
+                "upload_roots": [row["id"] for row in chain if row["type"] != "generated"
                                  and row.get("identifiable") is not False],
                 "corrected_from": ((asset.get("source") or {}).get("corrected_from") or None),
                 "chain": chain}
@@ -1765,8 +1765,8 @@ class HawkService:
         if asset is None:
             raise NotFound(f"No asset {asset_id!r}.")
         source = asset.get("source") or {}
-        if asset["kind"] != "image" or source.get("type") != "upload":
-            return {"id": asset_id, "checked": False, "reason": "Only uploaded images are checked."}
+        if asset["kind"] != "image" or source.get("type") == "generated":
+            return {"id": asset_id, "checked": False, "reason": "Only images brought in from outside are checked."}
         if source.get("person_check") and not force:
             return {"id": asset_id, "checked": True, **source["person_check"]}
         llm = self.llm()
