@@ -21,7 +21,10 @@ import logging
 import os
 import random
 import re
+import shutil
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -32,7 +35,7 @@ import httpx
 
 from . import models_llm
 from .atlas import AtlasError
-from .jobs import NotFound, RequestError
+from .jobs import NotFound, RequestError, Unavailable
 from .schemas import PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 log = logging.getLogger("hawk_api.manhwa")
@@ -70,6 +73,11 @@ SETTINGS_DEFAULTS = {
     # The chapter's video: the planner model ("" = the server's) and RenderSettings fields for Render chapter
     # (base model, steps, sampler, continuity, video LoRAs...); anything left out is the server's default.
     "planner_model": "", "render": {},
+    # Quality check: a vision model compares each photograph with its panel and, below qa_min_score, rewrites the
+    # prompt and has Qwen try again, up to qa_retries more times; the best attempt is kept.
+    "qa": True, "qa_model": "deepseek-ai/deepseek-v4.1-flash", "qa_retries": 2, "qa_min_score": 7,
+    # The autopilot drafts a chapter's scene context from its catalogue when none was given.
+    "auto_context": True,
 }
 #: Render settings the Manhwa page sets elsewhere: aspect_ratio and segment_seconds above.
 RENDER_OWN_KEYS = ("aspect_ratio", "default_seconds")
@@ -161,8 +169,50 @@ or a teenager, do not write a prompt: reply {{"skip": "why"}} instead.
 Roster (name: appearance):
 {roster}
 What the catalogue says about this panel: {scene}
+What happens in the chapter: {summary}
 {context}
 Reply with only JSON: {{"drawn": true, "identifiable": false, "prompt": "", "negative": ""}}
+"""
+
+QA_PROMPT = """\
+You check an anime-to-photograph conversion. Image 1 is the original manhwa panel. Image 2 is the photograph an
+image model made from it with this prompt:
+{prompt}
+
+Score image 2 from 0 to 10 as a realistic photograph of exactly the moment in image 1:
+- pose and body positions match: limbs, hands, head turn, who is where, contact between people, and the sexual
+  position when there is one
+- camera angle, framing and crop match
+- the same number of people, with matching hair, clothing (or nudity) and expressions
+- anatomy is right: no extra, missing or fused limbs, fingers or faces, no melted bodies
+- it looks photographic, with no anime or drawn look left, and no speech bubbles or lettering
+A 7 is a usable photograph with small faults; below 7 something above is clearly wrong.
+
+List the concrete problems. Then write "revised_prompt": the whole prompt rewritten to fix them, describing the
+exact pose, limb placement, body orientation, camera angle and framing seen in image 1, 80-200 words, starting with
+"{convert}" Describe everyone as adults.
+
+Every character is an adult. If anyone in either image looks like a child or a teenager, set "minor": true.
+
+Reply with only JSON: {{"score": 0, "problems": [], "minor": false, "revised_prompt": ""}}
+"""
+
+CONTEXT_PROMPT = """\
+From this catalogue of one manhwa chapter, write the scene context an image model and a film planner will follow.
+
+Series: {series}, chapter {chapter}
+Chapter summary: {summary}
+Character roster (name: appearance):
+{roster}
+Scenes in reading order:
+{scenes}
+
+Reply with only JSON:
+{{"characters": "each person in this chapter: name, adult age range, build, face, hair, usual clothing -- one line each",
+"setting": "where and when it happens, the light and the mood",
+"action": "what happens across the chapter, in 2-4 sentences",
+"one_scene": true when the whole chapter happens in one place and one continuous stretch of time, else false}}
+Every character is an adult; describe them as adults.
 """
 
 WRAPUP_PROMPT = """\
@@ -469,6 +519,38 @@ def plan_brief(chapter: dict, shots: list[dict], part: int, parts: int) -> str:
             who = said.get("speaker") or "narration"
             lines.append(f'{"Narration (voice-over)" if who.lower() == "narration" else who}: "{text}"')
     return "\n".join(lines)
+
+
+class SkipPanel(Exception):
+    """A panel that must not be converted (someone reads as a minor)."""
+
+
+def _video_signature(path: str) -> tuple:
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                          "stream=codec_type,codec_name,width,height,r_frame_rate,sample_rate,channels",
+                          "-of", "json", path], capture_output=True, text=True, check=True).stdout
+    return tuple(sorted(tuple(sorted(s.items())) for s in json.loads(out).get("streams", [])))
+
+
+def concat_videos(paths: list[str], out: str) -> bool:
+    """Join clips end to end into out. True when it was a stream copy (identical codecs, size, frame rate and
+    audio layout -- the parts of one chapter), False when the clips had to be re-encoded to match."""
+    listing = out + ".txt"
+    with open(listing, "w", encoding="utf-8") as handle:
+        for path in paths:
+            handle.write("file '" + os.path.abspath(path).replace("'", "'\\''") + "'\n")
+    same = len({_video_signature(p) for p in paths}) == 1
+    if same:
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", listing,
+               "-c", "copy", "-movflags", "+faststart", out]
+    else:
+        cmd = ["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", listing,
+               "-c:v", "libx264", "-preset", "medium", "-crf", "18", "-pix_fmt", "yuv420p",
+               "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg could not join the parts: {result.stderr.strip()[-400:]}")
+    return same
 
 
 # --------------------------------------------------------------------------- store
@@ -887,8 +969,15 @@ class ManhwaManager:
             # 2. photographs, then the plans (LLM only) while the next chapter converts on the GPU
             for item in work:
                 state["stage"] = f"photographs: ch {item['chapter']}"
-                if context and not (self.store.get_chapter(item["chapter_id"]) or {}).get("context"):
+                has_context = bool((self.store.get_chapter(item["chapter_id"]) or {}).get("context"))
+                if context and not has_context:
                     self.set_context(item["chapter_id"], context)
+                elif not has_context and self.settings()["auto_context"]:
+                    try:  # the catalogue's summary, cast and scenes, as the context every prompt and plan follows
+                        item["context"] = "drafted"
+                        self.set_context(item["chapter_id"], await self.draft_context(item["chapter_id"]))
+                    except Exception as exc:
+                        item["context"] = f"not drafted: {exc}"[:200]
                 if self.shots(item["chapter_id"]):
                     item["stage"] = "photographs (already made)"
                 else:
@@ -939,9 +1028,15 @@ class ManhwaManager:
                             pending = True
                             continue
                         failed = [j.get("id", "?") for j in jobs if j.get("status") != "done"]
-                        item["stage"] = "done" if not failed else "failed"
                         if failed:
-                            item["error"] = f"Video job(s) {', '.join(failed)} did not finish."
+                            item.update(stage="failed", error=f"Video job(s) {', '.join(failed)} did not finish.")
+                            continue
+                        item["stage"] = "merging"
+                        try:  # one film per chapter
+                            film = (await self.merge_chapter(item["chapter_id"]))["film"]
+                            item.update(stage="done", film_asset_id=film["asset_id"])
+                        except Exception as exc:  # the parts are rendered; the film can be merged again by hand
+                            item.update(stage="failed", error=f"Merge: {exc}"[:400])
                     if not pending:
                         break
                     await asyncio.sleep(self.poll * 6)
@@ -1082,7 +1177,8 @@ class ManhwaManager:
                       prompt: str | None = None, realism: float | None = None, age_slider: float | None = None,
                       max_panels: int = MAX_CONVERT_PANELS, plan_after: bool | None = None,
                       analyze: bool | None = None, prompt_model: str | None = None, steps: int | None = None,
-                      cfg: float | None = None, negative: str | None = None) -> dict:
+                      cfg: float | None = None, negative: str | None = None, qa: bool | None = None,
+                      qa_retries: int | None = None) -> dict:
         """Turn a catalogued chapter's panels into photographs with Qwen Image 2.1 on this GPU. Runs in the
         background, one panel at a time; poll conversion(). tile_ids limits it to the panels in those tiles.
         Anything left as None comes from the Manhwa page's settings."""
@@ -1113,6 +1209,9 @@ class ManhwaManager:
             "plan_after": bool(pick(plan_after, "plan_after")), "plans": [], "analyze": bool(pick(analyze, "analyze")),
             "skipped": 0, "prompt_model": (pick(prompt_model, "prompt_model") or "").strip() or PANEL_PROMPT_MODEL,
             "steps": pick(steps, "steps"), "cfg": pick(cfg, "cfg"), "negative": pick(negative, "negative") or "",
+            "qa": bool(pick(qa, "qa")), "qa_model": conf["qa_model"] or "deepseek-ai/deepseek-v4.1-flash",
+            "qa_retries": max(0, min(int(pick(qa_retries, "qa_retries") or 0), 5)),
+            "qa_min_score": float(conf["qa_min_score"] or 7), "retried": 0,
         }
         self.conversions[state["id"]] = state
         self._convert_tasks[state["id"]] = asyncio.create_task(
@@ -1149,8 +1248,11 @@ class ManhwaManager:
         tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
         wanted = set(state["tile_ids"])
         roster = self.store.characters(series) if state["analyze"] else {}
-        context = (self.store.get_chapter(chapter_id) or {}).get("context") or {}
+        chapter_row = self.store.get_chapter(chapter_id) or {}
+        context = chapter_row.get("context") or {}
+        summary = chapter_row.get("summary") or ""
         models = await self._panel_prompt_models(state["prompt_model"]) if state["analyze"] else []
+        qa_models = await self._panel_prompt_models(state["qa_model"]) if state["qa"] else []
         try:
             work: list[tuple[dict, int, bytes, dict | None]] = []
             for asset_id in dict.fromkeys(p.get("asset_id") for p in pages if p.get("asset_id")):
@@ -1182,7 +1284,7 @@ class ManhwaManager:
                 row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename")}
                 prompt, negative = real_prompt(tile, extra, context), REAL_NEGATIVE
                 if models:
-                    written = await self._panel_prompt(jpeg, tile, roster, models, context)
+                    written = await self._panel_prompt(jpeg, tile, roster, models, context, summary)
                     if written.get("skip"):
                         row.update(status="skipped", error=f"Not converted: {written['skip']}"[:400])
                         state["skipped"] += 1
@@ -1200,19 +1302,21 @@ class ManhwaManager:
                 try:
                     if state["negative"].strip():
                         negative = f"{negative}, {state['negative'].strip()}"
-                    result = await self._convert_panel(panel["id"], prompt, state["loras"], negative,
-                                                       steps=state["steps"], cfg=state["cfg"])
+                    ids = await self._make_photo(state, panel["id"], jpeg, prompt, negative, row, qa_models)
+                except SkipPanel as exc:
+                    row.update(status="skipped", error=f"Not converted: {exc}"[:400])
+                    state["skipped"] += 1
                 except Exception as exc:  # one panel failing (a refusal, ComfyUI down) does not end the run
                     refused = isinstance(exc, RequestError) and str(exc).startswith("Refused")
                     row.update(status="refused" if refused else "failed", error=str(exc)[:400])
                     state["refused" if refused else "failed"] += 1
                 else:
-                    ids = [a["id"] for a in result.get("assets") or []]
                     for image_id in ids:
                         self.service.update_asset(image_id, collection=state["collection"],
                                                   add_tags=["manhwa", series, "real"])
+                    shown = self.service.store.get_asset(ids[0]) if ids else None
                     row.update(status="ok", asset_ids=ids,
-                               thumb_url=(result.get("assets") or [{}])[0].get("thumb_url"))
+                               thumb_url=self.service.asset_view(shown).get("thumb_url") if shown else None)
                     state["converted"] += 1
                     if tile is not None:
                         tile.setdefault("real", []).append({"panel_asset_id": panel["id"], "asset_ids": ids})
@@ -1326,6 +1430,85 @@ class ManhwaManager:
         self.store.save_chapter(chapter)
         return {"chapter_id": chapter_id, "started": started, "already": kept, "not_ready": not_ready}
 
+    # ----------------------------------------------------------------- one film per chapter
+
+    def merge_status(self, chapter_id: str) -> dict:
+        """Whether the chapter's videos can be joined: every render finished, and what film exists already."""
+        chapter = self.store.get_chapter(chapter_id)
+        if chapter is None:
+            raise NotFound(f"No catalogued chapter {chapter_id!r}.")
+        renders = sorted(chapter.get("renders") or [], key=lambda r: r["part"])
+        statuses = [(r, (self.service.store.get_job(r["job_id"]) or {}).get("status", "missing")) for r in renders]
+        return {"chapter": chapter, "renders": renders,
+                "pending": [{"part": r["part"], "job_id": r["job_id"], "status": st} for r, st in statuses if st != "done"]}
+
+    async def merge_chapter(self, chapter_id: str, *, force: bool = False) -> dict:
+        """Join the chapter's rendered parts, in part order, into one video in Media (manhwa/<series>/<chapter>),
+        copied to Drive like other renders. Stream copy -- instant and lossless -- when the parts match, as parts
+        rendered with the same settings do; re-encoded otherwise. The same parts are not joined twice unless force."""
+        status = self.merge_status(chapter_id)
+        chapter, renders = status["chapter"], status["renders"]
+        if not renders:
+            raise RequestError("This chapter has no rendered videos yet: Render chapter first.")
+        if status["pending"]:
+            raise RequestError("Not every part has finished rendering: " + ", ".join(
+                f"part {p['part']} is {p['status']}" for p in status["pending"]) + ".", {"pending": status["pending"]})
+        jobs = [r["job_id"] for r in renders]
+        film = chapter.get("film") or {}
+        if not force and film.get("jobs") == jobs and self.service.store.get_asset(film.get("asset_id") or ""):
+            return {"chapter_id": chapter_id, "film": film, "merged": False}
+        if not shutil.which("ffmpeg"):
+            raise Unavailable("ffmpeg is not installed on the server; run the notebook's ffmpeg cell.")
+        work = tempfile.mkdtemp(prefix="hawk_film_")
+        try:
+            parts = [await self._part_file(job_id, os.path.join(work, f"part_{n:03d}.mp4"))
+                     for n, job_id in enumerate(jobs, 1)]
+            out = os.path.join(work, "film.mp4")
+            copied = await asyncio.to_thread(concat_videos, parts, out)
+            name = f"{re.sub(r'[^0-9A-Za-z]+', '-', chapter['series']).strip('-').lower()}_ch{chapter['chapter'] or 'x'}.mp4"
+            with open(out, "rb") as handle:
+                asset = await self.service.add_asset(
+                    name, handle, "video/mp4", os.path.getsize(out),
+                    collection=f"manhwa/{chapter['series']}/{chapter['chapter'] or 'chapter'}",
+                    tags=["manhwa", chapter["series"], "film"], local_path=out, dedupe=False,
+                    source={"type": "generated", "engine": "ffmpeg", "generator": "chapter film",
+                            "chapter_id": chapter_id, "jobs": jobs})
+            drive = await self._film_to_drive(out, name)
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+        chapter["film"] = {"asset_id": asset["id"], "jobs": jobs, "parts": len(jobs), "created_at": time.time(),
+                           "stream_copy": copied, "drive": drive}
+        self.store.save_chapter(chapter)
+        return {"chapter_id": chapter_id, "film": chapter["film"], "merged": True}
+
+    async def _part_file(self, job_id: str, target: str) -> str:
+        """A rendered part on disk: ComfyUI's own file when its output folder is here, else downloaded."""
+        location = self.service.video_location(job_id)
+        local = self.service.local_output(*location)
+        if local:
+            return local
+        opened = await self.service.open_remote(*location, None)
+        with open(target, "wb") as handle:
+            async for chunk in opened["body"]:
+                handle.write(chunk)
+        return target
+
+    async def _film_to_drive(self, path: str, name: str) -> str:
+        """Copy the film into the Drive video folder when render export is on. Never fails the merge."""
+        exporter = getattr(self.service, "drive_exporter", None)
+        try:
+            if exporter is None or not exporter.browser.available or not exporter.settings().get("enabled"):
+                return ""
+            day = time.strftime("%Y-%m-%d")
+            folder = f"{exporter.settings()['folder']}/{day}"
+            target = os.path.join(exporter.browser.root, folder, name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            await asyncio.to_thread(shutil.copyfile, path, target)
+            return f"{folder}/{name}"
+        except Exception as exc:  # Drive full or unmounted: the film is still in Media
+            log.warning("manhwa: film not copied to Drive: %s", exc)
+            return ""
+
     @staticmethod
     def _plan_request(chapter, part, number, parts, aspect_ratio, segment_seconds, model) -> PlanRequest:
         return PlanRequest(
@@ -1342,12 +1525,13 @@ class ManhwaManager:
                                        await self.service.model_catalogue())
 
     async def _panel_prompt(self, jpeg: bytes, tile: dict | None, roster: dict, models: list[str],
-                            context: dict | None = None) -> dict:
+                            context: dict | None = None, summary: str = "") -> dict:
         """Grok (then the vision chain) looks at the panel and writes its photograph prompt.
         Returns {prompt, negative, model}, {skip} when someone in it reads as a minor, or {error}."""
         scene = (tile or {}).get("scene") or "(not catalogued)"
         given = context_text(context)
         text = PANEL_PROMPT.format(roster=_roster_text(roster), scene=scene, convert=CONVERT_SENTENCE,
+                                   summary=" ".join((summary or "(not summarised)").split())[:1200],
                                    context=f"\n{given}\nWhere the panel shows it, use these looks and this place.\n"
                                    if given else "")
         content = [{"type": "text", "text": text},
@@ -1371,6 +1555,117 @@ class ManhwaManager:
                         "drawn": answer.get("drawn"), "identifiable": answer.get("identifiable")}
             failures.append(f"{model}: no usable prompt")
         return {"error": "; ".join(failures) or "No vision model is configured."}
+
+    async def _make_photo(self, state: dict, panel_id: str, jpeg: bytes, prompt: str, negative: str, row: dict,
+                          qa_models: list[str]) -> list[str]:
+        """Make the panel's photograph; with the quality check on, a vision model scores it against the panel and,
+        below the bar, rewrites the prompt (pose, limbs, camera) for another try. The best attempt is kept, the
+        others are deleted. Raises SkipPanel when someone reads as a minor, deleting what was made."""
+        tries = 1 + (state["qa_retries"] if state["qa"] and qa_models else 0)
+        best: tuple[float, list[str], str] | None = None
+        attempts = []
+        for attempt in range(1, tries + 1):
+            result = await self._convert_panel(panel_id, prompt, state["loras"], negative,
+                                               steps=state["steps"], cfg=state["cfg"])
+            ids = [a["id"] for a in result.get("assets") or []]
+            if not (state["qa"] and qa_models and ids):
+                row["prompt"] = prompt
+                return ids
+            verdict = await self._quality_check(jpeg, ids[0], prompt, qa_models)
+            if verdict.get("minor"):
+                for doomed in ids + (best[1] if best else []):
+                    self._drop(doomed)
+                raise SkipPanel("the quality check saw someone who looks under 18")
+            if verdict.get("error"):  # no verdict: keep what we have rather than guess
+                row["qa_note"] = f"Quality check unavailable: {verdict['error']}"[:300]
+                if best is not None:
+                    for doomed in ids:
+                        self._drop(doomed)
+                    break
+                row["prompt"] = prompt
+                return ids
+            score = float(verdict.get("score") or 0)
+            attempts.append({"attempt": attempt, "score": score, "problems": verdict.get("problems", [])[:6],
+                             "by": verdict.get("model", "")})
+            if best is None or score > best[0]:
+                for doomed in (best[1] if best else []):
+                    self._drop(doomed)
+                best = (score, ids, prompt)
+            else:
+                for doomed in ids:
+                    self._drop(doomed)
+            if score >= state["qa_min_score"] or attempt == tries:
+                break
+            revised = " ".join(str(verdict.get("revised_prompt") or "").split())
+            if len(revised) >= 40:
+                prompt = revised[:2000]
+            state["retried"] += 1
+        row.update(qa=attempts, qa_score=best[0] if best else None, prompt=best[2] if best else prompt)
+        return best[1] if best else []
+
+    def _drop(self, asset_id: str) -> None:
+        try:
+            self.service.delete_asset(asset_id)
+        except Exception:  # already gone
+            pass
+
+    async def _quality_check(self, panel_jpeg: bytes, photo_id: str, prompt: str, models: list[str]) -> dict:
+        """{score, problems, minor, revised_prompt, model}, or {error} when no model gives a usable verdict."""
+        try:
+            data, mime = await self.service.asset_file(photo_id, 768)
+        except Exception:
+            asset = self.service.store.get_asset(photo_id)
+            data, mime = (await self.service.asset_bytes(asset), "image/png") if asset else (b"", "image/png")
+        content = [{"type": "text", "text": QA_PROMPT.format(prompt=prompt[:1800], convert=CONVERT_SENTENCE)},
+                   {"type": "text", "text": "Image 1 (the panel):"},
+                   {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(panel_jpeg).decode("ascii")}},
+                   {"type": "text", "text": "Image 2 (the photograph):"},
+                   {"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}}]
+        failures = []
+        for model in models:
+            try:
+                reply, _usage = await self.service.atlas.chat(model, [{"role": "user", "content": content}],
+                                                              json_mode=True, max_tokens=PANEL_PROMPT_MAX_TOKENS,
+                                                              temperature=0.2, max_retries=1, purpose="photo check")
+            except AtlasError as exc:
+                failures.append(f"{model}: {exc}"[:200])
+                continue
+            answer = parse_json(reply) or {}
+            if isinstance(answer.get("score"), (int, float)):
+                return {"score": max(0.0, min(10.0, float(answer["score"]))), "model": model,
+                        "problems": [str(p)[:200] for p in answer.get("problems") or [] if p],
+                        "minor": answer.get("minor") is True,
+                        "revised_prompt": str(answer.get("revised_prompt") or "")}
+            failures.append(f"{model}: no score")
+        return {"error": "; ".join(failures) or "No vision model is configured."}
+
+    async def draft_context(self, chapter_id: str) -> dict:
+        """A scene context drafted from the chapter's catalogue (summary, roster, scenes) by the summary model.
+        Not saved: the caller decides, and the user can edit it first."""
+        chapter = self.store.get_chapter(chapter_id)
+        if chapter is None:
+            raise NotFound(f"No catalogued chapter {chapter_id!r}.")
+        pages = [p for p in self.store.pages(chapter_id) if p.get("status") == "ok"]
+        if not pages and not chapter.get("summary"):
+            raise RequestError("This chapter has no catalogue to draft from.")
+        scenes = "\n".join(f"- {p.get('scene', '')}" + (f" ({p['setting']})" if p.get("setting") else "")
+                           for p in pages[:60])
+        text = CONTEXT_PROMPT.format(series=chapter["series"], chapter=chapter.get("chapter") or "?",
+                                     summary=chapter.get("summary") or "(none)",
+                                     roster=_roster_text(self.store.characters(chapter["series"])), scenes=scenes[:12000])
+        try:
+            model = await self.service.model_for("summary")
+            reply, _usage = await self.service.atlas.chat(model, [{"role": "user", "content": text}], json_mode=True,
+                                                          max_tokens=CATALOG_MAX_TOKENS, temperature=0.3,
+                                                          max_retries=1, purpose="manhwa context")
+        except AtlasError as exc:
+            raise Unavailable(f"Could not draft the context: {exc}") from None
+        answer = parse_json(reply) or {}
+        draft = {key: " ".join(str(answer.get(key) or "").split())[:CONTEXT_MAX] for key in CONTEXT_FIELDS}
+        if not any(draft.values()):
+            raise Unavailable("The model gave no usable context.")
+        draft["one_scene"] = answer.get("one_scene") is True
+        return draft
 
     def _record_person_check(self, panel_id: str, written: dict) -> None:
         """The panel-prompt call already looked at the panel, so its answer is the panel's person check and the
@@ -1410,7 +1705,13 @@ class ManhwaManager:
         chapter = self.store.get_chapter(chapter_id)
         if chapter is None:
             raise NotFound(f"No catalogued chapter {chapter_id!r}.")
-        return dict(chapter, pages=[self._with_thumb(p) for p in self.store.pages(chapter_id)])
+        film = dict(chapter.get("film") or {})
+        asset = self.service.store.get_asset(film.get("asset_id") or "") if film else None
+        if asset is not None:
+            shown = self.service.asset_view(asset)
+            film.update(file_url=shown.get("file_url"), thumb_url=shown.get("thumb_url"))
+        return dict(chapter, film=film if asset is not None else None,
+                    pages=[self._with_thumb(p) for p in self.store.pages(chapter_id)])
 
     def search(self, query: str, series: str = "", limit: int = 30) -> list[dict]:
         return [self._with_thumb(hit) for hit in self.store.search(query, series, limit)]

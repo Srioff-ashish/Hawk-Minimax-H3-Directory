@@ -345,6 +345,12 @@ class ManhwaSettingsIn(BaseModel):
     aspect_ratio: AspectRatio | None = Field(None, description="Video plans' aspect ratio (9:16 suits webtoon panels).")
     segment_seconds: float | None = Field(None, ge=1, le=15, description="Video plans' segment length.")
     planner_model: str | None = Field(None, description="Model that writes the chapter's video plans. \"\": the server's planner.")
+    qa: bool | None = Field(None, description="Quality check: a vision model scores each photograph against its panel "
+                            "(pose, camera, anatomy, photographic look) and below qa_min_score rewrites the prompt for another try.")
+    qa_model: str | None = Field(None, description="The checking model, e.g. deepseek-ai/deepseek-v4.1-flash (default) or xai/grok-4.3.")
+    qa_retries: int | None = Field(None, ge=0, le=5, description="Extra tries per panel after a low score.")
+    qa_min_score: float | None = Field(None, ge=0, le=10, description="Score (0-10) a photograph needs to be kept without a retry.")
+    auto_context: bool | None = Field(None, description="The autopilot drafts a chapter's scene context from its catalogue when none was given.")
     render: dict | None = Field(None, description="Render chapter's video settings, as RenderSettings fields: unet_name, "
                                 "steps, megapixels, sampler_name, scheduler, continuity, attention, interpolation, "
                                 "carry_audio, loras [{name, strength}], lora_preset, use_default_loras. {} = server defaults.")
@@ -372,6 +378,8 @@ class ManhwaConvertIn(BaseModel):
                                  "false uses the fixed template with the catalogue's description.")
     prompt_model: str | None = Field(None, description="The model that analyses each panel, e.g. xai/grok-4.3 or "
                                      "deepseek-ai/deepseek-v4.1-flash (reads images, about a quarter of Grok's price).")
+    qa: bool | None = Field(None, description="Quality check with retries (default from the settings).")
+    qa_retries: int | None = Field(None, ge=0, le=5)
 
 
 class ManhwaContextIn(BaseModel):
@@ -398,6 +406,10 @@ class ManhwaPipelineIn(BaseModel):
     max_chapters: int = Field(1, ge=1, le=50, description="With follow_next: how many chapters in all.")
     context: ManhwaContextIn | None = Field(None, description="Scene context for every chapter that has none yet.")
     render: bool = Field(True, description="Render the videos; false stops after the plans are written.")
+
+
+class ManhwaMergeIn(BaseModel):
+    force: bool = Field(False, description="Join again even when a film of these same parts exists.")
 
 
 class ManhwaPlanIn(BaseModel):

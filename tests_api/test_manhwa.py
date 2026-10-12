@@ -153,7 +153,8 @@ class FakeService:
         return "summary-model"
 
     async def add_asset(self, filename, fileobj, content_type=None, size=None, *, collection=None, tags=None, source=None):
-        asset_id = f"a{len(self.assets) + 1:03d}"
+        self.made = getattr(self, "made", 0) + 1  # a counter, not len(): deleted assets must not free their ids
+        asset_id = f"a{self.made:03d}"
         asset = {"id": asset_id, "kind": "image", "filename": filename, "collection": collection, "tags": tags,
                  "source": source}
         self.assets[asset_id] = asset
@@ -664,8 +665,8 @@ class AnalyzedConvert(unittest.IsolatedAsyncioTestCase):
             (await self.manager.convert("ch1", prompt_model="deepseek-ai/deepseek-v4.1-flash"))["id"], 30)
         self.assertEqual({m for m, p in self.chat.calls if p == "panel prompt"}, {"deepseek-ai/deepseek-v4.1-flash"})
 
-    async def test_analyze_off_never_calls_a_model(self):
-        await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False))["id"], 30)
+    async def test_analyze_and_qa_off_never_call_a_model(self):
+        await self.manager.wait_conversion((await self.manager.convert("ch1", analyze=False, qa=False))["id"], 30)
         self.assertEqual(self.chat.calls, [])
 
 
@@ -860,14 +861,47 @@ class VideoSettings(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ManhwaSettingsIn(render={"steps": 8}).render, {"steps": 8})
 
 
+def clip(path: str, size: str = "320x240", seconds: float = 1.0, rate: int = 24) -> str:
+    """A tiny real mp4 with video and audio, made by ffmpeg."""
+    import subprocess
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-v", "error", "-f", "lavfi", "-i", f"testsrc=size={size}:rate={rate}",
+                    "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", str(seconds),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", path], check=True)
+    return path
+
+
+def duration(path: str) -> float:
+    import subprocess
+    return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                capture_output=True, text=True, check=True).stdout)
+
+
 class PipelineService(RenderService):
-    """Plans are written at once (or fail once, for the parts in fail_plans); videos finish when finish_videos."""
+    """Plans are written at once (or fail once, for the parts in fail_plans); videos finish when finish_videos,
+    each a real one-second clip that ffmpeg can join."""
 
     def __init__(self, tmp):
         super().__init__(tmp)
         self.fail_plans: set[int] = set()
         self.retried: list[str] = []
         self.finish_videos = True
+        self.tmp = tmp
+        self.clips: dict[str, str] = {}
+        self.drive_exporter = None
+
+    def video_location(self, job_id):
+        return (os.path.basename(self.clips[job_id]), "", "output")
+
+    def local_output(self, filename, subfolder, type_="output"):
+        return next((p for p in self.clips.values() if os.path.basename(p) == filename), None)
+
+    async def add_asset(self, filename, fileobj, content_type=None, size=None, *, collection=None, tags=None,
+                        source=None, local_path=None, dedupe=True):
+        asset = await super().add_asset(filename, fileobj, content_type, size, collection=collection, tags=tags,
+                                        source=source)
+        if filename.endswith(".mp4"):
+            asset["kind"] = "video"
+        return asset
 
     async def create_plan(self, request):
         job = await super().create_plan(request)
@@ -882,6 +916,7 @@ class PipelineService(RenderService):
 
     async def create_video(self, request):
         job = await super().create_video(request)
+        self.clips[job["id"]] = clip(os.path.join(self.tmp, f"{job['id']}.mp4"))
         if self.finish_videos:
             job["status"] = "done"
         return job
@@ -918,6 +953,18 @@ class Autopilot(unittest.IsolatedAsyncioTestCase):
         first = self.manager.store.get_chapter(state["chapters"][0]["chapter_id"])
         self.assertEqual(first["context"]["setting"], "a rooftop at dusk")
         self.assertIn("one continuous scene", self.service.plans[0].story)
+        film = self.manager.chapter_view(state["chapters"][0]["chapter_id"])["film"]
+        self.assertEqual(film["asset_id"], state["chapters"][0]["film_asset_id"], "the autopilot merged the chapter")
+
+    async def test_a_chapter_with_no_context_gets_one_drafted(self):
+        async def draft(chapter_id):
+            return {"characters": "Mina: early 30s", "setting": "a rooftop", "action": "she waits", "one_scene": True}
+        self.manager.draft_context = draft
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series")
+        await self.finish(state)
+        chapter = self.manager.store.get_chapter(state["chapters"][0]["chapter_id"])
+        self.assertEqual((chapter["context"]["setting"], state["chapters"][0]["context"]), ("a rooftop", "drafted"))
+        self.assertIn("Setting: a rooftop", self.service.plans[0].story)
 
     async def test_a_failed_plan_is_retried_once_and_render_can_be_off(self):
         self.service.fail_plans = {1}
@@ -939,3 +986,142 @@ class Autopilot(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.05)
         await self.manager.cancel_pipeline(state["id"])
         self.assertEqual(state["status"], "cancelled")
+
+
+@unittest.skipUnless(__import__("shutil").which("ffmpeg"), "ffmpeg is not installed")
+class Merge(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_merge_")
+        self.service = PipelineService(self.tmp)
+        self.service_class = None
+        self.manager = ManhwaManager(self.service, delay=(0, 0))
+        self.manager.store.save_chapter({"id": "ch1", "series": "Secret Class", "chapter": "86", "url": "u",
+                                         "status": "done", "created_at": 1.0,
+                                         "plans": [{"part": 1, "job_id": "p1"}, {"part": 2, "job_id": "p2"}]})
+        for plan in ("p1", "p2"):
+            self.service.jobs[plan] = {"id": plan, "kind": "plan", "status": "done"}
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    def test_identical_parts_are_stream_copied_and_others_re_encoded(self):
+        a, b = clip(os.path.join(self.tmp, "a.mp4")), clip(os.path.join(self.tmp, "b.mp4"))
+        out = os.path.join(self.tmp, "ab.mp4")
+        self.assertTrue(manhwa.concat_videos([a, b], out))
+        self.assertAlmostEqual(duration(out), 2.0, delta=0.2)
+        c = clip(os.path.join(self.tmp, "c.mp4"), size="160x120")
+        self.assertFalse(manhwa.concat_videos([a, c], os.path.join(self.tmp, "ac.mp4")), "different sizes re-encode")
+
+    async def test_merge_chapter_in_part_order_once(self):
+        await self.manager.render_chapter("ch1")
+        out = await self.manager.merge_chapter("ch1")
+        self.assertTrue(out["merged"])
+        film = out["film"]
+        self.assertEqual((film["parts"], film["stream_copy"], film["jobs"]), (2, True, ["vid1", "vid2"]))
+        asset = self.service.assets[film["asset_id"]]
+        self.assertEqual((asset["filename"], asset["collection"], asset["kind"]),
+                         ("secret-class_ch86.mp4", "manhwa/Secret Class/86", "video"))
+        self.assertFalse((await self.manager.merge_chapter("ch1"))["merged"], "the same parts are not joined twice")
+        self.assertTrue((await self.manager.merge_chapter("ch1", force=True))["merged"])
+        self.assertEqual(self.manager.chapter_view("ch1")["film"]["file_url"], f"/file/{self.manager.store.get_chapter('ch1')['film']['asset_id']}")
+
+    async def test_unfinished_parts_and_nothing_rendered_are_request_errors(self):
+        from hawk_api.jobs import RequestError
+
+        with self.assertRaises(RequestError):
+            await self.manager.merge_chapter("ch1")
+        self.service.finish_videos = False
+        await self.manager.render_chapter("ch1")
+        with self.assertRaises(RequestError) as caught:
+            await self.manager.merge_chapter("ch1")
+        self.assertIn("part 1 is queued", str(caught.exception))
+
+    async def test_the_film_goes_to_drive_when_render_export_is_on(self):
+        drive = tempfile.mkdtemp(prefix="drive_")
+        self.service.drive_exporter = SimpleNamespace(browser=SimpleNamespace(available=True, root=drive),
+                                                      settings=lambda: {"enabled": True, "folder": "Hawk H3/Videos"})
+        await self.manager.render_chapter("ch1")
+        film = (await self.manager.merge_chapter("ch1"))["film"]
+        self.assertTrue(film["drive"].startswith("Hawk H3/Videos/") and film["drive"].endswith("secret-class_ch86.mp4"))
+        self.assertTrue(os.path.isfile(os.path.join(drive, film["drive"])))
+
+
+class CheckingChat(PanelChat):
+    """Writes panel prompts like PanelChat, and answers photo checks with the scores in ``scores``, in order."""
+
+    def __init__(self, scores=(), minor=False):
+        super().__init__()
+        self.scores, self.minor, self.checks = list(scores), minor, []
+
+    async def chat(self, model, messages, *, purpose="", **kw):
+        if purpose == "photo check":
+            self.calls.append((model, purpose))
+            self.checks.append(messages[0]["content"])
+            score = self.scores.pop(0) if self.scores else 9
+            return json.dumps({"score": score, "problems": [f"pose off ({score})"], "minor": self.minor,
+                               "revised_prompt": f"{manhwa.CONVERT_SENTENCE} She kneels facing the camera, low "
+                                                 f"angle, after a score of {score}."}), {}
+        if purpose == "manhwa context":
+            self.calls.append((model, purpose))
+            return json.dumps({"characters": "Mina: early 30s, short black hair", "setting": "a rooftop at dusk",
+                               "action": "Mina waits for the stranger.", "one_scene": True}), {}
+        return await super().chat(model, messages, purpose=purpose, **kw)
+
+
+class QualityCheck(unittest.IsolatedAsyncioTestCase):
+    asyncTearDown = Convert.asyncTearDown
+
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)
+        self.manager.store.save_chapter({**self.manager.store.get_chapter("ch1"), "summary": "Mina meets a stranger."})
+
+    async def run_with(self, chat, **kw):
+        self.service.atlas = chat
+        return await self.manager.wait_conversion(
+            (await self.manager.convert("ch1", tile_ids=["ch1-0000"], plan_after=False, **kw))["id"], 30)
+
+    async def test_a_low_score_retries_with_the_revised_prompt_and_keeps_the_best(self):
+        chat = CheckingChat(scores=[4, 8])
+        state = await self.run_with(chat)
+        self.assertEqual((state["converted"], state["retried"]), (1, 1), state)
+        first, second = self.service.calls
+        self.assertIn("after a score of 4", second["prompt"], "the second try uses the checker's rewrite")
+        row = state["results"][0]
+        self.assertEqual([a["score"] for a in row["qa"]], [4, 8])
+        kept = row["asset_ids"][0]
+        self.assertIn(kept, self.service.assets)
+        self.assertEqual(sum(1 for a in self.service.assets.values() if a.get("collection") == "Generated"), 0,
+                         "the rejected attempt is deleted, the kept one moved to the chapter")
+
+    async def test_it_stops_after_the_retries_and_keeps_the_highest(self):
+        state = await self.run_with(CheckingChat(scores=[3, 6, 5]), qa_retries=2)
+        row = state["results"][0]
+        self.assertEqual([a["score"] for a in row["qa"]], [3, 6, 5])
+        self.assertEqual(row["qa_score"], 6)
+        self.assertEqual(len(self.service.calls), 3)
+        self.assertEqual(sum(1 for a in self.service.assets.values() if (a.get("source") or {}).get("type") == "generated"), 1)
+
+    async def test_a_minor_is_skipped_and_nothing_is_kept(self):
+        state = await self.run_with(CheckingChat(scores=[9], minor=True))
+        self.assertEqual((state["converted"], state["skipped"]), (0, 1), state)
+        self.assertEqual([a for a in self.service.assets.values() if (a.get("source") or {}).get("type") == "generated"], [])
+
+    async def test_the_panel_prompt_reads_the_chapter_summary(self):
+        chat = CheckingChat(scores=[9])
+        seen = []
+        original = chat.chat
+
+        async def spy(model, messages, *, purpose="", **kw):
+            if purpose == "panel prompt":
+                seen.append(messages[0]["content"][0]["text"])
+            return await original(model, messages, purpose=purpose, **kw)
+        chat.chat = spy
+        await self.run_with(chat)
+        self.assertIn("What happens in the chapter: Mina meets a stranger.", seen[0])
+
+    async def test_the_context_is_drafted_from_the_catalogue(self):
+        self.service.atlas = CheckingChat()
+        self.service.model_for = lambda role: asyncio.sleep(0, "summary-model")
+        draft = await self.manager.draft_context("ch1")
+        self.assertEqual((draft["setting"], draft["one_scene"]), ("a rooftop at dusk", True))
+        self.assertIsNone(self.manager.store.get_chapter("ch1").get("context"), "a draft is not saved")

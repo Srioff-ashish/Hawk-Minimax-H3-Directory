@@ -31,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -334,7 +334,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                     prompt=body.prompt, realism=body.realism, age_slider=body.age_slider,
                                     max_panels=body.max_panels, plan_after=body.plan_after, analyze=body.analyze,
                                     prompt_model=body.prompt_model, steps=body.steps, cfg=body.cfg,
-                                    negative=body.negative)
+                                    negative=body.negative, qa=body.qa, qa_retries=body.qa_retries)
 
     @app.post("/v1/manhwa/pipelines", tags=["manhwa"], status_code=202)
     async def manhwa_pipeline(body: ManhwaPipelineIn):
@@ -363,6 +363,17 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Render every finished video plan of the chapter, one video job per plan part. Plans still being written
         come back in not_ready; parts already rendering or rendered are skipped unless force."""
         return await manhwa.render_chapter(chapter_id, parts=body.parts, force=body.force, settings=body.settings)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/merge", tags=["manhwa"])
+    async def manhwa_merge(chapter_id: str, body: ManhwaMergeIn):
+        """Join the chapter's rendered parts, in order, into one video in Media (manhwa/<series>/<chapter>), copied
+        to Drive like other renders. Stream copy when the parts match. 422 while a part is still rendering."""
+        return await manhwa.merge_chapter(chapter_id, force=body.force)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/context/draft", tags=["manhwa"])
+    async def manhwa_context_draft(chapter_id: str):
+        """A scene context drafted from the chapter's catalogue (summary, cast, scenes). Not saved: PUT it to keep it."""
+        return {"chapter_id": chapter_id, "context": await manhwa.draft_context(chapter_id)}
 
     @app.put("/v1/manhwa/chapters/{chapter_id}/context", tags=["manhwa"])
     async def manhwa_context(chapter_id: str, body: ManhwaContextIn):

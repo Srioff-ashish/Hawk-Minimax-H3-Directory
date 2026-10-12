@@ -1069,6 +1069,15 @@
                 </div>
                 <div class="mh-loras" id="mhSetLoras"><span class="hint">Loading…</span></div>
               </div>
+              <div class="field"><div class="row"><span class="label">Quality check</span><div class="spacer"></div><label class="check"><input type="checkbox" id="mhSetQa">Check each photograph and retry</label></div>
+                <div class="grid grid-3" id="mhSetQaKnobs">
+                  <label class="field"><span class="label">Checked by</span><select class="select" id="mhSetQaModel"><option value="deepseek-ai/deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="xai/grok-4.3">Grok 4.3</option></select></label>
+                  <label class="field"><span class="label">Retries</span><input class="input" id="mhSetQaRetries" type="number" min="0" max="5"></label>
+                  <label class="field"><span class="label">Keep at score ≥</span><input class="input" id="mhSetQaMin" type="number" min="0" max="10" step="0.5"></label>
+                </div>
+                <span class="hint">Compares pose, camera angle, anatomy and photographic look with the panel; below the bar it rewrites the prompt and Qwen tries again. The best attempt is kept.</span>
+              </div>
+              <label class="check"><input type="checkbox" id="mhSetAutoContext">Autopilot drafts each chapter's scene context from its catalogue summary</label>
               <label class="field"><span class="label">Added to every prompt</span><input class="input" id="mhSetPrompt" placeholder="e.g. soft evening light, 35mm film"></label>
               <label class="field"><span class="label">Added to every negative</span><input class="input" id="mhSetNegative" placeholder="e.g. tattoos, glasses"></label>
               <div class="row"><div class="spacer"></div><button class="btn btn-primary" type="submit">Save</button></div>
@@ -1759,7 +1768,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id)}</div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1856,6 +1865,7 @@
     $("mhAutoChapters").innerHTML = (auto.chapters || []).map((c) => `<div class="row"><a href="#manhwa" data-auto-chapter="${esc(c.chapter_id)}"><strong>ch ${esc(c.chapter || "?")}</strong></a>`
       + `<span class="badge ${c.stage === "done" ? "done" : c.stage === "failed" || c.stage === "skipped" ? "failed" : "rendering"}">${esc(c.stage)}</span>`
       + `<span class="hint">${(c.plans || []).map((p) => link(p.job_id, `plan ${p.part}`)).join(" · ")}${(c.renders || []).length ? " → " + c.renders.map((j, i) => link(j, `video ${i + 1}`)).join(" · ") : ""}</span>`
+      + (c.film_asset_id ? ` <a href="#manhwa" data-auto-chapter="${esc(c.chapter_id)}">film</a>` : "")
       + (c.error ? `<span class="hint" style="color:var(--bad)">${esc(c.error)}</span>` : "") + `</div>`).join("")
       || `<span class="hint">Cataloguing…</span>`;
     $("mhAutoErrors").textContent = (auto.errors || []).slice(-3).join(" · ");
@@ -1898,6 +1908,26 @@
     if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
     const job = event.target.closest("[data-open-job]");
     if (job && state.jobs.has(job.dataset.openJob)) { event.preventDefault(); openDrawer(job.dataset.openJob); }  // else the link opens Jobs
+    const draft = event.target.closest("[data-draft-context]");
+    if (draft) {
+      draft.disabled = true;
+      post(`/v1/manhwa/chapters/${encodeURIComponent(draft.dataset.draftContext)}/context/draft`, {})
+        .then(({ context }) => {
+          const form = draft.closest("form");
+          for (const key of ["characters", "setting", "action"]) form.querySelector(`[data-context="${key}"]`).value = context[key] || "";
+          form.querySelector('[data-context="one_scene"]').checked = !!context.one_scene;
+          toast("Context drafted", "Check it, edit if needed, then Save context");
+        })
+        .catch((e) => toast("Could not draft", e.message, "bad"))
+        .finally(() => { draft.disabled = false; });
+    }
+    const merge = event.target.closest("[data-merge-chapter]");
+    if (merge) {
+      merge.disabled = true;
+      post(`/v1/manhwa/chapters/${encodeURIComponent(merge.dataset.mergeChapter)}/merge`, {})
+        .then((out) => { toast(out.merged ? "Chapter film ready" : "Already merged", `${out.film.parts} part(s) → Media${out.film.drive ? " and Drive" : ""}`); mhOpenChapter(merge.dataset.mergeChapter); })
+        .catch((e) => { merge.disabled = false; toast("Could not merge", e.message, "bad"); });
+    }
     const render = event.target.closest("[data-render-chapter]");
     if (render) mhRender(render.dataset.renderChapter);
     const plan = event.target.closest("[data-plan-chapter]");
@@ -1931,6 +1961,13 @@
     $("mhSetSteps").value = set.steps ?? "";
     $("mhSetCfg").value = set.cfg ?? "";
     $("mhSetPrompt").value = set.prompt || "";
+    $("mhSetQa").checked = !!set.qa;
+    if (set.qa_model && ![...$("mhSetQaModel").options].some((o) => o.value === set.qa_model)) $("mhSetQaModel").add(new Option(set.qa_model, set.qa_model));
+    $("mhSetQaModel").value = set.qa_model || "deepseek-ai/deepseek-v4.1-flash";
+    $("mhSetQaRetries").value = set.qa_retries ?? 2;
+    $("mhSetQaMin").value = set.qa_min_score ?? 7;
+    $("mhSetQaKnobs").hidden = !set.qa;
+    $("mhSetAutoContext").checked = set.auto_context !== false;
     $("mhSetNegative").value = set.negative || "";
     mhPaintLoras();
     mhPaintVideo();
@@ -2019,6 +2056,8 @@
     const body = {
       analyze: !!model, realism: Number($("mhSetRealism").value || 0), age_slider: Number($("mhSetAge").value || 0),
       steps: number("mhSetSteps"), cfg: number("mhSetCfg"), prompt: $("mhSetPrompt").value, negative: $("mhSetNegative").value,
+      qa: $("mhSetQa").checked, qa_model: $("mhSetQaModel").value, qa_retries: Number($("mhSetQaRetries").value || 0),
+      qa_min_score: Number($("mhSetQaMin").value || 7), auto_context: $("mhSetAutoContext").checked,
     };
     if (model) body.prompt_model = model;
     body.loras = $("mhSetAuto").checked ? [] : [...$("mhSetLoras").querySelectorAll("[data-lora]:checked")].map((box) => ({
@@ -2027,6 +2066,7 @@
   }
 
   $("mhSetAuto").onchange = mhPaintLoras;
+  $("mhSetQa").onchange = () => { $("mhSetQaKnobs").hidden = !$("mhSetQa").checked; };
   $("mhSettingsForm").onsubmit = async (event) => {
     event.preventDefault();
     const body = mhSettingsBody();
@@ -2046,7 +2086,7 @@
         ${area("characters", "Characters", "who, and how they look")}
         ${area("setting", "Setting", "where and when, the light")}
         ${area("action", "Action", "what happens across the chapter")}
-        <div class="row"><label class="check"><input type="checkbox" data-context="one_scene"${c.one_scene ? " checked" : ""}>The whole chapter is one continuous scene</label><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save context</button></div>
+        <div class="row"><label class="check"><input type="checkbox" data-context="one_scene"${c.one_scene ? " checked" : ""}>The whole chapter is one continuous scene</label><div class="spacer"></div><button class="btn btn-sm" type="button" data-draft-context="${esc(chapter.id)}" title="Draft characters, setting and action from the catalogue's summary, cast and scenes">Draft from catalogue</button><button class="btn btn-sm btn-primary" type="submit">Save context</button></div>
       </form></details>`;
   }
 
@@ -2062,8 +2102,9 @@
     } catch (error) { toast("Could not save", error.message, "bad"); }
   });
 
-  function mhPlans(plans, renders, chapterId) {
+  function mhPlans(plans, renders, chapterId, film) {
     if (!plans || !plans.length) return `<div id="mhPlans"></div>`;
+    const filmLine = film ? `<div class="row" style="margin-top:4px"><strong>Chapter film:</strong> <a href="${esc(film.file_url)}" target="_blank" rel="noopener">${film.parts} part${film.parts === 1 ? "" : "s"} joined</a>${film.drive ? ` <span class="hint">· Drive: ${esc(film.drive)}</span>` : ""}</div>` : "";
     const rendered = new Map((renders || []).map((r) => [r.plan_job_id, r.job_id]));
     const status = (id) => (state.jobs.get(id) || {}).status || "";
     const parts = plans.map((p) => {
@@ -2071,7 +2112,7 @@
       return `<a href="#jobs" data-open-job="${esc(p.job_id)}">part ${p.part} plan${status(p.job_id) ? ` (${esc(status(p.job_id))})` : ""}</a>`
         + (video ? ` → <a href="#jobs" data-open-job="${esc(video)}">video${status(video) ? ` (${esc(status(video))})` : ""}</a>` : "");
     }).join(" · ");
-    return `<div id="mhPlans" class="hint" style="margin-top:6px"><div class="row">Video: ${parts}<div class="spacer"></div><button class="btn btn-sm btn-primary" type="button" data-render-chapter="${esc(chapterId || "")}" title="Render every finished plan of this chapter">Render chapter</button></div></div>`;
+    return `<div id="mhPlans" class="hint" style="margin-top:6px"><div class="row">Video: ${parts}<div class="spacer"></div><button class="btn btn-sm btn-primary" type="button" data-render-chapter="${esc(chapterId || "")}" title="Render every finished plan of this chapter">Render chapter</button>${(renders || []).length ? `<button class="btn btn-sm" type="button" data-merge-chapter="${esc(chapterId || "")}" title="Join the rendered parts, in order, into one video">Merge chapter</button>` : ""}</div>${filmLine}</div>`;
   }
 
   async function mhRender(chapterId) {
@@ -2112,6 +2153,7 @@
     const counts = [`${state.panels_done}/${state.panels_total || "?"} panels`, `${state.converted} made`];
     if (state.refused) counts.push(`${state.refused} refused`);
     if (state.skipped) counts.push(`${state.skipped} skipped`);
+    if (state.retried) counts.push(`${state.retried} retried after the quality check`);
     if (state.failed) counts.push(`${state.failed} failed`);
     if (state.plans && state.plans.length && $("mhPlans")) $("mhPlans").outerHTML = mhPlans(state.plans, [], state.chapter_id);
     const last = (state.results || []).filter((r) => r.error).slice(-2).map((r) => `${r.page}: ${r.error}`);

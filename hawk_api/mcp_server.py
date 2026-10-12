@@ -390,7 +390,9 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
         @mcp.tool(description=(
             "Turn a catalogued manhwa chapter's panels into realistic photographs with Qwen Image 2.1 on this GPU. "
             "With analyze (default) Grok 4.3 first looks at each panel and writes its prompt (people, poses, "
-            "clothing, light, camera); a panel where someone reads as a minor is skipped. prompt_model picks another "
+            "clothing, light, camera); a panel where someone reads as a minor is skipped. With the quality check on "
+            "(qa, default from the settings) a vision model scores each photograph against its panel and below the "
+            "bar rewrites the prompt and tries again, up to qa_retries times, keeping the best. prompt_model picks another "
             "model for that, e.g. deepseek-ai/deepseek-v4.1-flash (reads images, cheaper). "
             "Each page is cut into its panels at the gutters; each panel is edited with the newest anime-to-real LoRA "
             "in models/loras/qwen21, the lenovo realism LoRA (realism, 0 = off) and the age slider (age_slider, "
@@ -405,7 +407,8 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
                                          steps: int | None = None, cfg: float | None = None,
                                          negative: str | None = None, max_panels: int = 300,
                                          plan_after: bool | None = None, analyze: bool | None = None,
-                                         prompt_model: str | None = None, wait_seconds: int = 20) -> dict:
+                                         prompt_model: str | None = None, qa: bool | None = None,
+                                         qa_retries: int | None = None, wait_seconds: int = 20) -> dict:
             try:
                 ManhwaConvertIn(tile_ids=tile_ids or [], loras=loras, prompt=prompt, realism=realism,
                                 age_slider=age_slider, steps=steps, cfg=cfg, negative=negative,
@@ -415,7 +418,8 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
             state = await run(manhwa.convert(chapter_id, tile_ids=tile_ids, loras=loras, prompt=prompt,
                                              realism=realism, age_slider=age_slider, max_panels=max_panels,
                                              plan_after=plan_after, analyze=analyze, prompt_model=prompt_model,
-                                             steps=steps, cfg=cfg, negative=negative))
+                                             steps=steps, cfg=cfg, negative=negative, qa=qa,
+                                             qa_retries=qa_retries))
             return await manhwa.wait_conversion(state["id"], max(0, min(wait_seconds, 120)))
 
         @mcp.tool(description=(
@@ -452,6 +456,13 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
                 raise ToolError(str(exc)) from None
 
         @mcp.tool(description=(
+            "Join a manhwa chapter's rendered parts, in part order, into one video (the chapter's film) in Media under "
+            "manhwa/<series>/<chapter>, copied to Drive like other renders. Fails while a part is still rendering. "
+            "The autopilot does this on its own; use it after render_manhwa_chapter. force=true joins again."))
+        async def merge_manhwa_chapter(chapter_id: str, force: bool = False) -> dict:
+            return await run(manhwa.merge_chapter(chapter_id, force=force))
+
+        @mcp.tool(description=(
             "Render a manhwa chapter's video: one render job per finished video plan (from plan_manhwa_video or a "
             "conversion's plan_after). Plans still being written come back in not_ready -- call again when they are "
             "done. Parts already rendering or rendered are skipped unless force. settings: RenderSettings fields "
@@ -459,6 +470,12 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
         async def render_manhwa_chapter(chapter_id: str, parts: list[int] | None = None, force: bool = False,
                                         settings: dict | None = None) -> dict:
             return await run(manhwa.render_chapter(chapter_id, parts=parts, force=force, settings=settings))
+
+        @mcp.tool(description=(
+            "Draft a manhwa chapter's scene context (characters, setting, action, one_scene) from its catalogue: the "
+            "chapter summary, the cast and the scenes. Not saved; show it to the user, then set_manhwa_chapter_context."))
+        async def draft_manhwa_chapter_context(chapter_id: str) -> dict:
+            return {"chapter_id": chapter_id, "context": await run(manhwa.draft_context(chapter_id))}
 
         @mcp.tool(description=(
             "Give a catalogued manhwa chapter its scene context: characters (who, and how they look), setting (where "
