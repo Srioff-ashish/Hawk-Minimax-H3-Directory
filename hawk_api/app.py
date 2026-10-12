@@ -318,6 +318,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def manhwa_chapter(chapter_id: str):
         return manhwa.chapter_view(chapter_id)
 
+    @app.delete("/v1/manhwa/series", tags=["manhwa"])
+    async def manhwa_delete(name: str, chapter_id: str = "", images: bool = True):
+        """Delete a series (or one chapter of it) from the catalogue; images=true also deletes its downloaded
+        panels from the library. Runs working on the series are cancelled first."""
+        return await manhwa.delete(name, chapter_id, images=images)
+
     @app.get("/v1/manhwa/search", tags=["manhwa"])
     async def manhwa_search(q: str, series: str = "", limit: int = 30):
         return {"results": manhwa.search(q, series, limit)}

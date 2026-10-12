@@ -1036,7 +1036,7 @@
         </div>
         <aside style="display:grid;gap:16px">
           <section class="card" aria-label="Chapters">
-            <div class="card-head"><h2>Chapters</h2><div class="spacer"></div><select class="select" id="mhSeriesPick" style="width:auto;height:30px"></select></div>
+            <div class="card-head"><h2>Chapters</h2><div class="spacer"></div><select class="select" id="mhSeriesPick" style="width:auto;height:30px"></select><button class="btn btn-sm btn-danger" type="button" id="mhDeleteSeries" title="Delete this series: catalogue and downloaded images">Delete</button></div>
             <div class="card-body"><div class="mh-list" id="mhChapters"><span class="hint">Nothing catalogued yet.</span></div></div>
           </section>
           <section class="card" aria-label="Characters">
@@ -1637,7 +1637,27 @@
       $("mhSeriesPick").value = manhwa.series;
       await mhShowSeries();
     } catch (error) { toast("Could not load the catalogue", error.message, "bad"); }
+    if (!manhwa.run) {
+      // A run started from the agent, MCP or another browser still gets a progress bar and a Cancel button here.
+      try {
+        const { runs } = await api("/v1/manhwa/runs");
+        const live = runs.find((r) => r.status === "running");
+        if (live) { manhwa.run = live.id; storage.set("hawkH3ManhwaRun", live.id); }
+      } catch { /* the lists above already reported a failure */ }
+    }
     if (manhwa.run) mhPoll();
+  }
+
+  async function mhDelete(series, chapterId) {
+    const what = chapterId ? "this chapter" : `the series “${series}”`;
+    if (!await confirmAction(`Delete ${what}?`, "Removes its catalogue (scenes, dialogue, characters) and its downloaded images from Media. A run working on it is cancelled first. This cannot be undone.", "Delete")) return;
+    try {
+      const out = await api(`/v1/manhwa/series?name=${encodeURIComponent(series)}${chapterId ? `&chapter_id=${encodeURIComponent(chapterId)}` : ""}&images=true`, { method: "DELETE" });
+      toast("Deleted", `${out.chapters_deleted} chapter(s), ${out.images_deleted} image(s)${out.runs_cancelled.length ? `, ${out.runs_cancelled.length} run(s) cancelled` : ""}`);
+      $("mhResults").innerHTML = "";
+      if (!chapterId) manhwa.series = "";
+      await loadManhwa();
+    } catch (error) { toast("Could not delete", error.message, "bad"); }
   }
 
   async function mhShowSeries() {
@@ -1659,7 +1679,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p></div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p></div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1726,9 +1746,14 @@
     } catch (error) { toast("Could not start", error.message, "bad"); }
     finally { $("mhStart").disabled = false; }
   };
+  $("mhDeleteSeries").onclick = () => { if (manhwa.series) mhDelete(manhwa.series, ""); };
+  $("mhResults").addEventListener("click", (event) => {
+    const button = event.target.closest("[data-delete-chapter]");
+    if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
+  });
   $("mhCancel").onclick = async () => {
     if (!manhwa.run) return;
-    try { mhShowRun(await post(`/v1/manhwa/runs/${manhwa.run}/cancel`, {})); toast("Stopping after this chapter"); }
+    try { mhShowRun(await post(`/v1/manhwa/runs/${manhwa.run}/cancel`, {})); toast("Cancelled", "Tiles already described are kept."); mhPoll(); }
     catch (error) { toast("Could not cancel", error.message, "bad"); }
   };
   $("mhSeriesPick").onchange = (event) => { manhwa.series = event.target.value; mhShowSeries().catch((e) => toast("Could not load", e.message, "bad")); };

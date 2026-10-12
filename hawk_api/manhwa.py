@@ -371,6 +371,29 @@ class ManhwaStore:
                                   for name, data in characters.items()])
             self._db.commit()
 
+    def delete_chapters(self, chapter_ids: list[str]) -> list[str]:
+        """Drop chapters with their tiles and search rows. Returns the asset ids their tiles named."""
+        assets: list[str] = []
+        with self._lock:
+            for chapter_id in chapter_ids:
+                rows = self._db.execute("SELECT id, asset_id FROM manhwa_pages WHERE chapter_id = ?",
+                                        (chapter_id,)).fetchall()
+                self._db.executemany("DELETE FROM manhwa_fts WHERE page_id = ?", [(r[0],) for r in rows])
+                assets += [r[1] for r in rows if r[1]]
+                self._db.execute("DELETE FROM manhwa_pages WHERE chapter_id = ?", (chapter_id,))
+                self._db.execute("DELETE FROM manhwa_chapters WHERE id = ?", (chapter_id,))
+            self._db.commit()
+        return list(dict.fromkeys(assets))
+
+    def delete_characters(self, series: str, names: list[str] | None = None) -> None:
+        with self._lock:
+            if names is None:
+                self._db.execute("DELETE FROM manhwa_characters WHERE series = ?", (series,))
+            else:
+                self._db.executemany("DELETE FROM manhwa_characters WHERE series = ? AND name = ?",
+                                     [(series, n) for n in names])
+            self._db.commit()
+
     def series(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute("SELECT series, COUNT(*), SUM(status = 'done') FROM manhwa_chapters "
@@ -435,6 +458,15 @@ class ManhwaManager:
         series = " ".join((series or "").split())
         if not series:
             raise RequestError("Give the series name: it groups chapters and their characters.")
+        key = series_key(series)
+        series = next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
+        for other in self.runs.values():
+            if other["status"] != "running":
+                continue
+            if series_key(other["series"]) == key or url in (other["start_url"], (other["current"] or {}).get("url")):
+                # Two runs on one chapter download every panel twice and overwrite each other's chapter row.
+                raise RequestError(f"Run {other['id']} is already cataloguing {other['series']!r}. Cancel it or wait "
+                                   "for it to finish.", {"run_id": other["id"]})
         limit = max(1, min(int(max_chapters or 1), MAX_CHAPTERS)) if follow_next else 1
         state = {
             "id": uuid.uuid4().hex[:12],
@@ -469,10 +501,71 @@ class ManhwaManager:
         return sorted(self.runs.values(), key=lambda s: s["created_at"], reverse=True)[:20]
 
     def cancel(self, run_id: str) -> dict:
+        """Stop a run now. The chapter it was on keeps the tiles already described, marked cancelled."""
         state = self.get(run_id)
         if state["status"] == "running":
             state["cancel_requested"] = True
+            task = self._tasks.get(run_id)
+            if task is not None:
+                task.cancel()
         return state
+
+    async def cancel_and_wait(self, run_id: str, seconds: float = 30) -> dict:
+        self.cancel(run_id)
+        task = self._tasks.get(run_id)
+        if task is not None:
+            await asyncio.wait([task], timeout=seconds)
+        return self.get(run_id)
+
+    async def delete(self, series: str, chapter_id: str = "", *, images: bool = True) -> dict:
+        """Delete one chapter, or a whole series, from the catalogue; with images, its downloaded panels too.
+        Runs working on that series are cancelled first, so nothing writes the rows back afterwards."""
+        key = series_key(series)
+        series = next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
+        cancelled = []
+        for run in list(self.runs.values()):
+            if run["status"] == "running" and series_key(run["series"]) == key:
+                await self.cancel_and_wait(run["id"])
+                cancelled.append(run["id"])
+        chapters = self.store.list_chapters(series)
+        if chapter_id:
+            chapters = [c for c in chapters if c["id"] == chapter_id]
+            if not chapters:
+                raise NotFound(f"No catalogued chapter {chapter_id!r} in {series!r}.")
+        named = self.store.delete_chapters([c["id"] for c in chapters])
+        if chapter_id:
+            self._forget_chapter(series, chapter_id)
+        else:
+            self.store.delete_characters(series)
+        deleted_images = 0
+        if images:
+            prefixes = [f"manhwa/{series}/{c['chapter'] or 'chapter'}" for c in chapters] if chapter_id \
+                else [f"manhwa/{series}/"]
+            ids = set(named)
+            for asset in self.service.store.all_assets():
+                collection = str(asset.get("collection") or "")
+                if (asset.get("source") or {}).get("type") == "manhwa" and any(
+                        collection == p or (p.endswith("/") and collection.startswith(p)) for p in prefixes):
+                    ids.add(asset["id"])
+            for asset_id in ids:
+                try:
+                    self.service.delete_asset(asset_id)
+                    deleted_images += 1
+                except NotFound:
+                    pass
+        return {"series": series, "chapters_deleted": len(chapters), "images_deleted": deleted_images,
+                "runs_cancelled": cancelled}
+
+    def _forget_chapter(self, series: str, chapter_id: str) -> None:
+        roster = self.store.characters(series)
+        gone = []
+        for name, data in roster.items():
+            ids = [i for i in data.get("chapter_ids") or [] if i != chapter_id]
+            if not ids:
+                gone.append(name)
+            data["chapter_ids"] = ids
+        self.store.delete_characters(series, gone)
+        self.store.save_characters(series, {n: d for n, d in roster.items() if n not in gone})
 
     async def wait(self, run_id: str, seconds: float) -> dict:
         deadline = time.monotonic() + seconds
@@ -541,11 +634,11 @@ class ManhwaManager:
                         state["chapters_done"] += 1
                     previous_images, previous_number = page["images"], number
 
-                    if not state["follow_next"] or state["chapters_done"] + len(state["skipped"]) >= state["max_chapters"]:
-                        state["stop_reason"] = state["stop_reason"] or "Reached the chapter limit."
-                        break
                     if state["cancel_requested"]:
                         state["stop_reason"] = "Cancelled."
+                        break
+                    if not state["follow_next"] or state["chapters_done"] + len(state["skipped"]) >= state["max_chapters"]:
+                        state["stop_reason"] = state["stop_reason"] or "Reached the chapter limit."
                         break
                     next_url = page["next_url"] or increment_url(url)
                     if not next_url or next_url == url:
@@ -557,6 +650,7 @@ class ManhwaManager:
             state["status"] = "cancelled" if state["cancel_requested"] else "done"
         except asyncio.CancelledError:
             state["status"] = "cancelled"
+            state["stop_reason"] = "Cancelled."
             raise
         except Exception as exc:  # a run that dies says why instead of hanging at "running"
             log.exception("manhwa run %s failed", state["id"])
@@ -610,6 +704,21 @@ class ManhwaManager:
                    "summary": "", "tiles": 0, "failed_tiles": 0, "models": []}
         self.store.save_chapter(chapter)
 
+        pages: list[dict] = []
+        try:
+            return await self._catalog_body(state, http, url, number, page, chapter, pages)
+        except asyncio.CancelledError:
+            # Cancelled mid-chapter: keep the tiles already described (they were paid for) and say so.
+            if pages:
+                self.store.save_pages(chapter["id"], series, pages)
+            chapter.update(status="cancelled", tiles=len(pages))
+            self.store.save_chapter(chapter)
+            state["chapter_ids"].append(chapter["id"])
+            raise
+
+    async def _catalog_body(self, state: dict, http: httpx.AsyncClient, url: str, number: str, page: dict,
+                            chapter: dict, pages: list[dict]) -> str:
+        series = state["series"]
         downloaded = await self._download_images(state, http, url, number, page["images"])
         tiles: list[tuple[str, int, bytes]] = []  # (asset_id, tile number within the image, jpeg)
         for asset, data in downloaded:
@@ -633,7 +742,6 @@ class ManhwaManager:
 
         roster = self.store.characters(series)
         models = await self._vision_models()
-        pages: list[dict] = []
         story = ""
         for start in range(0, len(tiles), TILES_PER_CALL):
             batch = tiles[start:start + TILES_PER_CALL]
@@ -750,6 +858,11 @@ class ManhwaManager:
             known.setdefault("chapter_ids", [])
             if chapter_id not in known["chapter_ids"]:
                 known["chapter_ids"].append(chapter_id)
+
+
+def series_key(name: str) -> str:
+    """"Warrior of the Soulblade" and "warrior-of-the-soulblade" are one series."""
+    return re.sub(r"[^0-9a-z]+", "", str(name or "").lower())
 
 
 def _clean_tile(item: dict) -> dict:

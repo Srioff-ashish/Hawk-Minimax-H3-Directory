@@ -354,7 +354,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
             except NotFound as exc:
                 raise ToolError(str(exc)) from None
 
-        @mcp.tool(description="Stop a manhwa catalogue run after the chapter it is on.")
+        @mcp.tool(description="Stop a manhwa catalogue run now. Tiles already described are kept; the chapter is marked cancelled.")
         async def cancel_manhwa_run(run_id: str) -> dict:
             try:
                 return manhwa.cancel(run_id)
@@ -378,6 +378,13 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
         @mcp.tool(description="Full-text search over catalogued manhwa tiles (scenes, dialogue in both languages, character names, tags). Every word must match. Returns tiles with chapter, scene, dialogue and thumb_url.")
         async def search_manhwa(query: str, series: str = "", limit: int = 20) -> dict:
             return {"results": manhwa.search(query, series, max(1, min(limit, 100)))}
+
+        @mcp.tool(description=(
+            "Delete a catalogued manhwa series, or one chapter of it (chapter_id from list_manhwa), with its "
+            "downloaded panel images (images=false keeps the images). Cancels runs on that series first. "
+            "Only when the user asks for it."))
+        async def delete_manhwa(series: str, chapter_id: str = "", images: bool = True) -> dict:
+            return await run(manhwa.delete(series, chapter_id, images=images))
 
         @mcp.tool(description="The character roster of a catalogued series: name, aliases, appearance, chapters they appear in.")
         async def manhwa_characters(series: str) -> dict:

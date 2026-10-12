@@ -106,9 +106,12 @@ class FakeChat:
         self.calls: list[tuple[str, str]] = []
         self.refuse: set[str] = set()
         self.garble: set[str] = set()
+        self.delay = 0.0
 
     async def chat(self, model, messages, *, purpose="", **_kw):
         self.calls.append((model, purpose))
+        if self.delay:
+            await asyncio.sleep(self.delay)
         content = messages[0]["content"]
         if purpose == "manhwa summary":
             return json.dumps({"summary": "Mina meets the stranger on the rooftop.",
@@ -132,7 +135,13 @@ class FakeService:
         self.settings = SimpleNamespace(db_path=os.path.join(tmp, "jobs.sqlite3"), agent_vision_model="vis-a, vis-b")
         self.atlas = FakeChat()
         self.assets: dict[str, dict] = {}
-        self.store = SimpleNamespace(get_asset=self.assets.get)
+        self.store = SimpleNamespace(get_asset=self.assets.get, all_assets=lambda: list(self.assets.values()))
+
+    def delete_asset(self, asset_id):
+        from hawk_api.jobs import NotFound
+
+        if self.assets.pop(asset_id, None) is None:
+            raise NotFound(asset_id)
 
     def llm(self):
         return SimpleNamespace(agent_vision_model_override="")
@@ -273,13 +282,70 @@ class Runs(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run["chapters_done"], 0)
         self.assertIn("did not load", run["stop_reason"])
 
-    async def test_cancel_stops_after_current_chapter(self):
+    async def test_cancel_mid_chapter_keeps_described_tiles(self):
+        self.site.panel = jpeg((690, 7000))  # 5 tiles a panel, 10 a chapter: three calls of up to 4 tiles
+        self.service.atlas.delay = 0.3
         state = await self.manager.start("https://read.example/series/test/chapter-1", "Test Series",
                                          follow_next=True, max_chapters=10)
-        self.manager.cancel(state["id"])
-        run = await self.manager.wait(state["id"], 30)
+        for _ in range(100):  # until the first batch is described and the second is being asked for
+            await asyncio.sleep(0.05)
+            if (state["current"] or {}).get("tiles_done", 0) >= 4:
+                break
+        run = await self.manager.cancel_and_wait(state["id"])
         self.assertEqual(run["status"], "cancelled")
-        self.assertEqual(run["chapters_done"], 1)
+        self.assertEqual(run["stop_reason"], "Cancelled.")
+        self.assertEqual(run["chapters_done"], 0)
+        chapter = self.manager.store.list_chapters("Test Series")[0]
+        self.assertEqual(chapter["status"], "cancelled")
+        self.assertEqual(chapter["tiles"], 4)
+        self.assertEqual(len(self.manager.store.pages(chapter["id"])), 4)
+        calls = [p for _m, p in self.service.atlas.calls]
+        self.assertNotIn("manhwa summary", calls)
+        self.assertLessEqual(calls.count("manhwa catalogue"), 2)  # the call in flight when it was cancelled
+
+    async def test_one_run_per_series_and_names_that_differ_only_in_spelling_are_one_series(self):
+        self.service.atlas.delay = 0.3
+        first = await self.manager.start("https://read.example/series/test/chapter-1", "Test Series")
+        with self.assertRaises(Exception) as caught:  # same series, spelt as a slug
+            await self.manager.start("https://read.example/series/test/chapter-1", "test-series")
+        self.assertIn(first["id"], str(caught.exception))
+        await self.manager.wait(first["id"], 30)
+        again = await self.manager.start("https://read.example/series/test/chapter-2", "TEST-SERIES")
+        self.assertEqual(again["series"], "Test Series")
+        await self.manager.wait(again["id"], 30)
+        self.assertEqual([s["series"] for s in self.manager.store.series()], ["Test Series"])
+        # every panel stored once: two chapters x two panels
+        self.assertEqual(len(self.service.assets), 4)
+
+    async def test_delete_chapter_and_series_with_images(self):
+        run = await self.run_to_end(follow_next=True, max_chapters=2)
+        self.assertEqual(run["chapters_done"], 2)
+        first, second = self.manager.store.list_chapters("Test Series")
+        out = await self.manager.delete("test-series", first["id"])
+        self.assertEqual(out, {"series": "Test Series", "chapters_deleted": 1, "images_deleted": 2, "runs_cancelled": []})
+        self.assertEqual([c["id"] for c in self.manager.store.list_chapters("Test Series")], [second["id"]])
+        self.assertEqual(len(self.service.assets), 2)
+        self.assertEqual(len(self.manager.search("rooftop")), 4)  # only the second chapter's tiles are left
+        self.assertEqual(self.manager.characters("Test Series")[0]["name"], "Mina")
+        out = await self.manager.delete("Test Series")
+        self.assertEqual((out["chapters_deleted"], out["images_deleted"]), (1, 2))
+        self.assertEqual(self.manager.store.series(), [])
+        self.assertEqual(self.manager.characters("Test Series"), [])
+        self.assertEqual(self.manager.search("rooftop"), [])
+        self.assertEqual(self.service.assets, {})
+
+    async def test_delete_cancels_a_running_run_first(self):
+        self.service.atlas.delay = 0.3
+        state = await self.manager.start("https://read.example/series/test/chapter-1", "Test Series")
+        for _ in range(100):
+            await asyncio.sleep(0.05)
+            if (state["current"] or {}).get("step") == "cataloguing":
+                break
+        out = await self.manager.delete("Test Series")
+        self.assertEqual(out["runs_cancelled"], [state["id"]])
+        self.assertEqual(state["status"], "cancelled")
+        self.assertEqual(self.manager.store.series(), [])
+        self.assertEqual(self.service.assets, {})
 
 
 if __name__ == "__main__":
