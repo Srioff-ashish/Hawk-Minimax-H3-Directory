@@ -323,6 +323,15 @@ class LLMSettingsUpdate(BaseModel):
         "cannot see. Only models the provider lists as accepting image input are tried.")
 
 
+class ManhwaConvertIn(BaseModel):
+    tile_ids: list[str] = Field(default_factory=list, description="Only the panels in these tiles (ids from the chapter). Empty: the whole chapter.")
+    loras: list[dict] | None = Field(None, description="[{name, strength}] to use instead of the defaults (newest Anime2Real + lenovo realism + age slider).")
+    prompt: str = Field("", description="Extra instruction added to every panel's prompt, e.g. 'soft evening light'.")
+    realism: float = Field(0.5, ge=0, le=1, description="Strength of the photoreal lenovo LoRA; 0 leaves it out.")
+    age_slider: float = Field(1.0, ge=0, le=3, description="Age slider strength, so drawn faces read as adults; 0 leaves it out.")
+    max_panels: int = Field(300, ge=1, le=300)
+
+
 class ManhwaCatalogIn(BaseModel):
     url: str = Field(description="The chapter page's http(s) URL (the reader page whose <img> tags are the panels).")
     series: str = Field(description="Series name. Groups chapters and their character roster.")

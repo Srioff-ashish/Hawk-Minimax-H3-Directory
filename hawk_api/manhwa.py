@@ -50,9 +50,21 @@ TILES_PER_CALL = 4
 CATALOG_MAX_TOKENS = 8000  # reasoning models spend part of this before the JSON
 CHAPTER_DELAY = (3.0, 5.0)  # seconds between chapters, so a run never hammers a site
 
+# Panels, for turning a chapter into photographs. A tile is a fixed-height cut that can split a panel in two;
+# the panels are found from the gutters instead: rows of one flat colour running the full width.
+GUTTER_SPREAD = 14  # max - min grey level across a row that still counts as gutter
+MIN_GUTTER = 16  # px; a flat band thinner than this is part of the art (a sky, a wall)
+MIN_PANEL = 200  # px; shorter runs are caption boxes and sound effects, not scenes
+MAX_PANEL = 2400  # px; a taller run is cut into equal parts (a 1024 x 2400 frame is as tall as Qwen 2.1 edits well)
+MAX_CONVERT_PANELS = 300
+BUSY_RETRIES = 10  # ComfyUI busy with a video render: wait a minute and try again, this many times
+BUSY_WAIT = 60.0
+
 #: Images whose URL says what they are, and it is not a panel.
 NOT_PANEL = re.compile(r"logo|avatar|icon|banner|sprite|emoji|badge|button|loading|placeholder|/ads?/|adserver|pixel",
                        re.I)
+#: An anime-to-real LoRA's file name: "Qwen Image2.1_Anime2Real", "Anime2Real_LAtest", "Anything2RealCharacters".
+TO_REAL = re.compile(r"(?:anime|anything|cartoon|toon)[ _-]?(?:2|to)[ _-]?real", re.I)
 NEXT_TEXT = re.compile(r"\bnext\b|다음|次|下一|›|»|→", re.I)
 #: "Next page" inside a paged reader moves within the chapter, which is not what a run follows.
 NOT_NEXT = re.compile(r"\bpage\b|\bprev|\bprevious\b|이전", re.I)
@@ -87,6 +99,12 @@ Reply with only JSON:
 "dialogue": [{{"speaker": "", "text": "", "lang": "", "text_en": ""}}], "sfx": [], "tags": []}}],
 "summary": "one sentence: what happened in these tiles"}}
 """
+
+REAL_PROMPT = ("Turn this manhwa panel into a realistic photograph of real adult people. Keep the composition, "
+               "camera angle, poses, expressions, clothing and setting exactly as drawn. Remove all speech bubbles, "
+               "captions and sound-effect lettering.")
+REAL_NEGATIVE = ("anime, cartoon, illustration, drawing, comic, manga, cel shading, line art, speech bubble, text, "
+                 "letters, watermark, childlike, young-looking")
 
 WRAPUP_PROMPT = """\
 Below is a scene-by-scene catalogue of one manhwa chapter. Write the chapter summary and settle the cast.
@@ -269,6 +287,77 @@ def image_width(data: bytes) -> int:
         return 0
 
 
+def find_panels(data: bytes) -> tuple[list[tuple[int, int]], int]:
+    """(top, bottom) of each panel in the page as slice_image scales it (TILE_WIDTH wide), and how many
+    tiles slice_image cuts it into -- so a panel can be matched to the tile that describes it."""
+    from PIL import Image
+
+    image = Image.open(io.BytesIO(data)).convert("L")
+    width = min(image.width, TILE_WIDTH)
+    height = max(1, round(image.height * width / image.width))
+    columns = 48
+    raw = image.resize((columns, height)).tobytes()
+    flat = [max(raw[y * columns:(y + 1) * columns]) - min(raw[y * columns:(y + 1) * columns]) <= GUTTER_SPREAD
+            for y in range(height)]
+    runs, start, gap = [], None, 0
+    for y, is_gutter in enumerate(flat + [True] * MIN_GUTTER):
+        if not is_gutter:
+            if start is None:
+                start = y
+            gap = 0
+        elif start is not None:
+            gap += 1
+            if gap >= MIN_GUTTER:
+                runs.append((start, y - gap + 1))
+                start, gap = None, 0
+    panels = []
+    for top, bottom in runs:
+        if bottom - top < MIN_PANEL:
+            continue
+        parts = -(-(bottom - top) // MAX_PANEL)
+        step = (bottom - top) / parts
+        panels += [(round(top + i * step), round(top + (i + 1) * step)) for i in range(parts)]
+    tiles, top = 1, 0
+    while top + TILE_HEIGHT < height:
+        top += TILE_HEIGHT - TILE_OVERLAP
+        tiles += 1
+    return panels, tiles
+
+
+def cut_panels(data: bytes) -> list[tuple[int, bytes]]:
+    """Each panel as a JPEG, with the number of the tile (as slice_image cuts the page) it sits in."""
+    from PIL import Image
+
+    panels, tiles = find_panels(data)
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    if image.width > TILE_WIDTH:
+        image = image.resize((TILE_WIDTH, max(1, round(image.height * TILE_WIDTH / image.width))))
+    out = []
+    for top, bottom in panels:
+        buffer = io.BytesIO()
+        image.crop((0, top, image.width, bottom)).save(buffer, format="JPEG", quality=92)
+        part = min(tiles - 1, ((top + bottom) // 2) // (TILE_HEIGHT - TILE_OVERLAP))
+        out.append((part, buffer.getvalue()))
+    return out
+
+
+def real_prompt(tile: dict | None, extra: str = "") -> str:
+    """REAL_PROMPT plus what the catalogue says is in the panel, so the people keep their looks."""
+    parts = [REAL_PROMPT]
+    if tile and tile.get("status") == "ok":
+        if tile.get("scene"):
+            parts.append(f"Scene: {tile['scene']}")
+        if tile.get("setting"):
+            parts.append(f"Setting: {tile['setting']}.")
+        people = [f"{p.get('name')}: {p.get('appearance')}" for p in tile.get("characters") or []
+                  if p.get("appearance")]
+        if people:
+            parts.append("People: " + "; ".join(people) + ".")
+    if extra.strip():
+        parts.append(extra.strip())
+    return " ".join(parts)[:1500]
+
+
 # --------------------------------------------------------------------------- store
 
 
@@ -447,6 +536,9 @@ class ManhwaManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._transport = transport
         self.delay = delay
+        self.conversions: dict[str, dict] = {}
+        self._convert_tasks: dict[str, asyncio.Task] = {}
+        self.busy_wait = BUSY_WAIT
 
     # ----------------------------------------------------------------- API
 
@@ -574,9 +666,155 @@ class ManhwaManager:
         return self.get(run_id)
 
     async def stop(self) -> None:
-        for task in list(self._tasks.values()):
+        tasks = list(self._tasks.values()) + list(self._convert_tasks.values())
+        for task in tasks:
             task.cancel()
-        await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ----------------------------------------------------------------- photographs from panels
+
+    async def real_loras(self, realism: float = 0.5, age_slider: float = 1.0) -> list[dict]:
+        """The LoRAs a panel is converted with, read from what is in models/loras now: the newest anime-to-real
+        LoRA (a file named "latest" wins), the photoreal one, and the age slider so drawn faces read as the
+        adults they are. Qwen 2.1's repair LoRA and its adult default are added by the engine itself."""
+        items = [i for i in await self.service.local_images.catalogue("qwen21") if i.installed]
+        to_real = [i for i in items if TO_REAL.search(i.file)]
+        if not to_real:
+            raise RequestError("No anime-to-real LoRA in models/loras/qwen21 (e.g. Anime2Real_LAtest.safetensors). "
+                               "Download one there, or name the LoRAs to use with loras.")
+        best = max(to_real, key=lambda i: ("latest" in i.file.lower(), to_real.index(i)))
+        chosen = [{"name": best.file, "strength": best.strength or 1.0}]
+        for pattern, strength in ((r"lenovo_qwen21", realism), (r"age_slider", age_slider)):
+            found = next((i for i in items if re.search(pattern, i.file, re.I)), None)
+            if found and strength > 0:
+                chosen.append({"name": found.file, "strength": float(strength)})
+        return chosen
+
+    async def convert(self, chapter_id: str, *, tile_ids: list[str] | None = None, loras: list[dict] | None = None,
+                      prompt: str = "", realism: float = 0.5, age_slider: float = 1.0,
+                      max_panels: int = MAX_CONVERT_PANELS) -> dict:
+        """Turn a catalogued chapter's panels into photographs with Qwen Image 2.1 on this GPU. Runs in the
+        background, one panel at a time; poll conversion(). tile_ids limits it to the panels in those tiles."""
+        chapter = self.store.get_chapter(chapter_id)
+        if chapter is None:
+            raise NotFound(f"No catalogued chapter {chapter_id!r}.")
+        for other in self.conversions.values():
+            if other["status"] == "running":
+                # one GPU: two conversions would only queue behind each other and time out
+                raise RequestError(f"Conversion {other['id']} is still running. Cancel it or wait for it to finish.",
+                                   {"conversion_id": other["id"]})
+        chosen = [dict(l) for l in loras] if loras else await self.real_loras(realism, age_slider)
+        state = {
+            "id": uuid.uuid4().hex[:12], "status": "running", "chapter_id": chapter_id, "series": chapter["series"],
+            "chapter": chapter["chapter"], "loras": chosen, "tile_ids": list(tile_ids or []),
+            "panels_total": 0, "panels_done": 0, "converted": 0, "refused": 0, "failed": 0, "results": [],
+            "errors": [], "cancel_requested": False, "created_at": time.time(), "finished_at": None,
+            "collection": f"manhwa/{chapter['series']}/{chapter['chapter'] or 'chapter'}/real",
+        }
+        self.conversions[state["id"]] = state
+        self._convert_tasks[state["id"]] = asyncio.create_task(
+            self._convert(state, prompt, max(1, min(int(max_panels or 1), MAX_CONVERT_PANELS))))
+        return state
+
+    def conversion(self, conversion_id: str) -> dict:
+        state = self.conversions.get(conversion_id)
+        if state is None:
+            raise NotFound(f"No conversion {conversion_id!r} (forgotten when the API restarts; the images are kept).")
+        return state
+
+    def recent_conversions(self) -> list[dict]:
+        return sorted(self.conversions.values(), key=lambda s: s["created_at"], reverse=True)[:20]
+
+    def cancel_conversion(self, conversion_id: str) -> dict:
+        state = self.conversion(conversion_id)
+        if state["status"] == "running":
+            state["cancel_requested"] = True
+            task = self._convert_tasks.get(conversion_id)
+            if task is not None:
+                task.cancel()
+        return state
+
+    async def wait_conversion(self, conversion_id: str, seconds: float) -> dict:
+        deadline = time.monotonic() + seconds
+        while self.conversion(conversion_id)["status"] == "running" and time.monotonic() < deadline:
+            await asyncio.sleep(0.5)
+        return self.conversion(conversion_id)
+
+    async def _convert(self, state: dict, extra: str, max_panels: int) -> None:
+        series, chapter_id = state["series"], state["chapter_id"]
+        pages = self.store.pages(chapter_id)
+        tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
+        wanted = set(state["tile_ids"])
+        try:
+            work: list[tuple[dict, int, bytes, dict | None]] = []
+            for asset_id in dict.fromkeys(p.get("asset_id") for p in pages if p.get("asset_id")):
+                if wanted and not any(p["id"] in wanted for p in pages if p.get("asset_id") == asset_id):
+                    continue
+                asset = self.service.store.get_asset(asset_id)
+                if asset is None:
+                    state["errors"].append(f"Page image {asset_id} is no longer in the library.")
+                    continue
+                try:
+                    panels = await asyncio.to_thread(cut_panels, await self.service.asset_bytes(asset))
+                except Exception as exc:
+                    state["errors"].append(f"{asset.get('filename')}: {exc}")
+                    continue
+                for number, (part, jpeg) in enumerate(panels, 1):
+                    tile = tiles.get((asset_id, part))
+                    if wanted and (tile or {}).get("id") not in wanted:
+                        continue
+                    work.append((asset, number, jpeg, tile))
+            work = work[:max_panels]
+            state["panels_total"] = len(work)
+            for asset, number, jpeg, tile in work:
+                stem = (asset.get("filename") or "page").rsplit(".", 1)[0]
+                panel = await self.service.add_asset(
+                    f"{stem}_panel{number:02d}.jpg", io.BytesIO(jpeg), "image/jpeg", len(jpeg),
+                    collection=state["collection"].rsplit("/", 1)[0] + "/panels", tags=["manhwa", series, "panel"],
+                    source={"type": "manhwa", "from_asset": asset["id"], "panel": number,
+                            "tile_id": (tile or {}).get("id", "")})
+                row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename")}
+                try:
+                    result = await self._convert_panel(panel["id"], real_prompt(tile, extra), state["loras"])
+                except Exception as exc:  # one panel failing (a refusal, ComfyUI down) does not end the run
+                    refused = isinstance(exc, RequestError) and str(exc).startswith("Refused")
+                    row.update(status="refused" if refused else "failed", error=str(exc)[:400])
+                    state["refused" if refused else "failed"] += 1
+                else:
+                    ids = [a["id"] for a in result.get("assets") or []]
+                    for image_id in ids:
+                        self.service.update_asset(image_id, collection=state["collection"],
+                                                  add_tags=["manhwa", series, "real"])
+                    row.update(status="ok", asset_ids=ids,
+                               thumb_url=(result.get("assets") or [{}])[0].get("thumb_url"))
+                    state["converted"] += 1
+                    if tile is not None:
+                        tile.setdefault("real", []).append({"panel_asset_id": panel["id"], "asset_ids": ids})
+                        self.store.save_pages(chapter_id, series, pages)
+                state["results"].append(row)
+                state["panels_done"] += 1
+            state["status"] = "done"
+        except asyncio.CancelledError:
+            state["status"] = "cancelled"
+            raise
+        except Exception as exc:
+            log.exception("manhwa conversion %s failed", state["id"])
+            state["status"] = "failed"
+            state["errors"].append(f"{type(exc).__name__}: {exc}")
+        finally:
+            state["finished_at"] = time.time()
+            self._convert_tasks.pop(state["id"], None)
+
+    async def _convert_panel(self, panel_id: str, prompt: str, loras: list[dict]) -> dict:
+        for attempt in range(BUSY_RETRIES + 1):
+            try:
+                return await self.service.generate_images(prompt, reference_asset_ids=[panel_id], engine="qwen21",
+                                                          loras=loras, negative=REAL_NEGATIVE)
+            except RequestError as exc:
+                if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
+                    raise
+            await asyncio.sleep(self.busy_wait)
+        raise RequestError("ComfyUI stayed busy.")
 
     def chapter_view(self, chapter_id: str) -> dict:
         chapter = self.store.get_chapter(chapter_id)
@@ -597,7 +835,14 @@ class ManhwaManager:
         if asset is None:
             return page
         view = self.service.asset_view(asset)
-        return dict(page, thumb_url=view.get("thumb_url"), file_url=view.get("file_url"))
+        real = []  # the photographs made from this tile's panels, still in the library
+        for made in page.get("real") or []:
+            for image_id in made.get("asset_ids") or []:
+                image = self.service.store.get_asset(image_id)
+                if image is not None:
+                    shown = self.service.asset_view(image)
+                    real.append({"id": image_id, "thumb_url": shown.get("thumb_url"), "file_url": shown.get("file_url")})
+        return dict(page, thumb_url=view.get("thumb_url"), file_url=view.get("file_url"), real=real)
 
     # ----------------------------------------------------------------- the run
 

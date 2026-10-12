@@ -312,6 +312,18 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
             requested, adult_default=adult_default, family="qwen21")
         return [name.rsplit("/", 1)[-1] for name, _ in chosen], used, warnings
 
+    async def test_files_nobody_catalogued_are_classified_by_name(self):
+        # An adult LoRA dropped in the folder has to count as adult before anyone catalogues it: the
+        # uploaded-photo rule and the per-image adult limit both go by kind.
+        items = {i.file.rsplit("/", 1)[-1]: i for i in await self.engine(
+            ["My NSFW v9.safetensors", "Toon2Real_v3.safetensors", "qwen21_watercolor.safetensors"]).catalogue("qwen21")}
+        self.assertEqual(items["My NSFW v9.safetensors"].kind, "adult")
+        self.assertEqual(items["Toon2Real_v3.safetensors"].kind, "style")
+        self.assertEqual(items["qwen21_watercolor.safetensors"].kind, "other")
+        catalogued = {i.file: i for i in await self.engine(["NSFW Latest Lora.safetensors"]).catalogue("qwen21")}
+        self.assertEqual(catalogued["NSFW Latest Lora.safetensors"].kind, "adult")
+        self.assertTrue(catalogued["NSFW Latest Lora.safetensors"].installed)
+
     async def test_it_attaches_with_nothing_asked_for(self):
         names, _, warnings = await self.resolve([self.FIX])
         self.assertEqual(names, [self.FIX], "the repair LoRA should be on every image of this family")

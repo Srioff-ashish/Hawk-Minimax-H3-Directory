@@ -335,6 +335,21 @@ def edit_size(width: int, height: int, megapixels: float = EDIT_MEGAPIXELS) -> t
     return tuple(max(512, min(2048, round(v * scale / 16) * 16)) for v in (width, height))
 
 
+#: What an uncatalogued file's name says it is. "adult" matters beyond labelling: adult LoRAs count towards
+#: the per-image limit and are refused on uploaded photos, so a new "NSFW Latest Lora.safetensors" dropped in
+#: the folder must not slip past those rules as "other" just because nobody catalogued it yet.
+ADULT_NAME = re.compile(r"nsfw|porn|xxx|hentai|nude|naked|lewd|sex|r18|erotic", re.I)
+TO_REAL_NAME = re.compile(r"(?:anime|anything|cartoon|toon)[ _-]?(?:2|to)[ _-]?real", re.I)
+
+
+def guess_kind(filename: str) -> str:
+    if ADULT_NAME.search(filename):
+        return "adult"
+    if TO_REAL_NAME.search(filename):
+        return "style"
+    return "other"
+
+
 def load_catalogue(path: str) -> list[ImageLora]:
     if not os.path.isfile(path):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -737,7 +752,7 @@ class LocalImageEngine:
             # name says nothing, which is the point of downloading into a folder named after the family.
             found = image_engines.family_of(name)
             if base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base):
-                items.append(ImageLora(file=name, kind="other", label=base, installed=True, family=found))
+                items.append(ImageLora(file=name, kind=guess_kind(base), label=base, installed=True, family=found))
         return [item for item in items if not family or item.family == family]
 
     async def lora_basenames(self, family: str = "") -> set[str]:

@@ -350,3 +350,156 @@ class Runs(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def strip_with_panels(heights=(900, 1200), gutter=80, width=800) -> bytes:
+    """A webtoon strip: noisy panels separated by flat white gutters, with a short caption box between them."""
+    total = gutter + sum(h + gutter for h in heights) + 60 + gutter
+    page = Image.new("RGB", (width, total), (255, 255, 255))
+    y = gutter
+    for h in heights:
+        page.paste(Image.effect_noise((width, h), 80).convert("RGB"), (0, y))
+        y += h + gutter
+    page.paste(Image.effect_noise((width, 60), 80).convert("RGB"), (0, y))  # a caption box: too short to keep
+    buffer = io.BytesIO()
+    page.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class Panels(unittest.TestCase):
+    def test_panels_found_at_gutters_and_matched_to_tiles(self):
+        panels, tiles = manhwa.find_panels(strip_with_panels())
+        self.assertEqual(len(panels), 2, panels)
+        (a_top, a_bottom), (b_top, b_bottom) = panels
+        self.assertLess(abs(a_top - 80), 4)
+        self.assertLess(abs((a_bottom - a_top) - 900), 6)
+        self.assertLess(abs((b_bottom - b_top) - 1200), 6)
+        self.assertEqual(tiles, len(slice_image(strip_with_panels())))
+        cut = manhwa.cut_panels(strip_with_panels())
+        self.assertEqual([part for part, _ in cut], [0, 1])  # the second panel's middle (1660) is past 1480 px
+
+    def test_a_tall_panel_is_cut_into_parts(self):
+        panels, _ = manhwa.find_panels(strip_with_panels(heights=(5000,)))
+        self.assertEqual(len(panels), 3)
+        self.assertTrue(all(b - t <= manhwa.MAX_PANEL for t, b in panels))
+
+    def test_prompt_carries_the_catalogue(self):
+        tile = {"status": "ok", "scene": "Mina waits on the rooftop.", "setting": "rooftop at dusk",
+                "characters": [{"name": "Mina", "appearance": "short black hair, grey coat"}]}
+        text = manhwa.real_prompt(tile, "soft light")
+        for part in ("realistic photograph of real adult people", "Mina waits", "short black hair", "soft light"):
+            self.assertIn(part, text)
+        self.assertEqual(manhwa.real_prompt({"status": "failed"}), manhwa.REAL_PROMPT)
+
+
+class Lora(SimpleNamespace):
+    pass
+
+
+class ConvertService(FakeService):
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        self.data: dict[str, bytes] = {}
+        self.calls: list[dict] = []
+        self.refuse_prompt = ""
+        self.busy = 0
+        self.local_images = SimpleNamespace(catalogue=self.catalogue)
+
+    async def catalogue(self, family=""):
+        return [Lora(file="Qwen Image2.1_Anime2Real.safetensors", strength=1.0, installed=True),
+                Lora(file="qwen21/Anime2Real_LAtest.safetensors", strength=0.0, installed=True),
+                Lora(file="Qwen2.1_Anything2RealCharacters.safetensors", strength=0.7, installed=False),
+                Lora(file="lenovo_qwen21.safetensors", strength=0.55, installed=True),
+                Lora(file="PornMaster_QI2.1_Age_Slider_V1.safetensors", strength=2.0, installed=True)]
+
+    async def add_asset(self, filename, fileobj, content_type=None, size=None, *, collection=None, tags=None, source=None):
+        asset = await super().add_asset(filename, fileobj, content_type, size, collection=collection, tags=tags,
+                                        source=source)
+        fileobj.seek(0)
+        self.data[asset["id"]] = fileobj.read()
+        return asset
+
+    async def asset_bytes(self, asset):
+        return self.data[asset["id"]]
+
+    def update_asset(self, asset_id, *, collection=None, add_tags=None, **_kw):
+        self.assets[asset_id].update(collection=collection, tags=add_tags)
+
+    async def generate_images(self, prompt, *, reference_asset_ids=(), engine=None, loras=None, negative="", **_kw):
+        from hawk_api.jobs import RequestError
+
+        if self.busy:
+            self.busy -= 1
+            raise RequestError("Qwen Image 2.1: ComfyUI is busy (1 job(s) running or queued, usually a video render).")
+        self.calls.append({"prompt": prompt, "refs": list(reference_asset_ids), "engine": engine, "loras": loras,
+                           "negative": negative})
+        if self.refuse_prompt and self.refuse_prompt in prompt:
+            raise RequestError("Refused: the prompt mentions 'teen'.")
+        made = await self.add_asset("gen.png", io.BytesIO(b"png"), collection="Generated",
+                                    source={"type": "generated", "references": list(reference_asset_ids)})
+        return {"assets": [self.asset_view(made)]}
+
+
+class Convert(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_convert_")
+        self.service = ConvertService(self.tmp)
+        self.manager = ManhwaManager(self.service, delay=(0, 0))
+        self.manager.busy_wait = 0
+        page = await self.service.add_asset("p001.png", io.BytesIO(strip_with_panels()), collection="manhwa/S/1",
+                                            source={"type": "manhwa"})
+        self.manager.store.save_chapter({"id": "ch1", "series": "S", "chapter": "1", "url": "https://x/1",
+                                         "status": "done", "created_at": 1.0})
+        self.manager.store.save_pages("ch1", "S", [
+            {"id": "ch1-0000", "idx": 0, "asset_id": page["id"], "part": 0, "status": "ok",
+             "scene": "Mina waits on the rooftop.", "characters": [{"name": "Mina", "appearance": "short black hair"}]},
+            {"id": "ch1-0001", "idx": 1, "asset_id": page["id"], "part": 1, "status": "ok",
+             "scene": "A stranger arrives.", "characters": []},
+        ])
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    async def test_each_panel_becomes_a_photograph_with_the_latest_anime2real(self):
+        state = await self.manager.convert("ch1")
+        self.assertEqual(state["loras"], [{"name": "qwen21/Anime2Real_LAtest.safetensors", "strength": 1.0},
+                                          {"name": "lenovo_qwen21.safetensors", "strength": 0.5},
+                                          {"name": "PornMaster_QI2.1_Age_Slider_V1.safetensors", "strength": 1.0}])
+        state = await self.manager.wait_conversion(state["id"], 30)
+        self.assertEqual((state["status"], state["panels_total"], state["converted"]), ("done", 2, 2), state)
+        first, second = self.service.calls
+        self.assertEqual(first["engine"], "qwen21")
+        self.assertIn("Mina waits on the rooftop", first["prompt"])
+        self.assertIn("A stranger arrives", second["prompt"])
+        self.assertIn("anime", first["negative"])
+        panel = self.service.assets[first["refs"][0]]
+        self.assertEqual((panel["source"]["type"], panel["collection"]), ("manhwa", "manhwa/S/1/panels"))
+        made = self.service.assets[state["results"][0]["asset_ids"][0]]
+        self.assertEqual(made["collection"], "manhwa/S/1/real")
+        view = self.manager.chapter_view("ch1")
+        self.assertEqual([len(p["real"]) for p in view["pages"]], [1, 1])
+
+    async def test_refusals_are_counted_and_the_run_goes_on_and_busy_waits(self):
+        self.service.refuse_prompt = "Mina"
+        self.service.busy = 2
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1"))["id"], 30)
+        self.assertEqual((state["converted"], state["refused"], state["failed"]), (1, 1, 0), state)
+        self.assertTrue(state["results"][0]["error"].startswith("Refused"))
+
+    async def test_tile_ids_loras_and_one_at_a_time(self):
+        mine = [{"name": "Qwen Image2.1_Anime2Real.safetensors", "strength": 0.9}]
+        state = await self.manager.convert("ch1", tile_ids=["ch1-0001"], loras=mine)
+        with self.assertRaises(Exception):
+            await self.manager.convert("ch1")
+        state = await self.manager.wait_conversion(state["id"], 30)
+        self.assertEqual(state["panels_total"], 1)
+        self.assertEqual(self.service.calls[0]["loras"], mine)
+
+    async def test_no_anime2real_installed_says_so(self):
+        from hawk_api.jobs import RequestError
+
+        async def none(family=""):
+            return []
+        self.service.local_images.catalogue = none
+        with self.assertRaises(RequestError):
+            await self.manager.convert("ch1")

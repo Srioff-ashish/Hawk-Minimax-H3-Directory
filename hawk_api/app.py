@@ -31,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, ManhwaConvertIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -323,6 +323,26 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Delete a series (or one chapter of it) from the catalogue; images=true also deletes its downloaded
         panels from the library. Runs working on the series are cancelled first."""
         return await manhwa.delete(name, chapter_id, images=images)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/convert", tags=["manhwa"], status_code=202)
+    async def manhwa_convert(chapter_id: str, body: ManhwaConvertIn):
+        """Turn the chapter's panels into photographs with Qwen Image 2.1 on this GPU (newest Anime2Real LoRA
+        from models/loras). Poll GET /v1/manhwa/conversions/{id}."""
+        return await manhwa.convert(chapter_id, tile_ids=body.tile_ids, loras=body.loras, prompt=body.prompt,
+                                    realism=body.realism, age_slider=body.age_slider, max_panels=body.max_panels)
+
+    @app.get("/v1/manhwa/conversions", tags=["manhwa"])
+    async def manhwa_conversions():
+        return {"conversions": manhwa.recent_conversions()}
+
+    @app.get("/v1/manhwa/conversions/{conversion_id}", tags=["manhwa"])
+    async def manhwa_conversion(conversion_id: str):
+        return manhwa.conversion(conversion_id)
+
+    @app.post("/v1/manhwa/conversions/{conversion_id}/cancel", tags=["manhwa"])
+    async def manhwa_conversion_cancel(conversion_id: str):
+        """Stop after the panel being converted now. Images already made are kept."""
+        return manhwa.cancel_conversion(conversion_id)
 
     @app.get("/v1/manhwa/search", tags=["manhwa"])
     async def manhwa_search(q: str, series: str = "", limit: int = 30):

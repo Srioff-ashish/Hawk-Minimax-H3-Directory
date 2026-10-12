@@ -132,6 +132,8 @@
   .mh-hit { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
   .mh-hit img { width: 96px; height: 128px; object-fit: cover; object-position: top; border-radius: 6px; background: var(--surface-3); }
   .mh-hit p { margin: 4px 0 0; font-size: 13px; }
+  .mh-real { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .mh-real img { width: 72px; height: 96px; object-fit: cover; border-radius: 6px; background: var(--surface-3); }
   .mh-said { font-size: 12.5px; color: var(--ink-2); margin-top: 4px; }
   .mh-said b { font-weight: 600; }
   .mh-list { display: grid; gap: 6px; max-height: 420px; overflow: auto; }
@@ -1623,7 +1625,8 @@
     const img = hit.thumb_url ? `<a href="${esc(hit.file_url || hit.thumb_url)}" target="_blank" rel="noopener"><img src="${esc(hit.thumb_url)}" alt="" loading="lazy"></a>` : "<span></span>";
     const body = hit.status === "failed" ? `<p class="hint">Not described: ${esc(hit.error || "the model refused")}</p>`
       : `<p>${esc(hit.scene || "")}</p>${who.length ? `<div class="hint">${esc(who.join(", "))}${hit.setting ? " · " + esc(hit.setting) : ""}</div>` : ""}${said}`;
-    return `<div class="mh-hit">${img}<div>${where}${body}</div></div>`;
+    const real = (hit.real || []).map((r) => `<a href="${esc(r.file_url || r.thumb_url)}" target="_blank" rel="noopener" title="Photograph made from this tile"><img src="${esc(r.thumb_url)}" alt="" loading="lazy"></a>`).join("");
+    return `<div class="mh-hit">${img}<div>${where}${body}${real ? `<div class="mh-real">${real}</div>` : ""}</div></div>`;
   }
 
   async function loadManhwa() {
@@ -1679,7 +1682,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p></div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 and the newest Anime2Real LoRA on this GPU">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p><div id="mhConv" class="hint" hidden style="margin-top:6px"></div></div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -1750,7 +1753,39 @@
   $("mhResults").addEventListener("click", (event) => {
     const button = event.target.closest("[data-delete-chapter]");
     if (button) mhDelete(button.dataset.series, button.dataset.deleteChapter);
+    const convert = event.target.closest("[data-convert-chapter]");
+    if (convert) mhConvert(convert.dataset.convertChapter);
+    const stop = event.target.closest("[data-cancel-conversion]");
+    if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
+
+  async function mhConvert(chapterId) {
+    try {
+      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, {});
+      toast("Converting panels", `With ${state.loras.map((l) => l.name.split("/").pop().replace(/\.safetensors$/, "")).join(", ")}`);
+      mhConvShow(state);
+    } catch (error) { toast("Could not start", error.message, "bad"); }
+  }
+
+  function mhConvShow(state) {
+    clearTimeout(manhwa.convTimer);
+    const box = $("mhConv");
+    if (!box) return;
+    box.hidden = false;
+    const left = state.status === "running" ? ` <button class="btn btn-sm" type="button" data-cancel-conversion="${esc(state.id)}">Cancel</button>` : "";
+    const counts = [`${state.panels_done}/${state.panels_total || "?"} panels`, `${state.converted} made`];
+    if (state.refused) counts.push(`${state.refused} refused`);
+    if (state.failed) counts.push(`${state.failed} failed`);
+    const last = (state.results || []).filter((r) => r.error).slice(-2).map((r) => `${r.page}: ${r.error}`);
+    box.innerHTML = `<span class="badge ${state.status === "running" ? "rendering" : state.status}">${esc(state.status)}</span> ${esc(counts.join(" · "))} → Media → ${esc(state.collection)}${left}`
+      + (last.length || (state.errors || []).length ? `<div>${esc([...last, ...(state.errors || [])].slice(-3).join(" · "))}</div>` : "");
+    if (state.status === "running") {
+      manhwa.convTimer = setTimeout(() => api(`/v1/manhwa/conversions/${state.id}`).then((next) => {
+        if (next.converted !== state.converted && $("mhConv")) mhOpenChapter(next.chapter_id).then(() => mhConvShow(next));
+        else mhConvShow(next);
+      }).catch(() => {}), 5000);
+    }
+  }
   $("mhCancel").onclick = async () => {
     if (!manhwa.run) return;
     try { mhShowRun(await post(`/v1/manhwa/runs/${manhwa.run}/cancel`, {})); toast("Cancelled", "Tiles already described are kept."); mhPoll(); }
