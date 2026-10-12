@@ -403,7 +403,8 @@ class Panels(unittest.TestCase):
         tile = {"status": "ok", "scene": "Mina waits on the rooftop.", "setting": "rooftop at dusk",
                 "characters": [{"name": "Mina", "appearance": "short black hair, grey coat"}]}
         text = manhwa.real_prompt(tile, "soft light")
-        for part in ("realistic photograph of real adult people", "Mina waits", "short black hair", "soft light"):
+        for part in ("natural photorealistic live-action photograph", "Every person is an adult", "Mina waits",
+                     "short black hair", "soft light"):
             self.assertIn(part, text)
         self.assertEqual(manhwa.real_prompt({"status": "failed"}), manhwa.REAL_PROMPT)
 

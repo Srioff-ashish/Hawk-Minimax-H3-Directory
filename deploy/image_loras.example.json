@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "_comment": "Image LoRAs for local generation, one entry per file. Copied to $DATA_DIR/image_loras.json on first use; edit that copy. Entries added here later show up in an existing copy too; only a version bump replaces it wholesale (the old one is kept as image_loras.json.bak). family: which model the file is for -- a file from the wrong family makes a worse image rather than an error, so download into models/loras/<family>/ (e.g. models/loras/qwen21/) and the folder classifies it whatever it is named. kind: realism, detail, style, adult, other. Up to 3 adult LoRAs per image. strength is the default; range is what works. steps / scheduler / sampler / cfg override the engine's defaults when this LoRA is used -- Krea 2 Turbo's are 8 / simple / euler / 1.0, Qwen Image 2.1's are 30 / simple / euler / 2.0. trigger is added to the prompt automatically. Notes starting GO-TO or AVOID steer the agent.",
   "loras": [
     {
@@ -188,6 +188,18 @@
       "notes": "ALWAYS ON: attached to every Qwen Image 2.1 image, adult or not. Repairs layers the base model ships broken, which is what its advertised quality depends on. Nothing to ask for."
     },
     {
+      "file": "qwen2.1-detail-fix-2.0.safetensors",
+      "family": "qwen21",
+      "kind": "detail",
+      "label": "Qwen Image 2.1 Fix v2.0 (Envy)",
+      "strength": 1.0,
+      "range": [
+        0.8,
+        1.0
+      ],
+      "notes": "ALWAYS ON when installed, in place of Fix v1.0 (Civitai 3379469). Repairs layers the base model ships broken. Nothing to ask for."
+    },
+    {
       "file": "NSFW Qwen Lora.safetensors",
       "family": "qwen21",
       "kind": "adult",
@@ -201,7 +213,7 @@
       "cfg": 1.0,
       "sampler": "er_sde",
       "scheduler": "beta",
-      "notes": "GO-TO adult LoRA for Qwen Image 2.1. Only behaves at cfg 1 on er_sde/beta, which it sets itself. Fictional adults only."
+      "notes": "NSFW LoRA v1 (Civitai 3351951, 'experimental'); v2 (NSFW Latest Lora) replaces it as the default. Only behaves at cfg 1 on er_sde/beta, which it sets itself. Fictional adults only."
     },
     {
       "file": "PornMaster_QI2.1_Age_Slider_V1.safetensors",
@@ -211,7 +223,7 @@
       "strength": 2.0,
       "range": [
         0.0,
-        3.0
+        5.0
       ],
       "notes": "Slider, not a content LoRA: higher pushes the face older. Ask for it when a subject is reading younger than the prompt says. Not attached on its own."
     },
@@ -238,8 +250,7 @@
         0.4,
         0.7
       ],
-      "trigger": "l3n0v0",
-      "notes": "Photoreal skin and light. Keep it light -- above about 0.7 it takes over the whole look."
+      "notes": "Photoreal skin and light (Civitai 3349565). No trigger word for the Qwen 2.1 version (l3n0v0 belongs to the Z-Image one). Keep it light -- above about 0.7 it takes over the whole look. Its author samples it on a beta scheduler with res_2m / res_2s / res_multistep at cfg 3-4, dropping to cfg 1 if images turn to slop."
     },
     {
       "file": "Qwen Image2.1_Anime2Real.safetensors",
@@ -257,13 +268,25 @@
       "file": "Anime2Real_LAtest.safetensors",
       "family": "qwen21",
       "kind": "style",
-      "label": "Anime to Realism, latest (Qwen 2.1)",
-      "strength": 1.0,
+      "label": "Anime2Real Alpha, latest (Qwen 2.1)",
+      "strength": 0.8,
       "range": [
-        0.8,
+        0.6,
         1.0
       ],
-      "notes": "GO-TO for turning anime, cartoon or manhwa art into a photograph; the newer of the two Anime2Real files. Edit-only: pointless on a photo."
+      "notes": "GO-TO for turning anime, cartoon or manhwa art into a photograph: 'Anime2Real -- Alpha' (Civitai 3368916), true photoreal skin, any aspect ratio, no trigger; author's weight 0.8. Edit-only: pointless on a photo."
+    },
+    {
+      "file": "Anime2Real_1.1 (gpt-image 2.5-sunburst edition).safetensors",
+      "family": "qwen21",
+      "kind": "style",
+      "label": "Anime2Real, GPT Image 2.5 Sunburst edition (Qwen 2.1)",
+      "strength": 1.0,
+      "range": [
+        0.75,
+        1.25
+      ],
+      "notes": "Edit-only anime-to-real trained on GPT Image 2.5 Sunburst outputs (Civitai 3356729, v1.1). 0.75 lighter, 1.25 stronger style transfer. Weak on male characters and chibi styles, and leans on the NSFW LoRA for adult panels. An alternative to Anime2Real Alpha: use one anime-to-real LoRA at a time, never both. Author's prompt: 'Convert this stylized image into a realistic photograph of the same scene. Preserve the subject, pose, clothing, composition, colors, and background. Render natural skin, materials, lighting, and photographic detail.'"
     },
     {
       "file": "Qwen2.1_Anything2RealCharacters.safetensors",
@@ -282,13 +305,33 @@
       "file": "NSFW Latest Lora.safetensors",
       "family": "qwen21",
       "kind": "adult",
-      "label": "NSFW Latest (Qwen 2.1)",
+      "label": "NSFW v2 (Qwen 2.1, TheseAlpacas)",
       "strength": 0.85,
       "range": [
         0.7,
         1.0
       ],
-      "notes": "Newer adult LoRA for Qwen Image 2.1. Fictional adults only."
+      "notes": "GO-TO adult LoRA for Qwen Image 2.1: NSFW LoRA v2 (Civitai 3357315), better anatomy, detail and realism than v1. Needs er_sde / beta (euler gives very bad results), 25+ steps. Its author uses cfg 3-6; on this pod v1 only behaved at cfg 1, so 1.0 is set until a fixed-seed test says otherwise. Fictional adults only.",
+      "steps": 25,
+      "cfg": 1.0,
+      "sampler": "er_sde",
+      "scheduler": "beta"
+    },
+    {
+      "file": "NSFW Qwen by TheseAlpacas V2.safetensors",
+      "family": "qwen21",
+      "kind": "adult",
+      "label": "NSFW v2 (Qwen 2.1, TheseAlpacas)",
+      "strength": 0.85,
+      "range": [
+        0.7,
+        1.0
+      ],
+      "notes": "NSFW LoRA v2 under its published file name; the same file as NSFW Latest Lora. Fictional adults only.",
+      "steps": 25,
+      "cfg": 1.0,
+      "sampler": "er_sde",
+      "scheduler": "beta"
     },
     {
       "file": "qwen2.1角色卡-4.safetensors",

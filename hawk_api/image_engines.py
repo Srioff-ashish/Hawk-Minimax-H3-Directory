@@ -174,8 +174,13 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
 #: plain names to avoid importing local_images, which imports this module.
 DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
     "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
-    "qwen21": ("NSFW Qwen Lora.safetensors",),
+    "qwen21": ("NSFW Latest Lora.safetensors",),
     "zit": ("zit_mystic_xxx.safetensors",),
+}
+#: When none of a family's default adult LoRAs is installed, the first of these that is takes their place:
+#: NSFW LoRA v2 is published as "NSFW Qwen by TheseAlpacas V2" and v1 is the older pod's default.
+FALLBACK_ADULT_LORAS: dict[str, tuple[str, ...]] = {
+    "qwen21": ("NSFW Qwen by TheseAlpacas V2.safetensors", "NSFW Qwen Lora.safetensors"),
 }
 
 #: Attached to every image from this family, whatever else the request asks for -- unlike the adult
@@ -184,6 +189,10 @@ DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
 #: Mirrored in local_images.BASE_LORAS for the same reason as DEFAULT_ADULT_LORAS.
 BASE_LORAS: dict[str, tuple[tuple[str, float], ...]] = {
     "qwen21": (("qwen-image-2.1-fix-1.0-comfy.safetensors", 1.0),),
+}
+#: Newer releases of a base LoRA, best first: when one is installed it is attached in the base LoRA's place.
+BASE_LORA_UPGRADES: dict[str, tuple[str, ...]] = {
+    "qwen-image-2.1-fix-1.0-comfy.safetensors": ("qwen2.1-detail-fix-2.0.safetensors",),
 }
 
 #: The families that belong to images; everything else is a video LoRA.
@@ -452,10 +461,11 @@ class ImageEngineStore:
         if installed is None:
             return []
         stems = {str(name).rsplit("/", 1)[-1].lower().removesuffix(".safetensors") for name in installed}
+        stem = lambda name: name.rsplit("/", 1)[-1].lower().removesuffix(".safetensors")
         return [f"{family_label(family)} always attaches {name!r}, which is not installed: every image from it "
                 "is missing that LoRA. Put the file in models/loras or correct the name."
                 for family, entries in BASE_LORAS.items() for name, _ in entries
-                if name.rsplit("/", 1)[-1].lower().removesuffix(".safetensors") not in stems]
+                if not any(stem(n) in stems for n in (name, *BASE_LORA_UPGRADES.get(name, ())))]
 
     def view(self, installed: set[str] | None = None) -> dict:
         data = self.settings()

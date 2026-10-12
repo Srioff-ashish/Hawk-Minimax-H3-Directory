@@ -120,9 +120,13 @@ Reply with only JSON:
 "summary": "one sentence: what happened in these tiles"}}
 """
 
-REAL_PROMPT = ("Turn this manhwa panel into a realistic photograph of real adult people. Keep the composition, "
-               "camera angle, poses, expressions, clothing and setting exactly as drawn. Remove all speech bubbles, "
-               "captions and sound-effect lettering.")
+#: The opening the anime-to-real LoRAs were trained and published with (Anime to Realism, Civitai 2783657),
+#: then what this pipeline needs on top: adults, and no lettering.
+CONVERT_SENTENCE = ("Convert the anime image into a natural photorealistic live-action photograph while preserving the "
+                    "exact subject count, age category, identity-defining features, pose, composition, clothing, "
+                    "objects, background, lighting, and colors.")
+REAL_PROMPT = (CONVERT_SENTENCE + " Every person is an adult. Remove all speech bubbles, captions and sound-effect "
+               "lettering.")
 REAL_NEGATIVE = ("anime, cartoon, illustration, drawing, comic, manga, cel shading, line art, speech bubble, text, "
                  "letters, watermark, childlike, young-looking")
 
@@ -137,7 +141,7 @@ receives the attached manhwa panel as its canvas and must turn it into a realist
 moment. Look at the panel closely and describe exactly what is there, so nothing is lost or invented.
 
 Write "prompt" (80-180 words, plain English, no lists) that:
-- starts with "Turn this manhwa panel into a realistic photograph."
+- starts with exactly this sentence: "{convert}"
 - for each person, left to right: an adult age (20s, 30s...), gender, hair, face and expression, clothing (or
   what they wear or don't), pose, what they are doing, and any contact with another person. Use their roster
   names and looks below when they match.
@@ -1343,7 +1347,7 @@ class ManhwaManager:
         Returns {prompt, negative, model}, {skip} when someone in it reads as a minor, or {error}."""
         scene = (tile or {}).get("scene") or "(not catalogued)"
         given = context_text(context)
-        text = PANEL_PROMPT.format(roster=_roster_text(roster), scene=scene,
+        text = PANEL_PROMPT.format(roster=_roster_text(roster), scene=scene, convert=CONVERT_SENTENCE,
                                    context=f"\n{given}\nWhere the panel shows it, use these looks and this place.\n"
                                    if given else "")
         content = [{"type": "text", "text": text},

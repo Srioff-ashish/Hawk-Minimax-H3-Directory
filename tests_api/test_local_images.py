@@ -360,14 +360,43 @@ class BaseLoras(unittest.IsolatedAsyncioTestCase):
         _, used, _ = await self.resolve([self.FIX, self.NSFW], [{"name": self.NSFW, "strength": 0.6}])
         self.assertEqual(li.sampler_hint_for(used).sampler, "er_sde")
 
-    def test_a_chosen_lora_without_hints_still_keeps_the_automatic_ones_out(self):
-        # Pick a real LoRA and the automatic adult LoRA's sampler does not take over: the engine default applies.
+    def test_a_chosen_lora_without_hints_leaves_the_attached_adult_loras_sampler(self):
+        # Every manhwa conversion names Anime2Real, the realism LoRA and the age slider, none with sampler settings,
+        # while the automatic NSFW LoRA is still attached: it must keep its er_sde / beta / cfg 1, not run on euler.
         style = li.ImageLora(file="qwen21/qwen21_style.safetensors", kind="style", family="qwen21")
         nsfw = li.ImageLora(file=f"qwen21/{self.NSFW}", kind="adult", family="qwen21", sampler="er_sde", cfg=1.0,
                             automatic=True)
-        self.assertIsNone(li.sampler_hint_for([style, nsfw]))
+        self.assertIs(li.sampler_hint_for([style, nsfw]), nsfw)
         fix = li.ImageLora(file=f"qwen21/{self.FIX}", kind="other", family="qwen21")
         self.assertIs(li.sampler_hint_for([fix, nsfw]), nsfw, "the repair LoRA is not a choice")
+        mine = li.ImageLora(file="qwen21/qwen21_mine.safetensors", kind="style", family="qwen21", sampler="euler")
+        self.assertIs(li.sampler_hint_for([style, mine, nsfw]), mine, "a chosen LoRA's own settings still win")
+
+    async def test_nsfw_v2_is_the_default_with_v1_as_the_fallback(self):
+        v2 = "NSFW Latest Lora.safetensors"
+        names, _, _ = await self.resolve([self.FIX, self.NSFW, v2])
+        self.assertEqual(names, [self.FIX, v2])
+        names, _, _ = await self.resolve([self.FIX, self.NSFW])
+        self.assertEqual(names, [self.FIX, self.NSFW], "a pod with only v1 still gets an adult default")
+        names, _, _ = await self.resolve([self.FIX, "NSFW Qwen by TheseAlpacas V2.safetensors", self.NSFW])
+        self.assertEqual(names, [self.FIX, "NSFW Qwen by TheseAlpacas V2.safetensors"], "v2 under its published name")
+
+    async def test_fix_v2_replaces_v1_when_installed(self):
+        v2 = "qwen2.1-detail-fix-2.0.safetensors"
+        names, _, warnings = await self.resolve([self.FIX, v2, self.NSFW])
+        self.assertEqual((names, warnings), ([v2, self.NSFW], []))
+        names, _, warnings = await self.resolve([v2, self.NSFW])
+        self.assertEqual((names, warnings), ([v2, self.NSFW], []), "v2 alone is not 'missing the repair LoRA'")
+        self.assertEqual(ie.ImageEngineStore.missing_base_loras({v2}), [])
+
+    def test_the_catalogue_matches_civitai(self):
+        items = {i.file: i for i in li.load_catalogue(li.EXAMPLE_LORAS)}
+        self.assertEqual(items["lenovo_qwen21.safetensors"].trigger, "", "l3n0v0 is the Z-Image version's trigger")
+        self.assertEqual(items["Anime2Real_LAtest.safetensors"].strength, 0.8)
+        v2 = items["NSFW Latest Lora.safetensors"]
+        self.assertEqual((v2.kind, v2.sampler, v2.scheduler, v2.steps), ("adult", "er_sde", "beta", 25))
+        self.assertEqual((li.QWEN21_STEPS, li.QWEN21_CFG, li.QWEN21_SAMPLER, li.QWEN21_SCHEDULER),
+                         (25, 1.0, "euler", "simple"), "ComfyUI's official Qwen Image 2.1 template")
 
     async def test_a_missing_one_warns_instead_of_vanishing(self):
         # a name that matches nothing attaches nothing and raises nothing, so this warning is the only

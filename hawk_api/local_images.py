@@ -3,7 +3,7 @@
 Three engines, each with its own graph and its own LoRA family, because a file or an encoder
 type from one produces nonsense in another rather than an error:
 
-* **Qwen Image 2.1** -- the lead engine. 30 steps at cfg 2.0 on euler / simple, encoder type
+* **Qwen Image 2.1** -- the lead engine. 25 steps at cfg 1.0 on euler / simple (ComfyUI's official template), encoder type
   "qwen_image". Edits take up to sixteen references through one TextEncodeQwenImage21 node.
 * **Krea 2 Turbo** -- 8 steps at cfg 1, encoder type "krea2". Edits through Krea 2 Identity
   Edit, which needs the comfyui-krea2edit node pack and takes at most two references.
@@ -68,7 +68,10 @@ LOCAL_MODELS: dict[str, dict] = {
 }
 #: Qwen Image 2.1's own defaults, from the reference ComfyUI workflows. A LoRA in the catalogue may override
 #: any of them -- the NSFW one wants 25 steps at cfg 1 on er_sde/beta, which is why ImageLora carries a cfg.
-QWEN21_STEPS, QWEN21_CFG = 30, 2.0
+# ComfyUI's official Qwen-Image-2.1 templates: 25 steps, cfg 1 ("the path Qwen-Image-2.1 is published for"),
+# euler / simple. cfg 2 over-sharpens edges; at cfg 1 the negative prompt is skipped, so raise cfg per request to
+# use one. A LoRA with its own sampler settings (the NSFW LoRAs: er_sde / beta) overrides these.
+QWEN21_STEPS, QWEN21_CFG = 25, 1.0
 QWEN21_SAMPLER, QWEN21_SCHEDULER = "euler", "simple"
 QWEN21_EDIT_RESOLUTION = 1024
 QWEN21_MAX_REFS = 16  # TextEncodeQwenImage21 has image_1 .. image_16 and no more
@@ -119,15 +122,22 @@ def _sampler_hint(items: list) -> "ImageLora | None":
 
 
 def sampler_hint_for(used: list) -> "ImageLora | None":
-    """Whose sampler settings an image runs on: the LoRAs the request chose, else everything attached.
+    """Whose sampler settings an image runs on: the first LoRA the request chose that has any, else the first
+    attached one that has any.
 
     An always-on repair LoRA named only to set its strength is not a choice. Counting it as one made the request's
     LoRAs the only source of hints, it has none, and the automatic NSFW Qwen LoRA then ran at Qwen's cfg 2 -- which
-    it cannot take: blurred images blotched magenta and green. Picking a real LoRA still keeps the automatic adult
-    pair's hints out, as before."""
+    it cannot take: blurred images blotched magenta and green. The same happened whenever the request named LoRAs
+    without opinions (Anime2Real, the realism LoRA, the age slider -- every manhwa conversion): the automatic adult
+    LoRA was still attached, and still sampled on settings it breaks on. A chosen LoRA's hints win; when none has
+    any, an attached LoRA that names the guidance it needs brings its settings -- guidance is what breaks a LoRA.
+    One that only prefers a step count or scheduler (Krea 2's Mystic XXX) does not take over a request's choice."""
     base = {_stem(name) for entries in BASE_LORAS.values() for name, _ in entries}
+    base |= {_stem(name) for names in image_engines.BASE_LORA_UPGRADES.values() for name in names}
     chosen = [item for item in used if not item.automatic and _stem(item.file) not in base]
-    return _sampler_hint(chosen or used)
+    if chosen:
+        return _sampler_hint(chosen) or next((item for item in used if item.automatic and item.cfg is not None), None)
+    return _sampler_hint(used)
 
 
 def _stem(value) -> str:
@@ -205,7 +215,7 @@ ADULT_STRENGTH_WARN = 2.0  # combined adult LoRA strength above this tends to ov
 #: fallback: Studio's defaults panel overrides them per family, and an empty list there switches them off.
 DEFAULT_ADULT_LORAS: dict[str, tuple[str, ...]] = {
     "krea2": ("snofs_krea2.safetensors", "krea2_mystic_xxx_v3.safetensors"),
-    "qwen21": ("NSFW Qwen Lora.safetensors",),
+    "qwen21": ("NSFW Latest Lora.safetensors",),
     "zit": ("zit_mystic_xxx.safetensors",),
 }
 #: Per family, attached to every image whatever else was asked for. Unlike the adult defaults above, a
@@ -396,7 +406,7 @@ def _negative_node(text: str, positive: list, clip_node: str = "2") -> dict:
 
     Empty means ConditioningZeroOut, which is what every graph did before there was a field for this. Note that
     at cfg 1.0 the guider collapses to the positive term, so a negative prompt is inert on Krea 2 Turbo and
-    Z-Image, and only does anything on an engine that samples above cfg 1 -- Qwen Image 2.1 at cfg 2.0.
+    Z-Image, and only does anything on an engine that samples above cfg 1 -- Qwen Image 2.1 when a request raises cfg.
     """
     if not text.strip():
         return {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": positive}}
@@ -820,8 +830,10 @@ class LocalImageEngine:
                 requested.append(dict(entry))
                 taken.add(target)
 
-        # Always-on repair LoRAs, attached first and *not* displaced by a request naming its own adult LoRA.
-        base = BASE_LORAS.get(family, ())
+        # Always-on repair LoRAs, attached first and *not* displaced by a request naming its own adult LoRA. A newer
+        # release of one (Qwen 2.1 Fix v2.0) is attached in its place when it is installed.
+        base = tuple((next((up for up in image_engines.BASE_LORA_UPGRADES.get(name, ()) if resolved_file(up)), name),
+                      strength) for name, strength in BASE_LORAS.get(family, ()))
         attach([{"name": name, "strength": strength} for name, strength in base])
         # A name that does not match any installed file attaches nothing and says nothing, so the only place
         # a typo in an always-on LoRA can surface is here.
@@ -830,7 +842,13 @@ class LocalImageEngine:
                     for name, _ in base if not any(_same_lora(i.file, name) for i in items)]
         if adult_default and not names_adult:
             stored = self.service.image_engines.defaults(family)
-            wanted = stored if stored is not None else [{"name": n} for n in DEFAULT_ADULT_LORAS.get(family, ())]
+            if stored is not None:
+                wanted = stored
+            else:
+                names = [n for n in DEFAULT_ADULT_LORAS.get(family, ()) if resolved_file(n)]
+                if not names:  # NSFW v2 under its published name, or the older v1
+                    names = [n for n in image_engines.FALLBACK_ADULT_LORAS.get(family, ()) if resolved_file(n)][:1]
+                wanted = [{"name": n} for n in names]
             attach(wanted)
         if not requested:
             return [], [], warnings
