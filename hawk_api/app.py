@@ -31,7 +31,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -335,6 +335,28 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                     max_panels=body.max_panels, plan_after=body.plan_after, analyze=body.analyze,
                                     prompt_model=body.prompt_model, steps=body.steps, cfg=body.cfg,
                                     negative=body.negative)
+
+    @app.post("/v1/manhwa/pipelines", tags=["manhwa"], status_code=202)
+    async def manhwa_pipeline(body: ManhwaPipelineIn):
+        """Autopilot: catalogue the chapter(s) at url, make their photographs, plan and render their videos, with
+        the saved Photograph and Video settings. Poll GET /v1/manhwa/pipelines/{id}."""
+        return await manhwa.start_pipeline(body.url, body.series, body.chapter, cookies=body.cookies,
+                                           follow_next=body.follow_next, max_chapters=body.max_chapters,
+                                           context=body.context.model_dump() if body.context else None,
+                                           render=body.render)
+
+    @app.get("/v1/manhwa/pipelines", tags=["manhwa"])
+    async def manhwa_pipelines():
+        return {"pipelines": manhwa.recent_pipelines()}
+
+    @app.get("/v1/manhwa/pipelines/{pipeline_id}", tags=["manhwa"])
+    async def manhwa_pipeline_get(pipeline_id: str):
+        return manhwa.pipeline(pipeline_id)
+
+    @app.post("/v1/manhwa/pipelines/{pipeline_id}/cancel", tags=["manhwa"])
+    async def manhwa_pipeline_cancel(pipeline_id: str):
+        """Stop the autopilot and the step it is on. Videos already queued keep rendering; cancel them in Jobs."""
+        return await manhwa.cancel_pipeline(pipeline_id)
 
     @app.post("/v1/manhwa/chapters/{chapter_id}/render", tags=["manhwa"], status_code=202)
     async def manhwa_render(chapter_id: str, body: ManhwaRenderIn):

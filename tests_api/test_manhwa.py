@@ -857,3 +857,84 @@ class VideoSettings(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             ManhwaSettingsIn(render={"continuity": "sideways"})
         self.assertEqual(ManhwaSettingsIn(render={"steps": 8}).render, {"steps": 8})
+
+
+class PipelineService(RenderService):
+    """Plans are written at once (or fail once, for the parts in fail_plans); videos finish when finish_videos."""
+
+    def __init__(self, tmp):
+        super().__init__(tmp)
+        self.fail_plans: set[int] = set()
+        self.retried: list[str] = []
+        self.finish_videos = True
+
+    async def create_plan(self, request):
+        job = await super().create_plan(request)
+        failing = len(self.plans) in self.fail_plans
+        self.jobs[job["id"]]["status"] = "failed" if failing else "done"
+        return job
+
+    async def retry(self, job_id):
+        self.retried.append(job_id)
+        self.jobs[job_id]["status"] = "done"
+        return self.jobs[job_id]
+
+    async def create_video(self, request):
+        job = await super().create_video(request)
+        if self.finish_videos:
+            job["status"] = "done"
+        return job
+
+
+class Autopilot(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_auto_")
+        self.service = PipelineService(self.tmp)
+        self.site = Site()
+        self.manager = ManhwaManager(self.service, transport=httpx.MockTransport(self.site.handler), delay=(0, 0))
+        self.manager.poll = 0.01
+        self.manager.busy_wait = 0
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    async def finish(self, state, seconds=30):
+        for _ in range(int(seconds / 0.05)):
+            if state["status"] != "running":
+                return state
+            await asyncio.sleep(0.05)
+        self.fail(f"autopilot still running: {state}")
+
+    async def test_url_to_videos_with_no_further_input(self):
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series",
+                                                  follow_next=True, max_chapters=2,
+                                                  context={"setting": "a rooftop at dusk", "one_scene": True})
+        await self.finish(state)
+        self.assertEqual(state["status"], "done", state)
+        self.assertEqual([c["stage"] for c in state["chapters"]], ["done", "done"], state["chapters"])
+        self.assertEqual(len(self.service.videos), 2, "one render per chapter's plan")
+        self.assertTrue(self.service.calls, "photographs were made")
+        first = self.manager.store.get_chapter(state["chapters"][0]["chapter_id"])
+        self.assertEqual(first["context"]["setting"], "a rooftop at dusk")
+        self.assertIn("one continuous scene", self.service.plans[0].story)
+
+    async def test_a_failed_plan_is_retried_once_and_render_can_be_off(self):
+        self.service.fail_plans = {1}
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series",
+                                                  render=False)
+        await self.finish(state)
+        self.assertEqual(state["chapters"][0]["stage"], "planned", state)
+        self.assertEqual(len(self.service.retried), 1)
+        self.assertEqual(self.service.videos, [])
+
+    async def test_one_at_a_time_and_stop(self):
+        self.service.finish_videos = False
+        state = await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series")
+        with self.assertRaises(Exception):
+            await self.manager.start_pipeline("https://read.example/series/test/chapter-1", "Test Series")
+        for _ in range(600):
+            if state["stage"] == "waiting for videos":
+                break
+            await asyncio.sleep(0.05)
+        await self.manager.cancel_pipeline(state["id"])
+        self.assertEqual(state["status"], "cancelled")

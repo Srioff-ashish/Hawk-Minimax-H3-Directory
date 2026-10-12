@@ -132,6 +132,8 @@
   .mh-hit { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
   .mh-hit img { width: 96px; height: 128px; object-fit: cover; object-position: top; border-radius: 6px; background: var(--surface-3); }
   .mh-hit p { margin: 4px 0 0; font-size: 13px; }
+  .mh-auto { display: grid; gap: 6px; }
+  .mh-auto .row { gap: 8px; font-size: 13px; }
   .mh-context { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; background: var(--surface); }
   .mh-context summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
   .mh-loras { display: grid; gap: 6px; }
@@ -1026,7 +1028,22 @@
                 <label class="check"><input type="checkbox" id="mhFollow">Keep going to next chapters</label>
                 <label class="check">up to <input class="input" id="mhMax" type="number" min="1" max="50" value="5" style="width:70px;height:30px"> chapters</label>
                 <div class="spacer"></div>
-                <button class="btn btn-primary" type="submit" id="mhStart">Catalogue</button>
+                <button class="btn" type="submit" id="mhStart" title="Catalogue only">Catalogue</button>
+                <button class="btn btn-primary" type="button" id="mhAutoStart" title="Catalogue, make photographs, plan and render the video, with the saved Photograph and Video settings">Run autopilot</button>
+              </div>
+              <details class="mh-context" id="mhAutoOptions"><summary>Autopilot options <span class="hint">— scene context for the chapters, and whether to render</span></summary>
+                <div class="grid" style="margin-top:8px">
+                  <label class="field"><span class="label">Characters <span class="hint">who, and how they look</span></span><textarea class="textarea" rows="2" style="min-height:56px" id="mhAutoCharacters" maxlength="2000"></textarea></label>
+                  <label class="field"><span class="label">Setting <span class="hint">where and when, the light</span></span><textarea class="textarea" rows="2" style="min-height:56px" id="mhAutoSetting" maxlength="2000"></textarea></label>
+                  <label class="field"><span class="label">Action <span class="hint">what happens</span></span><textarea class="textarea" rows="2" style="min-height:56px" id="mhAutoAction" maxlength="2000"></textarea></label>
+                  <div class="row"><label class="check"><input type="checkbox" id="mhAutoOneScene">Each chapter is one continuous scene</label>
+                    <label class="check"><input type="checkbox" id="mhAutoRender" checked>Render the videos</label></div>
+                </div>
+              </details>
+              <div id="mhAuto" hidden style="display:grid;gap:6px">
+                <div class="row"><span class="badge" id="mhAutoBadge"></span><strong>Autopilot</strong><span class="hint" id="mhAutoStage"></span><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhAutoCancel">Stop</button></div>
+                <div class="mh-auto" id="mhAutoChapters"></div>
+                <div class="hint" id="mhAutoErrors"></div>
               </div>
               <div id="mhRun" hidden style="display:grid;gap:6px">
                 <div class="row"><span class="badge" id="mhRunBadge"></span><span class="hint" id="mhRunText"></span><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhCancel">Cancel</button></div>
@@ -1667,7 +1684,7 @@
     if (page === "library") renderLibrary();
     if (BILLING_PAGES[page] && (PREFIX || token)) loadBilling(page);
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
-    if (page === "manhwa" && (PREFIX || token)) { loadManhwa(); mhLoadSettings(); }
+    if (page === "manhwa" && (PREFIX || token)) { loadManhwa(); mhLoadSettings(); mhAutoResume(); }
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
@@ -1790,6 +1807,72 @@
     $("mhSeriesPick").innerHTML = series.map((s) => `<option value="${esc(s.series)}">${esc(s.series)} (${s.done}/${s.chapters})</option>`).join("");
     $("mhSeriesPick").value = manhwa.series;
     await mhShowSeries();
+  }
+
+  // ------------------------------------------------ autopilot: catalogue -> photographs -> plans -> videos
+  manhwa.auto = storage.get("hawkH3ManhwaAuto") || null;
+
+  $("mhAutoStart").onclick = async () => {
+    if (!$("mhForm").reportValidity()) return;
+    const context = { characters: $("mhAutoCharacters").value, setting: $("mhAutoSetting").value,
+                      action: $("mhAutoAction").value, one_scene: $("mhAutoOneScene").checked };
+    $("mhAutoStart").disabled = true;
+    try {
+      const auto = await post("/v1/manhwa/pipelines", {
+        url: $("mhUrl").value.trim(), series: $("mhSeries").value.trim(), chapter: $("mhChapter").value.trim(),
+        cookies: $("mhCookies").value.trim(), follow_next: $("mhFollow").checked,
+        max_chapters: $("mhFollow").checked ? Math.max(1, Math.min(50, Number($("mhMax").value) || 5)) : 1,
+        render: $("mhAutoRender").checked,
+        context: (context.characters || context.setting || context.action || context.one_scene) ? context : null,
+      });
+      manhwa.auto = auto.id; storage.set("hawkH3ManhwaAuto", auto.id);
+      mhAutoShow(auto);
+      toast("Autopilot started", "Catalogue → photographs → plans → videos, with your saved settings");
+    } catch (error) { toast("Could not start", error.message, "bad"); }
+    finally { $("mhAutoStart").disabled = false; }
+  };
+
+  $("mhAutoCancel").onclick = async () => {
+    if (!manhwa.auto) return;
+    try { mhAutoShow(await post(`/v1/manhwa/pipelines/${manhwa.auto}/cancel`, {})); toast("Autopilot stopped", "Everything made so far is kept; queued videos keep rendering."); }
+    catch (error) { toast("Could not stop", error.message, "bad"); }
+  };
+
+  $("mhAutoChapters").addEventListener("click", (event) => {
+    const job = event.target.closest("[data-open-job]");
+    if (job && state.jobs.has(job.dataset.openJob)) { event.preventDefault(); openDrawer(job.dataset.openJob); }
+    const open = event.target.closest("[data-auto-chapter]");
+    if (open) { event.preventDefault(); mhOpenChapter(open.dataset.autoChapter); }
+  });
+
+  function mhAutoShow(auto) {
+    clearTimeout(manhwa.autoTimer);
+    $("mhAuto").hidden = false;
+    $("mhAutoBadge").className = `badge ${auto.status === "running" ? "rendering" : auto.status}`;
+    $("mhAutoBadge").textContent = auto.status;
+    $("mhAutoStage").textContent = `${auto.series} · ${auto.stage}`;
+    $("mhAutoCancel").hidden = auto.status !== "running";
+    const link = (id, label) => `<a href="#jobs" data-open-job="${esc(id)}">${label}${(state.jobs.get(id) || {}).status ? ` (${esc(state.jobs.get(id).status)})` : ""}</a>`;
+    $("mhAutoChapters").innerHTML = (auto.chapters || []).map((c) => `<div class="row"><a href="#manhwa" data-auto-chapter="${esc(c.chapter_id)}"><strong>ch ${esc(c.chapter || "?")}</strong></a>`
+      + `<span class="badge ${c.stage === "done" ? "done" : c.stage === "failed" || c.stage === "skipped" ? "failed" : "rendering"}">${esc(c.stage)}</span>`
+      + `<span class="hint">${(c.plans || []).map((p) => link(p.job_id, `plan ${p.part}`)).join(" · ")}${(c.renders || []).length ? " → " + c.renders.map((j, i) => link(j, `video ${i + 1}`)).join(" · ") : ""}</span>`
+      + (c.error ? `<span class="hint" style="color:var(--bad)">${esc(c.error)}</span>` : "") + `</div>`).join("")
+      || `<span class="hint">Cataloguing…</span>`;
+    $("mhAutoErrors").textContent = (auto.errors || []).slice(-3).join(" · ");
+    if (auto.status === "running") {
+      manhwa.autoTimer = setTimeout(async () => {
+        try { mhAutoShow(await api(`/v1/manhwa/pipelines/${auto.id}`)); }
+        catch (error) { if (error.status === 404) { manhwa.auto = null; storage.set("hawkH3ManhwaAuto", ""); $("mhAuto").hidden = true; } else manhwa.autoTimer = setTimeout(() => mhAutoShow(auto), 10000); }
+      }, 5000);
+    }
+  }
+
+  async function mhAutoResume() {
+    try {
+      const { pipelines } = await api("/v1/manhwa/pipelines");
+      const live = pipelines.find((p) => p.status === "running") || pipelines.find((p) => p.id === manhwa.auto);
+      if (live) { manhwa.auto = live.id; storage.set("hawkH3ManhwaAuto", live.id); mhAutoShow(live); }
+    } catch { /* an older server without the autopilot */ }
   }
 
   $("mhForm").onsubmit = async (event) => {

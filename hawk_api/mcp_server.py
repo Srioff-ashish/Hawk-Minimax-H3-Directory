@@ -16,7 +16,7 @@ from hawk_h3.script import max_segment_seconds
 
 from . import pose_guide as pose_guides
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
-from .schemas import ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
+from .schemas import ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 INSTRUCTIONS = """\
 Hawk H3 Director renders MiniMax H3 videos with native audio on the user's GPU pod, one clip or a long film of joined segments.
@@ -417,6 +417,39 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
                                              plan_after=plan_after, analyze=analyze, prompt_model=prompt_model,
                                              steps=steps, cfg=cfg, negative=negative))
             return await manhwa.wait_conversion(state["id"], max(0, min(wait_seconds, 120)))
+
+        @mcp.tool(description=(
+            "Autopilot for the whole manhwa pipeline, no further input needed: catalogue the chapter at url (and the "
+            "next ones with follow_next, up to max_chapters), make every panel's photograph, plan each chapter's "
+            "video and render it, using the Manhwa page's saved Photograph and Video settings. context "
+            "{characters, setting, action, one_scene} is given to chapters that have none. render=false stops after "
+            "the plans. One autopilot at a time. Returns its state; poll get_manhwa_pipeline."))
+        async def run_manhwa_pipeline(url: str, series: str, chapter: str = "", follow_next: bool = False,
+                                      max_chapters: int = 1, cookies: str = "", context: dict | None = None,
+                                      render: bool = True) -> dict:
+            try:
+                body = ManhwaPipelineIn(url=url, series=series, chapter=chapter, follow_next=follow_next,
+                                        max_chapters=max_chapters, cookies=cookies, context=context, render=render)
+            except ValueError as exc:
+                raise ToolError(str(exc).splitlines()[0]) from None
+            return await run(manhwa.start_pipeline(body.url, body.series, body.chapter, cookies=body.cookies,
+                                                   follow_next=body.follow_next, max_chapters=body.max_chapters,
+                                                   context=body.context.model_dump() if body.context else None,
+                                                   render=body.render))
+
+        @mcp.tool(description="Progress of a manhwa autopilot: stage, and per chapter its stage (photographs, planning, rendering, done, failed), conversion id, plan and video job ids, and any error.")
+        async def get_manhwa_pipeline(pipeline_id: str) -> dict:
+            try:
+                return manhwa.pipeline(pipeline_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
+
+        @mcp.tool(description="Stop a manhwa autopilot and the step it is on. Everything made so far is kept; videos already queued keep rendering.")
+        async def cancel_manhwa_pipeline(pipeline_id: str) -> dict:
+            try:
+                return await manhwa.cancel_pipeline(pipeline_id)
+            except NotFound as exc:
+                raise ToolError(str(exc)) from None
 
         @mcp.tool(description=(
             "Render a manhwa chapter's video: one render job per finished video plan (from plan_manhwa_video or a "

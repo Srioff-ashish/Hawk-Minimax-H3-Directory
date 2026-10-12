@@ -73,6 +73,10 @@ SETTINGS_DEFAULTS = {
 }
 #: Render settings the Manhwa page sets elsewhere: aspect_ratio and segment_seconds above.
 RENDER_OWN_KEYS = ("aspect_ratio", "default_seconds")
+#: Autopilot: how long it waits on the slow steps before giving up on them, and how often it looks.
+PIPELINE_POLL = 5.0
+PLAN_WAIT = 30 * 60
+RENDER_WAIT = 12 * 3600
 PLAN_PICTURES = 9  # a render takes at most nine pictures, so a chapter is planned in parts this size
 PLAN_SEGMENT_SECONDS = 10.0
 
@@ -644,6 +648,9 @@ class ManhwaManager:
         self.settings_path = os.path.join(os.path.dirname(os.path.abspath(self.store_path(service))),
                                           "manhwa_settings.json")
         self.conversions: dict[str, dict] = {}
+        self.pipelines: dict[str, dict] = {}
+        self._pipeline_tasks: dict[str, asyncio.Task] = {}
+        self.poll = PIPELINE_POLL
         self._convert_tasks: dict[str, asyncio.Task] = {}
         self.busy_wait = BUSY_WAIT
 
@@ -797,12 +804,195 @@ class ManhwaManager:
         return self.get(run_id)
 
     async def stop(self) -> None:
-        tasks = list(self._tasks.values()) + list(self._convert_tasks.values())
+        tasks = list(self._tasks.values()) + list(self._convert_tasks.values()) + list(self._pipeline_tasks.values())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
     # ----------------------------------------------------------------- photographs from panels
+
+    # ----------------------------------------------------------------- autopilot: the whole pipeline
+
+    async def start_pipeline(self, url: str, series: str, chapter: str = "", *, cookies: str = "",
+                             follow_next: bool = False, max_chapters: int = 1, context: dict | None = None,
+                             render: bool = True) -> dict:
+        """Catalogue the chapter(s) at url, make their photographs, plan their videos and render them, with the
+        Manhwa page's saved Photograph and Video settings and no further input. Poll pipeline()."""
+        for other in self.pipelines.values():
+            if other["status"] == "running":
+                raise RequestError(f"Autopilot {other['id']} is still running ({other['series']}). Cancel it or "
+                                   "wait for it to finish.", {"pipeline_id": other["id"]})
+        if not re.match(r"^https?://", (url or "").strip()):
+            raise RequestError("Give the chapter's http(s) URL.")
+        if not " ".join((series or "").split()):
+            raise RequestError("Give the series name.")
+        state = {
+            "id": uuid.uuid4().hex[:12], "status": "running", "series": series.strip(), "url": url.strip(),
+            "follow_next": bool(follow_next), "max_chapters": max(1, min(int(max_chapters or 1), MAX_CHAPTERS)),
+            "render": bool(render), "stage": "cataloguing", "run_id": "", "chapters": [], "errors": [],
+            "cancel_requested": False, "created_at": time.time(), "finished_at": None,
+        }
+        self.pipelines[state["id"]] = state
+        self._pipeline_tasks[state["id"]] = asyncio.create_task(
+            self._pipeline(state, (chapter or "").strip(), (cookies or "").strip(), context or {}))
+        return state
+
+    def pipeline(self, pipeline_id: str) -> dict:
+        state = self.pipelines.get(pipeline_id)
+        if state is None:
+            raise NotFound(f"No autopilot {pipeline_id!r} (forgotten when the API restarts; its chapters, "
+                           "photographs and videos are kept).")
+        return state
+
+    def recent_pipelines(self) -> list[dict]:
+        return sorted(self.pipelines.values(), key=lambda s: s["created_at"], reverse=True)[:20]
+
+    async def cancel_pipeline(self, pipeline_id: str) -> dict:
+        """Stop the autopilot and whatever step it is on. Renders already queued keep going (cancel them in Jobs);
+        everything made so far is kept."""
+        state = self.pipeline(pipeline_id)
+        if state["status"] == "running":
+            state["cancel_requested"] = True
+            task = self._pipeline_tasks.get(pipeline_id)
+            if task is not None:
+                task.cancel()
+                await asyncio.wait([task], timeout=30)
+        return state
+
+    async def _pipeline(self, state: dict, chapter: str, cookies: str, context: dict) -> None:
+        try:
+            # 1. catalogue every chapter first: it needs no GPU, and the list of chapters is known after it
+            run = await self.start(state["url"], state["series"], chapter, cookies=cookies,
+                                   follow_next=state["follow_next"], max_chapters=state["max_chapters"])
+            state["run_id"], state["series"] = run["id"], run["series"]
+            while run["status"] == "running":
+                await asyncio.sleep(self.poll)
+            if run["errors"]:
+                state["errors"] += [f"catalogue: {e}" for e in run["errors"][-3:]]
+            ids = list(dict.fromkeys(run["chapter_ids"] + [s["id"] for s in run["skipped"]]))
+            for chapter_id in ids:
+                row = self.store.get_chapter(chapter_id) or {}
+                state["chapters"].append({"chapter_id": chapter_id, "chapter": row.get("chapter", ""),
+                                          "stage": "catalogued" if row.get("status") == "done" else "skipped",
+                                          "conversion_id": "", "plans": [], "renders": [], "error":
+                                          "" if row.get("status") == "done" else f"catalogue {row.get('status')}"})
+            work = [c for c in state["chapters"] if c["stage"] == "catalogued"]
+            if not work:
+                raise RequestError(run["stop_reason"] or "No chapter was catalogued.")
+
+            # 2. photographs, then the plans (LLM only) while the next chapter converts on the GPU
+            for item in work:
+                state["stage"] = f"photographs: ch {item['chapter']}"
+                if context and not (self.store.get_chapter(item["chapter_id"]) or {}).get("context"):
+                    self.set_context(item["chapter_id"], context)
+                if self.shots(item["chapter_id"]):
+                    item["stage"] = "photographs (already made)"
+                else:
+                    item["stage"] = "photographs"
+                    conversion = await self.convert(item["chapter_id"], plan_after=False)
+                    item["conversion_id"] = conversion["id"]
+                    while conversion["status"] == "running":
+                        await asyncio.sleep(self.poll)
+                    if not conversion["converted"]:
+                        item.update(stage="failed", error="No photographs were made: " + "; ".join(
+                            [r.get("error", "") for r in conversion["results"] if r.get("error")][:2]
+                            + conversion["errors"][:1])[:400])
+                        continue
+                existing = (self.store.get_chapter(item["chapter_id"]) or {}).get("plans") or []
+                usable = [p for p in existing if (self.service.store.get_job(p["job_id"]) or {}).get("status")
+                          in ("planning", "queued", "done")]
+                if existing and len(usable) == len(existing):
+                    item["plans"] = existing
+                else:
+                    item["plans"] = (await self.plan_chapter(item["chapter_id"]))["plans"]
+                item["stage"] = "planning"
+
+            # 3. render each chapter as soon as all its plans are written
+            if state["render"]:
+                for item in work:
+                    if item["stage"] != "planning":
+                        continue
+                    state["stage"] = f"waiting for plans: ch {item['chapter']}"
+                    if not await self._wait_plans(item):
+                        continue
+                    state["stage"] = f"rendering: ch {item['chapter']}"
+                    out = await self.render_chapter(item["chapter_id"])
+                    item["renders"] = [r["job_id"] for r in out["started"] + out["already"]]
+                    item["stage"] = "rendering" if item["renders"] else "failed"
+                    if not item["renders"]:
+                        item["error"] = "No plan could be rendered."
+
+                # 4. watch the videos until they are finished
+                state["stage"] = "waiting for videos"
+                deadline = time.monotonic() + RENDER_WAIT
+                while time.monotonic() < deadline:
+                    pending = False
+                    for item in work:
+                        if item["stage"] != "rendering":
+                            continue
+                        jobs = [self.service.store.get_job(j) or {} for j in item["renders"]]
+                        if any(j.get("status") in ("queued", "rendering", "planning") for j in jobs):
+                            pending = True
+                            continue
+                        failed = [j.get("id", "?") for j in jobs if j.get("status") != "done"]
+                        item["stage"] = "done" if not failed else "failed"
+                        if failed:
+                            item["error"] = f"Video job(s) {', '.join(failed)} did not finish."
+                    if not pending:
+                        break
+                    await asyncio.sleep(self.poll * 6)
+            else:
+                for item in work:
+                    if item["stage"] == "planning" and await self._wait_plans(item):
+                        item["stage"] = "planned"
+            state["stage"] = "finished"
+            state["status"] = "done"
+        except asyncio.CancelledError:
+            state["status"] = "cancelled"
+            state["stage"] = "cancelled"
+            for run_id in [state.get("run_id")]:
+                if run_id and self.runs.get(run_id, {}).get("status") == "running":
+                    self.cancel(run_id)
+            for item in state["chapters"]:
+                conversion = self.conversions.get(item.get("conversion_id"))
+                if conversion and conversion["status"] == "running":
+                    self.cancel_conversion(conversion["id"])
+            raise
+        except Exception as exc:
+            log.exception("manhwa autopilot %s failed", state["id"])
+            state["status"] = "failed"
+            state["errors"].append(f"{type(exc).__name__}: {exc}"[:500])
+        finally:
+            state["finished_at"] = time.time()
+            self._pipeline_tasks.pop(state["id"], None)
+
+    async def _wait_plans(self, item: dict) -> bool:
+        """Wait for a chapter's plan jobs; a failed one is retried once. False when none can be rendered."""
+        retried: set[str] = set()
+        deadline = time.monotonic() + PLAN_WAIT
+        while time.monotonic() < deadline:
+            statuses = {}
+            for plan in item["plans"]:
+                job = self.service.store.get_job(plan["job_id"]) or {}
+                status = job.get("status", "missing")
+                if status in ("failed", "cancelled") and plan["job_id"] not in retried:
+                    retried.add(plan["job_id"])
+                    try:
+                        await self.service.retry(plan["job_id"])
+                        status = "planning"
+                    except Exception as exc:
+                        item["error"] = f"plan retry: {exc}"[:300]
+                statuses[plan["job_id"]] = status
+            if all(s in ("done", "failed", "cancelled", "missing") for s in statuses.values()):
+                done = [j for j, s in statuses.items() if s == "done"]
+                if len(done) < len(statuses):
+                    item["error"] = f"{len(statuses) - len(done)} of {len(statuses)} plan(s) failed after a retry."
+                if not done:
+                    item["stage"] = "failed"
+                return bool(done)
+            await asyncio.sleep(self.poll)
+        item.update(stage="failed", error="The plans were not written within 30 minutes.")
+        return False
 
     @staticmethod
     def store_path(service) -> str:

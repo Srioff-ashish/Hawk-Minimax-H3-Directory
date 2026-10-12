@@ -388,6 +388,17 @@ class ManhwaRenderIn(BaseModel):
                            "(aspect ratio and segment length from the Photograph settings), e.g. {\"unet_name\": \"beta6\"}.")
 
 
+class ManhwaPipelineIn(BaseModel):
+    url: str = Field(description="The first chapter's reader page URL.")
+    series: str = Field(description="Series name.")
+    chapter: str = Field("", description="Chapter number for the first chapter. Blank: from the URL or page title.")
+    cookies: str = Field("", description="Optional Cookie header for a site you are logged in to.")
+    follow_next: bool = Field(False, description="Also do the next chapters, following the page's 'next' link.")
+    max_chapters: int = Field(1, ge=1, le=50, description="With follow_next: how many chapters in all.")
+    context: ManhwaContextIn | None = Field(None, description="Scene context for every chapter that has none yet.")
+    render: bool = Field(True, description="Render the videos; false stops after the plans are written.")
+
+
 class ManhwaPlanIn(BaseModel):
     aspect_ratio: AspectRatio | None = Field(None, description="Default from the Manhwa settings (9:16).")
     segment_seconds: float | None = Field(None, ge=1, le=15)
