@@ -32,17 +32,17 @@ from dataclasses import dataclass, field
 
 MODEL_REPO = "Comfy-Org/MiniMax-H3"
 
+#: label -> (path in the repo, size GB[, repo, folder under models]). Only what the notebook downloads now: the
+#: pruned bf16 ref2va base and 10Eros-Max's beta5 TURBO hybrid (a turbo distill baked in, reads references too).
 DIFFUSION_MODELS = {
-    "ref2va pruned int8 (21 GB, recommended)": ("diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors", 20.97),
-    "ref2va pruned fp8 (21 GB)": ("diffusion_models/minimax_h3_ref2va_pruned_fp8_scaled.safetensors", 20.96),
-    "ref2va pruned bf16 (40 GB)": ("diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors", 40.23),
-    "ref2va full int8 (34 GB)": ("diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors", 34.04),
-    "ref2va full bf16 (66 GB)": ("diffusion_models/minimax_h3_ref2va_bf16.safetensors", 66.28),
+    "ref2va pruned bf16 (40 GB, recommended)": ("diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors", 40.23),
+    "10Eros-Max beta5 TURBO hybrid int8": ("10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors", 0.0, "TenStrip/10Eros-Max",
+                                           "diffusion_models"),
 }
+#: The text encoder goes in models/text_encoders/h3/, apart from the image engines' Qwen encoders.
 TEXT_ENCODERS = {
-    "nvfp4 (16 GB, recommended on G4)": ("text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", 15.69),
-    "int8 (27 GB)": ("text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", 27.14),
-    "bf16 (52 GB)": ("text_encoders/qwen3vl_32b_minimax_h3_bf16.safetensors", 51.51),
+    "int8 (27 GB, recommended)": ("text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", 27.14, MODEL_REPO,
+                                  "text_encoders/h3"),
 }
 VAES = [
     ("vae/minimax_h3_video_vae_fp16.safetensors", 5.21),
@@ -51,8 +51,8 @@ VAES = [
 TURBO_LORA = ("loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", 1.96)
 
 #: Auto-detection: which file wins when several match.
-UNET_PREFERENCE = ["pruned_int8", "pruned_fp8", "pruned_bf16", "int8", "fp8", "bf16"]
-CLIP_PREFERENCE = ["nvfp4", "int8", "bf16"]
+UNET_PREFERENCE = ["pruned_bf16", "pruned_int8", "pruned_fp8", "bf16", "int8", "fp8"]
+CLIP_PREFERENCE = ["int8", "bf16", "nvfp4"]
 TURBO_PREFERENCE = ["4step_v0.1_comfyui_bf16", "4step", "8step"]
 
 COMFY_PORT = 8188
@@ -112,9 +112,14 @@ def parse_lora_source(spec: str) -> Download:
     )
 
 
-def _repo_file(path: str, size_gb: float) -> Download:
-    folder, _, filename = path.partition("/")
-    return Download(folder, filename, repo=MODEL_REPO, path=path, size_gb=size_gb)
+def _repo_file(path: str, size_gb: float, repo: str = MODEL_REPO, folder: str | None = None) -> Download:
+    """A file from a Hugging Face repo, into models/<folder> (by default the first part of its repo path)."""
+    first, _, rest = path.partition("/")
+    if folder is None:
+        folder, filename = (first, rest) if rest else ("diffusion_models", first)
+    else:
+        filename = os.path.basename(path)
+    return Download(folder, filename, repo=repo, path=path, size_gb=size_gb)
 
 
 def manifest(diffusion_model: str, text_encoder: str, extra_loras: str | list[str] = "", turbo_lora: bool = True) -> list[Download]:

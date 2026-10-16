@@ -123,8 +123,8 @@ Restart ComfyUI. You need a ComfyUI build with MiniMax H3 support ([ComfyUI#1522
 ### Models ([Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3))
 
 ```
-models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors
-models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors   (or the int8_convrot variant)
+models/diffusion_models/minimax_h3_ref2va_pruned_bf16.safetensors
+models/text_encoders/h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors
 models/vae/minimax_h3_video_vae_fp16.safetensors
 models/vae/minimax_h3_audio_vae_fp32.safetensors
 models/loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors   (optional, for 8-step sampling)

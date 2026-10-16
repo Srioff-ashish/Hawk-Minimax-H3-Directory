@@ -592,7 +592,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_default_encoder_moved_into_a_subfolder_loads_by_its_subfolder_path(self):
         # The configured default is a bare name; sorted into text_encoders/h3/ ComfyUI calls it "h3/...".
-        default = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+        default = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
         self.fake.model_files["text_encoders"] = [f"h3/{default}", CLIP_BF16]
         job = (await self.http.post("/v1/videos", json={"script": "A"})).json()
         self.assertEqual(job["clip_name"], f"h3/{default}", job)
@@ -603,7 +603,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
     async def test_model_choice(self):
         options = (await self.http.get("/v1/options")).json()
         self.assertEqual((options["diffusion_models"], options["text_encoders"]), ([UNET_INT8, UNET_BF16], [CLIP_INT8, CLIP_BF16]))
-        self.assertEqual(options["default_unet"], UNET_INT8)
+        self.assertEqual(options["default_unet"], os.path.basename(UNET_BF16), "the default base is the pruned bf16 ref2va")
 
         job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "bf16", "clip_name": "qwen3vl_32b_minimax_h3_bf16"}})).json()
         self.assertEqual((job["unet_name"], job["clip_name"]), (UNET_BF16, CLIP_BF16), job)
@@ -612,7 +612,7 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
         default = (await self.http.post("/v1/videos", json={"script": "A"})).json()
-        self.assertEqual(default["unet_name"], UNET_INT8)
+        self.assertEqual(default["unet_name"], UNET_BF16)
         fl2va = await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "fl2va_pruned_int8"}})
         self.assertEqual(fl2va.status_code, 422)
         self.assertIn("needs a ref2va model", fl2va.json()["error"])

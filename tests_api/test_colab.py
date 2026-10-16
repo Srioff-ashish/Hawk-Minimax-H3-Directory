@@ -21,28 +21,36 @@ import hawk_colab  # noqa: E402
 class Manifest(unittest.TestCase):
     def test_defaults(self):
         items = hawk_colab.manifest(
-            "ref2va pruned int8 (21 GB, recommended)", "nvfp4 (16 GB, recommended on G4)"
+            "ref2va pruned bf16 (40 GB, recommended)", "int8 (27 GB, recommended)"
         )
         self.assertEqual(
             [(i.folder, i.filename) for i in items],
             [
-                ("diffusion_models", "minimax_h3_ref2va_pruned_int8_convrot.safetensors"),
-                ("text_encoders", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"),
+                ("diffusion_models", "minimax_h3_ref2va_pruned_bf16.safetensors"),
+                ("text_encoders/h3", "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"),
                 ("vae", "minimax_h3_video_vae_fp16.safetensors"),
                 ("vae", "minimax_h3_audio_vae_fp32.safetensors"),
                 ("loras", "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"),
             ],
         )
-        self.assertTrue(all(i.repo == "Comfy-Org/MiniMax-H3" and i.path == f"{i.folder}/{i.filename}" for i in items))
-        self.assertAlmostEqual(hawk_colab.estimated_gb(items), 44.44, places=1)
+        self.assertTrue(all(i.repo == "Comfy-Org/MiniMax-H3" for i in items))
+        self.assertEqual(items[1].path, "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+                         "fetched from the repo's path, kept in text_encoders/h3")
+        self.assertAlmostEqual(hawk_colab.estimated_gb(items), 75.15, places=1)
+
+    def test_the_10eros_hybrid_comes_from_its_own_repo(self):
+        item = hawk_colab.manifest("10Eros-Max beta5 TURBO hybrid int8", "int8 (27 GB, recommended)")[0]
+        self.assertEqual((item.repo, item.path, item.folder, item.filename),
+                         ("TenStrip/10Eros-Max", "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors", "diffusion_models",
+                          "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors"))
 
     def test_defaults_match_the_api_model_settings(self):
         sys.path.insert(0, ROOT)
         from hawk_api.config import ModelSettings
 
         defaults = ModelSettings()
-        unet = os.path.basename(hawk_colab.DIFFUSION_MODELS["ref2va pruned int8 (21 GB, recommended)"][0])
-        clip = os.path.basename(hawk_colab.TEXT_ENCODERS["nvfp4 (16 GB, recommended on G4)"][0])
+        unet = os.path.basename(hawk_colab.DIFFUSION_MODELS["ref2va pruned bf16 (40 GB, recommended)"][0])
+        clip = os.path.basename(hawk_colab.TEXT_ENCODERS["int8 (27 GB, recommended)"][0])
         self.assertEqual((unet, clip), (defaults.unet_name, defaults.clip_name))
         with open(os.path.join(ROOT, "deploy", "loras.example.json"), encoding="utf-8") as handle:
             required = json.load(handle)["defaults"][0]["name"]
@@ -56,8 +64,8 @@ class Manifest(unittest.TestCase):
 
     def test_extra_loras(self):
         items = hawk_colab.manifest(
-            "ref2va pruned fp8 (21 GB)",
-            "int8 (27 GB)",
+            "10Eros-Max beta5 TURBO hybrid int8",
+            "int8 (27 GB, recommended)",
             "fal/MiniMax-H3-Realism-People-LoRA/h3-realism-people-t2v-i2v-r2v.safetensors,\n"
             "https://huggingface.co/TenStrip/Minimax-h3_Singularity-Lora/resolve/main/Minimax-h3_Singularity_64-fro95_lora.safetensors?download=true, "
             "https://example.com/files/style%20lora.safetensors",
@@ -72,7 +80,7 @@ class Manifest(unittest.TestCase):
 
     def test_bad_inputs(self):
         with self.assertRaises(ValueError):
-            hawk_colab.manifest("big model", "nvfp4 (16 GB, recommended on G4)")
+            hawk_colab.manifest("big model", "int8 (27 GB, recommended)")
         for spec in ("just-a-name", "https://example.com/page", "owner/repo"):
             with self.subTest(spec=spec), self.assertRaises(ValueError):
                 hawk_colab.parse_lora_source(spec)
@@ -134,11 +142,11 @@ class Detection(unittest.TestCase):
             # the download cell is skipped or run with a different choice. Pinning the label there configured
             # the API with a file ComfyUI does not have, and every render died at the loader with
             # "Value not in list" long after the notebook had reported success.
-            labelled = hawk_colab.resolve_models(comfy, text_encoder="nvfp4 (16 GB, recommended on G4)")
+            labelled = hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB, recommended)")
             self.assertEqual(labelled["clip_name"], "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
                              "a label that was never downloaded must give way to the file that is there")
             # and the label still wins when its file really is on disk
-            present = hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB)")
+            present = hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB, recommended)")
             self.assertEqual(present["clip_name"], "qwen3vl_32b_minimax_h3_int8_convrot.safetensors")
         with tempfile.TemporaryDirectory() as empty:
             with self.assertRaisesRegex(RuntimeError, "unet_name, clip_name, video_vae, audio_vae"):
@@ -192,7 +200,7 @@ class Detection(unittest.TestCase):
                     open(path, "wb").close()
             want = "h3/qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
             self.assertEqual(hawk_colab.resolve_models(comfy)["clip_name"], want)
-            self.assertEqual(hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB)")["clip_name"], want)
+            self.assertEqual(hawk_colab.resolve_models(comfy, text_encoder="int8 (27 GB, recommended)")["clip_name"], want)
             self.assertEqual(hawk_colab.resolve_models(
                 comfy, clip_name="qwen3vl_32b_minimax_h3_int8_convrot.safetensors")["clip_name"], want)
 

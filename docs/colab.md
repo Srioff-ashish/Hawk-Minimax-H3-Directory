@@ -67,7 +67,7 @@ hawk_colab.watch(session, interval=60)
 
 What the first cell does:
 - **Installs only what's missing:** this node pack into `custom_nodes`, the API's Python packages, Sol attention and `cloudflared`. It doesn't reinstall ComfyUI's requirements (`comfy_requirements=False`) and doesn't download any models.
-- **Finds your files** under `ComfyUI/models`. It needs the **ref2va** diffusion model (fl2va doesn't work with this pack), the `qwen3vl…minimax` text encoder and both `minimax_h3` VAEs. If several match, it prefers pruned int8, then the NVFP4 text encoder, then the `ref2v…turbo…4step_v0.1` LoRA. It prints what it picked; type a name in the form to override it. Subfolder paths such as `h3/minimax_h3_ref2va_bf16.safetensors` work.
+- **Finds your files** under `ComfyUI/models`. It needs the **ref2va** diffusion model (fl2va doesn't work with this pack), the `qwen3vl…minimax` text encoder and both `minimax_h3` VAEs. If several match, it prefers the pruned bf16 ref2va, then the int8 text encoder, then the `ref2v…turbo…4step_v0.1` LoRA. It prints what it picked; type a name in the form to override it. Subfolder paths such as `h3/minimax_h3_ref2va_bf16.safetensors` work.
 - **Sets up LoRAs:** the turbo LoRA it finds becomes the required default LoRA (8 steps). Your other LoRAs in `models/loras` are available by name in requests; ask the chat for `list_options`.
 - **Starts** ComfyUI on 127.0.0.1:8188, the tunnel and the API, then prints the connector links.
 
@@ -81,7 +81,7 @@ Add the same Secrets as below (`ATLAS_API_KEY`, and ideally `HAWK_API_TOKEN`).
 
 ## What you need
 
-- **A paid Colab plan with G4 GPUs.** G4 is an NVIDIA RTX PRO 6000 Blackwell with 96 GB of VRAM. H3 fits comfortably, and the notebook's NVFP4 text encoder runs natively on it.
+- **A paid Colab plan with G4 GPUs.** G4 is an NVIDIA RTX PRO 6000 Blackwell with 96 GB of VRAM. H3 fits comfortably, and the pruned bf16 ref2va model fits alongside the int8 text encoder.
 - **A positive compute-unit balance** for the whole session. [Colab's rules](https://research.google.com/colaboratory/faq.html) forbid web services and web UIs on runtimes that run free of charge; a paid plan with a positive balance lifts that restriction. G4 uses compute units quickly, so stop the runtime when you're done.
 - **An Atlas Cloud API key** if you want LLM planning. Rendering your own scripts works without it.
 
@@ -214,8 +214,8 @@ Then work in the chat as described in [API → Using it from a chat](api.md#5-us
 
 | Setting | Options | Notes |
 |---|---|---|
-| `diffusion_model` | pruned int8 **(default, 21 GB)**, pruned fp8, pruned bf16 (40 GB), full int8 (34 GB), full bf16 (66 GB) | All are ref2va models. Larger = slower download, possibly slightly better quality |
-| `text_encoder` | nvfp4 **(default, 16 GB)**, int8 (27 GB), bf16 (52 GB) | NVFP4 is native on Blackwell |
+| `diffusion_model` | ref2va pruned bf16 **(default, 40 GB)**, 10Eros-Max beta5 TURBO hybrid int8 | 10Eros-Max (TenStrip/10Eros-Max) has a turbo distill baked in and reads references too |
+| `text_encoder` | int8 **(default, 27 GB)** | Downloaded into `text_encoders/h3/` |
 | `extra_loras` | comma-separated `owner/repo/path/file.safetensors` or direct URLs | Downloaded into `models/loras`; use them by name in `settings.loras` or `lora_preset` |
 | `attention` | `sol scheduled` **(default)**, `comfy default` | Sol falls back to normal attention by itself if its kernel can't run |
 | `install_rife_interpolation` | off / on | Needed only for `interpolation: 48/60 fps` |

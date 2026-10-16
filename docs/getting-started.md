@@ -31,8 +31,8 @@ From [huggingface.co/Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/Mini
 
 | File | Put it in |
 |---|---|
-| `minimax_h3_ref2va_pruned_int8_convrot.safetensors` | `ComfyUI/models/diffusion_models/` |
-| `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` *(or the `int8_convrot` variant)* | `ComfyUI/models/text_encoders/` |
+| `minimax_h3_ref2va_pruned_bf16.safetensors` *(or 10Eros-Max beta5 TURBO hybrid int8)* | `ComfyUI/models/diffusion_models/` |
+| `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | `ComfyUI/models/text_encoders/h3/` |
 | `minimax_h3_video_vae_fp16.safetensors` | `ComfyUI/models/vae/` |
 | `minimax_h3_audio_vae_fp32.safetensors` | `ComfyUI/models/vae/` |
 | `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` *(recommended)* | `ComfyUI/models/loras/` |

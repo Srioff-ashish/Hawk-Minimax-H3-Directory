@@ -17,8 +17,8 @@ def _env(name: str, default: str = "") -> str:
 class ModelSettings:
     """What Hawk H3 Model Loader loads for every render."""
 
-    unet_name: str = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
-    clip_name: str = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    unet_name: str = "minimax_h3_ref2va_pruned_bf16.safetensors"
+    clip_name: str = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"
     video_vae: str = "minimax_h3_video_vae_fp16.safetensors"
     audio_vae: str = "minimax_h3_audio_vae_fp32.safetensors"
     shift_video: float = 12.0
