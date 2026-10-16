@@ -142,7 +142,8 @@
   form.mh-char { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
   form.mh-role-hidden { opacity: .55; }
   .mh-char-actions { gap: 6px; }
-  .mh-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; max-height: 260px; overflow: auto; }
+  .mh-picker { display: grid; gap: 6px; }
+  .mh-picker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; max-height: 300px; overflow: auto; }
   .mh-picker img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 6px; cursor: pointer; border: 2px solid transparent; }
   .mh-picker img:hover { border-color: var(--brand); }
   .mh-lora { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px; align-items: center; gap: 8px; font-size: 13px; }
@@ -1207,6 +1208,7 @@
             <strong id="mediaSelCount"></strong>
             <button class="btn btn-sm btn-primary" type="button" data-bulk="create">Use in Create</button>
             <button class="btn btn-sm" type="button" data-bulk="agent">Attach to agent</button>
+            <button class="btn btn-sm" type="button" data-bulk="cast" title="Use one image as a manhwa character's face">Use as cast portrait</button>
             <button class="btn btn-sm" type="button" data-bulk="generate" title="Make new images from these (Seedream edit)">✨ Edit / remix</button>
             <button class="btn btn-sm" type="button" data-bulk="music" id="bulkMusic">Set as music bed</button>
             <button class="btn btn-sm" type="button" data-bulk="move">Move…</button>
@@ -1829,14 +1831,26 @@
       <input class="input" data-f="aliases" value="${esc((c.aliases || []).join(", "))}" placeholder="Also called… (comma-separated)" style="height:30px">
       <div class="row mh-char-actions"><span class="hint">${c.tiles || 0} tiles · ch ${esc((c.chapters || []).join(", ") || "—")}</span><div class="spacer"></div>
         <button class="btn btn-sm btn-primary" type="submit">Save</button>
-        ${c.role === "cast" && !c.minor ? `<button class="btn btn-sm" type="button" data-act="make">${c.portrait_thumb ? "Remake" : "Make"} portrait</button>
-        <button class="btn btn-sm" type="button" data-act="choose">Choose image</button>
+        ${visual && !c.minor ? `<button class="btn btn-sm" type="button" data-act="make">${c.portrait_thumb ? "Remake" : "Make"} portrait</button>
+        <button class="btn btn-sm" type="button" data-act="choose" title="Pick any image from your Media library">Choose from Media</button>
         <label class="btn btn-sm" title="Upload art or an image made elsewhere (not a photo of a real person)">Upload<input type="file" accept="image/*" data-act="upload" hidden></label>` : ""}
         ${c.portrait_thumb ? `<button class="btn btn-sm" type="button" data-act="clear" title="Stop using this portrait">Remove portrait</button>` : ""}
         ${others ? `<select class="select" data-act="merge" style="width:auto;height:30px" title="This is the same person as…"><option value="">Same person as…</option>${others}</select>` : ""}
       </div>
       <div class="mh-picker" hidden></div>
     </form>`;
+  }
+
+  async function mhPickerLoad(picker, first = false) {
+    const q = picker.querySelector("[data-pick-q]").value.trim();
+    const coll = picker.querySelector("[data-pick-coll]");
+    const grid = picker.querySelector(".mh-picker-grid");
+    try {
+      const data = await api(`/v1/library?kind=image&limit=90${q ? `&q=${encodeURIComponent(q)}` : ""}${coll.value ? `&collection=${encodeURIComponent(coll.value)}` : ""}`);
+      if (first) coll.innerHTML = `<option value="">All collections</option>` + (data.collections || []).map((c) => `<option value="${esc(c.name)}">${esc(c.name)} (${c.count})</option>`).join("");
+      grid.innerHTML = data.assets.map((a) => `<img src="${esc(a.thumb_url)}" data-pick="${esc(a.id)}" title="${esc(a.filename)} · ${esc(a.collection || "")}" loading="lazy">`).join("")
+        || `<span class="hint">No images match.</span>`;
+    } catch (error) { grid.innerHTML = `<span class="hint">${esc(error.message)}</span>`; }
   }
 
   async function mhCharSave(form) {
@@ -2320,11 +2334,9 @@
       if (act === "choose") {
         const picker = form.querySelector(".mh-picker");
         if (!picker.hidden) { picker.hidden = true; return; }
-        const { assets } = await api(`/v1/library?kind=image&q=${encodeURIComponent(manhwa.series)}&limit=120`);
-        const shown = assets.filter((a) => /\/(real|cast)$/.test(a.collection || "") || (a.tags || []).includes("cast"));
-        picker.innerHTML = (shown.length ? shown : assets).slice(0, 60).map((a) => `<img src="${esc(a.thumb_url)}" data-pick="${esc(a.id)}" title="${esc(a.filename)}" loading="lazy">`).join("")
-          || `<span class="hint">No images for this series yet: make photographs or upload one.</span>`;
         picker.hidden = false;
+        picker.innerHTML = `<div class="row mh-picker-bar"><input class="input" data-pick-q placeholder="Search Media…" style="flex:1;height:30px"><select class="select" data-pick-coll style="width:auto;max-width:50%;height:30px"><option value="">All collections</option></select></div><div class="mh-picker-grid"><span class="hint">Loading…</span></div>`;
+        await mhPickerLoad(picker, true);
       }
     } catch (error) { toast("Could not do that", error.message, "bad"); button.disabled = false; }
   });
@@ -2335,10 +2347,24 @@
     try { await mhAssign(form.dataset.char, pick.dataset.pick); toast("Portrait set", form.dataset.char); mhShowSeries(); }
     catch (error) { toast("Not used", error.message, "bad"); }
   });
+  $("mhCharacters").addEventListener("input", (event) => {
+    const picker = event.target.closest(".mh-picker");
+    if (!picker || !event.target.matches("[data-pick-q]")) return;
+    clearTimeout(manhwa.pickTimer);
+    manhwa.pickTimer = setTimeout(() => mhPickerLoad(picker), 300);
+  });
   $("mhCharacters").addEventListener("change", async (event) => {
     const form = event.target.closest("[data-char]");
     if (!form) return;
     const name = form.dataset.char;
+    if (event.target.matches("[data-pick-coll]")) { mhPickerLoad(event.target.closest(".mh-picker")); return; }
+    if (event.target.dataset.f === "role") {  // a role change takes effect at once, so its buttons appear
+      try {
+        await api("/v1/manhwa/characters", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ series: manhwa.series, name, role: event.target.value }) });
+        mhShowSeries();
+      } catch (error) { toast("Could not change the role", error.message, "bad"); mhShowSeries(); }
+      return;
+    }
     if (event.target.dataset.act === "upload" && event.target.files[0]) {
       try {
         const asset = await uploadFile(event.target.files[0], () => {}, { collection: `manhwa/${manhwa.series}/cast`, tags: "manhwa,cast" });
@@ -4192,6 +4218,22 @@
       else if (action === "create") { useAssetsInCreate(chosen); location.hash = "#create"; }
       else if (action === "agent") { attachToAgent(chosen); location.hash = "#agent"; }
       else if (action === "generate") openGenerate(chosen.filter((a) => a.kind === "image"));
+      else if (action === "cast") {
+        const images = chosen.filter((a) => a.kind === "image");
+        if (images.length !== 1) { toast("Pick one image", "A character gets one portrait.", "warn"); return; }
+        const { series } = await api("/v1/manhwa/series");
+        const options = [];
+        for (const s of series) {
+          const { characters } = await api(`/v1/manhwa/characters?series=${encodeURIComponent(s.series)}`);
+          for (const c of characters) if (!c.minor && (c.role === "cast" || c.role === "extra")) options.push(`${s.series} › ${c.name}`);
+        }
+        if (!options.length) { toast("No characters yet", "Catalogue a manhwa chapter first, or add a character on the Manhwa page.", "warn"); return; }
+        const picked = await askInput("Use as cast portrait", "Character (series › name)", options[0], options);
+        if (!picked) return;
+        const [seriesName, ...rest] = picked.split(" › ");
+        await api("/v1/manhwa/cast/portrait", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ series: seriesName.trim(), name: rest.join(" › ").trim(), asset_id: images[0].id }) });
+        toast("Portrait set", `${rest.join(" › ")} now has this face (and is cast).`);
+      }
       else if (action === "music") { setMusicBed(chosen[0]); location.hash = "#create"; }
       else if (action === "move") {
         const name = await askInput("Move to collection", "Collection (new or existing)", media.collection, media.collections.map((c) => c.name));

@@ -1443,3 +1443,39 @@ class CastEditor(unittest.IsolatedAsyncioTestCase):
         state = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
         self.assertEqual((state["converted"], self.service.calls), (0, []), state)
         self.assertIn("reads as under 18", state["results"][0]["error"])
+
+
+class PortraitFromMedia(unittest.IsolatedAsyncioTestCase):
+    asyncTearDown = Convert.asyncTearDown
+
+    async def asyncSetUp(self):
+        await CastEditor.asyncSetUp(self)
+
+    async def test_any_media_image_and_an_extra_becomes_cast(self):
+        art = await self.service.add_asset("art.png", io.BytesIO(b"a"), collection="Fan art",
+                                           source={"type": "generated"})
+        out = await self.manager.assign_portrait("S", "Mrs. Cha", art["id"])
+        self.assertEqual((out["portrait_asset_id"], out["role"]), (art["id"], "cast"))
+
+    async def test_real_person_refused_unchecked_says_so(self):
+        from hawk_api.jobs import RequestError
+
+        photo = await self.service.add_asset("star.jpg", io.BytesIO(b"p"),
+                                             source={"type": "upload", "person_check": {"identifiable": True}})
+        edit = await self.service.add_asset("edit.png", io.BytesIO(b"e"),
+                                            source={"type": "generated", "references": [photo["id"]]})
+        with self.assertRaises(RequestError) as caught:
+            await self.manager.assign_portrait("S", "Mrs. Cha", edit["id"])
+        self.assertIn("real, identifiable person", str(caught.exception), "an edit of a real photo is refused too")
+
+        unchecked = await self.service.add_asset("who.jpg", io.BytesIO(b"u"), source={"type": "upload"})
+
+        async def no_answer(asset_id):
+            raise RuntimeError("429 too many requests")
+        self.service.person_check = no_answer
+        with self.assertRaises(RequestError) as caught:
+            await self.manager.assign_portrait("S", "Mrs. Cha", unchecked["id"])
+        self.assertIn("Couldn't check", str(caught.exception))
+        self.assertEqual(self.roster()["Mrs. Cha"]["role"], "extra", "nothing changes when it is refused")
+
+    roster = CastEditor.roster

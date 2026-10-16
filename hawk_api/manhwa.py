@@ -2174,33 +2174,58 @@ class ManhwaManager:
         raise RequestError("ComfyUI stayed busy.")
 
     async def assign_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
-        """The user's pick for a character's portrait. An uploaded photo is checked for a real, identifiable person
-        first: a real person's face is never put into these scenes."""
+        """The user's pick for a character's portrait, from anywhere in the library. Giving an extra a face makes
+        them cast. A picture that is, or was made from, a photo of a real, identifiable person is refused: a real
+        person's face is never put into these scenes. One whose origin could not be checked says so."""
+        series = self._series_name(series)
         roster = self.store.characters(series)
         if name not in roster:
             raise NotFound(f"No character {name!r} in {series!r}.")
         if asset_id:
             from .local_images import from_upload
 
+            data = roster[name]
             asset = self.service.store.get_asset(asset_id)
             if asset is None or asset.get("kind") != "image":
                 raise RequestError(f"{asset_id!r} is not an image in the library.")
-            if is_minor(name, roster[name]):
+            if is_minor(name, data):
                 raise RequestError(f"{name} reads as under 18 and can't be given a portrait.")
-            if role_of(name, roster[name]) in ("narrator", "hidden"):
-                raise RequestError(f"{name} is a {role_of(name, roster[name])}: make them cast or an extra first.")
+            if role_of(name, data) in ("narrator", "hidden"):
+                raise RequestError(f"{name} is the {role_of(name, data)}: set them to Cast first.")
             if from_upload(asset, self.service.store.lineage):
+                # the upload itself, or the uploads a generated image was made from: check each for a real person
+                check_roots = getattr(self.service, "_check_upload_roots", None)
                 checker = getattr(self.service, "person_check", None)
-                if checker is not None:
-                    try:
+                try:
+                    if check_roots is not None:
+                        await check_roots([asset])
+                    elif checker is not None:
                         await checker(asset_id)
-                    except Exception as exc:
-                        log.warning("manhwa: person check on %s failed: %s", asset_id, exc)
+                except Exception as exc:
+                    log.warning("manhwa: person check on %s failed: %s", asset_id, exc)
                 asset = self.service.store.get_asset(asset_id) or asset
                 if from_upload(asset, self.service.store.lineage):
-                    raise RequestError("That picture may show a real, identifiable person, so it can't be a "
-                                       "character's portrait. Use art, an image made here, or Make portrait.")
+                    if self._shows_real_person(asset):
+                        raise RequestError("That picture shows, or was made from a photo of, a real, identifiable "
+                                           "person, so it can't be a character's portrait. Use art, an image made "
+                                           "here from a prompt, or Make portrait.")
+                    raise RequestError("Couldn't check whether that picture shows a real person (the vision model "
+                                       "gave no answer). Try again in a minute.")
         return self.set_portrait(series, name, asset_id)
+
+    def _shows_real_person(self, asset: dict) -> bool:
+        """Whether this image, or an upload it was made from, was judged to show a real, identifiable person."""
+        seen, queue = set(), [asset]
+        while queue:
+            current = queue.pop()
+            if current is None or current.get("id") in seen:
+                continue
+            seen.add(current.get("id"))
+            source = current.get("source") or {}
+            if (source.get("person_check") or {}).get("identifiable") is True:
+                return True
+            queue += [self.service.store.lineage(ref) for ref in source.get("references") or []]
+        return False
 
     def set_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
         """Use this image as the character's portrait (None removes it)."""
@@ -2212,6 +2237,8 @@ class ManhwaManager:
         data = roster[name]
         if asset_id:
             data["portrait_asset_id"] = asset_id
+            if role_of(name, data) == "extra":  # a face of their own is what makes someone cast
+                data["role"] = "cast"
         else:
             data.pop("portrait_asset_id", None)
         self.store.save_characters(series, {name: data})
