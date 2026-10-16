@@ -2082,6 +2082,8 @@ class HawkService:
         chain is tried in full, so one model rate-limited upstream no longer fails the plan while the next
         candidate is free."""
         catalogue = await self.model_catalogue()
+        if "," in str(requested or ""):  # a chain the caller chose (the Story page's Gemma -> Kimi -> DeepSeek)
+            return [m for m in models_llm.resolve_many("planner", requested, catalogue, vision=needs_vision) if m]
         if str(requested or "").strip():
             one = (models_llm.resolve("planner", requested, catalogue, vision=needs_vision)
                    or ("" if needs_vision else str(requested).strip()))

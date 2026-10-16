@@ -136,6 +136,21 @@
   .mh-auto .row { gap: 8px; font-size: 13px; }
   .mh-context { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; background: var(--surface); }
   .mh-context summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
+  .st-thread { display: grid; gap: 8px; max-height: 520px; overflow: auto; padding-right: 4px; }
+  .st-msg { padding: 8px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 92%; }
+  .st-msg.user { justify-self: end; background: var(--brand); color: #fff; }
+  .st-msg.assistant { justify-self: start; background: var(--surface-2); border: 1px solid var(--line); }
+  .st-msg.event { justify-self: center; font-size: 12px; color: var(--ink-2); background: none; padding: 2px; }
+  .st-msg .hint { display: block; margin-top: 4px; font-size: 11px; }
+  .st-msg.user .hint { color: rgba(255,255,255,.8); }
+  .st-msg img, .st-attach img, .st-imgs img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; margin: 4px 4px 0 0; }
+  .st-attach { display: flex; flex-wrap: wrap; gap: 4px; }
+  .st-attach:empty { display: none; }
+  .st-imgs { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+  .st-imgs figure { margin: 0; display: grid; gap: 2px; font-size: 11px; color: var(--ink-2); max-width: 90px; overflow-wrap: anywhere; }
+  .st-chapter { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
+  .st-scene { display: grid; gap: 6px; padding: 8px 10px; border-left: 3px solid var(--line); }
+  .st-scene .textarea { min-height: 48px; }
   .mh-loras { display: grid; gap: 6px; }
   .mh-portrait { width: 44px; height: 44px; flex: none; object-fit: cover; border-radius: 50%; background: var(--surface-3); }
   .mh-noface { display: inline-grid; place-items: center; color: var(--ink-2); font-size: 18px; }
@@ -701,6 +716,7 @@
     <a class="nav-item" href="#library" data-route="library"><svg><use href="#i-library"/></svg><span>Videos</span><span class="nav-count" id="activeCount" hidden>0</span></a>
     <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
     <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
+    <a class="nav-item" href="#story" data-route="story"><svg><use href="#i-film"/></svg><span>Story</span><span class="nav-count" id="storyBusy" hidden title="Making a chapter's video">●</span></a>
     <a class="nav-item" href="#manhwa" data-route="manhwa"><svg><use href="#i-library"/></svg><span>Manhwa</span><span class="nav-count" id="manhwaBusy" hidden title="Cataloguing">●</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Media</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
@@ -1164,6 +1180,72 @@
       </div>
     </main>
 
+    <!-- ================================================================ STORY -->
+    <main class="content" id="page-story" data-page="story" hidden>
+      <div class="mh-layout">
+        <div style="display:grid;gap:16px;min-width:0">
+          <section class="card" aria-label="Story">
+            <div class="card-head"><h2>Story</h2><div class="spacer"></div><select class="select" id="stPick" style="width:auto;max-width:55%;height:30px"></select><button class="btn btn-sm" type="button" id="stNew">New story</button></div>
+            <form class="card-body grid" id="stMeta" autocomplete="off">
+              <label class="field"><span class="label">Title</span><input class="input" id="stTitle" maxlength="120"></label>
+              <label class="field"><span class="label">Premise <span class="hint">what it is about</span></span><textarea class="textarea" id="stPremise" rows="2" style="min-height:56px" maxlength="2000"></textarea></label>
+              <label class="field"><span class="label">Style and tone</span><input class="input" id="stStyle" maxlength="600" placeholder="e.g. slow-burn romance, warm film grain, rainy city nights"></label>
+              <div class="row"><button class="btn btn-sm btn-danger" type="button" id="stDelete">Delete story</button><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Co-writer">
+            <div class="card-head"><h2>Co-writer</h2><span class="hint" id="stModelHint"></span><div class="spacer"></div><button class="btn btn-sm btn-primary" type="button" id="stDraft" title="Turn the chat since the last chapter into the next chapter's scenes">Draft chapter</button></div>
+            <div class="card-body grid">
+              <div class="st-thread" id="stThread"><span class="hint">Pick or start a story, then give the co-writer your first idea.</span></div>
+              <div class="st-attach" id="stAttach"></div>
+              <form class="grid" id="stChatForm" autocomplete="off">
+                <textarea class="textarea" id="stInput" rows="3" style="min-height:70px" placeholder="Your idea for what happens next… (Ctrl/Cmd+Enter to send)"></textarea>
+                <div class="row"><button class="btn btn-sm" type="button" id="stAttachBtn" title="Show the co-writer pictures from Media">Add pictures</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="stAttachUpload" hidden></label><div class="spacer"></div><button class="btn btn-primary" type="submit" id="stSend">Send</button></div>
+                <div class="mh-picker" id="stAttachPicker" hidden></div>
+              </form>
+            </div>
+          </section>
+          <section class="card" aria-label="Chapters">
+            <div class="card-head"><h2>Chapters</h2></div>
+            <div class="card-body grid" id="stChapters"><span class="hint">Chat some ideas, then press Draft chapter.</span></div>
+          </section>
+        </div>
+        <aside style="display:grid;gap:16px;min-width:0">
+          <section class="card" aria-label="Main story video">
+            <div class="card-head"><h2>Main video</h2><div class="spacer"></div><button class="btn btn-sm" type="button" id="stRebuild" title="Join every chapter with a finished video again">Rebuild</button></div>
+            <div class="card-body" id="stFilm"><span class="hint">Chapters you turn into video are joined here, in order.</span></div>
+          </section>
+          <section class="card" aria-label="Cast">
+            <div class="card-head"><h2>Cast</h2></div>
+            <div class="card-body grid">
+              <span class="hint"><b>Cast</b> characters can have a picture (from Media or an upload) that keeps their look in every chapter; the <b>Narrator</b> is a voice only. Pictures of real people are refused.</span>
+              <form class="row" id="stAddChar" autocomplete="off"><input class="input" id="stAddCharName" placeholder="Add a character…" style="flex:1;height:30px" required><button class="btn btn-sm" type="submit">Add</button></form>
+              <div id="stCast"></div>
+            </div>
+          </section>
+          <section class="card" aria-label="Story settings">
+            <div class="card-head"><h2>Settings</h2><span class="hint">for this story's co-writer and videos</span></div>
+            <form class="card-body grid" id="stSettings" autocomplete="off">
+              <div class="grid">
+                <label class="field"><span class="label">Co-writer</span><select class="select" id="stModels">
+                  <option value="google/gemma-4-31b-it, moonshotai/kimi-k2.6, deepseek-ai/deepseek-v4.1-flash">Gemma 4 31B → Kimi K2.6 → DeepSeek</option>
+                  <option value="moonshotai/kimi-k2.6, deepseek-ai/deepseek-v4.1-flash, google/gemma-4-31b-it">Kimi K2.6 → DeepSeek → Gemma 4</option>
+                  <option value="deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6, google/gemma-4-31b-it">DeepSeek → Kimi K2.6 → Gemma 4</option>
+                </select></label>
+                <label class="field"><span class="label">Base model</span><select class="select" id="stUnet"></select></label>
+              </div>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Aspect ratio</span><select class="select" id="stAspect"></select></label>
+                <label class="field"><span class="label">Seconds <span class="hint">default</span></span><input class="input" id="stSeconds" type="number" min="1" max="15" step="0.5"></label>
+              </div>
+              <label class="field"><span class="label">Steps <span class="hint">blank: default</span></span><input class="input" id="stSteps" type="number" min="1" max="100" placeholder="8 turbo / 30"></label>
+              <div class="row"><label class="check">Subtitles <select class="select" id="stSubs" style="width:auto;height:30px"><option value="file">.srt beside the film</option><option value="off">off</option></select></label><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button></div>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </main>
+
     <!-- ================================================================ BILLING -->
     <main class="content" id="page-openrouter" data-page="openrouter" hidden><div class="billing" data-provider="openrouter" id="billing-openrouter"></div></main>
     <main class="content" id="page-atlas" data-page="atlas" hidden><div class="billing" data-provider="atlas" id="billing-atlas"></div></main>
@@ -1560,6 +1642,7 @@
     agent: ["Agent", "Your autonomous video director"],
     prompts: ["Prompts", "Edit the agent, story planner and SFW check instructions"],
     manhwa: ["Manhwa", "Catalogue chapters from a URL: scenes, characters, dialogue, search"],
+    story: ["Story", "Write a story with a co-writer; each chapter becomes video, appended to one main film"],
     openrouter: ["OpenRouter", "Credits, spend and usage per model"],
     atlas: ["Atlas Cloud", "Balance, spend and usage per model"],
     gcp: ["Google Cloud", "Nano Banana spend on the Gemini API"],
@@ -1745,6 +1828,8 @@
     if (BILLING_PAGES[page] && (PREFIX || token)) loadBilling(page);
     if (page === "prompts" && (PREFIX || token)) loadPrompts();
     if (page === "manhwa" && (PREFIX || token)) { loadManhwa(); mhLoadSettings(); mhAutoResume(); }
+    if (page === "story" && (PREFIX || token)) loadStories();
+    else clearTimeout(story.timer);
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
@@ -2056,6 +2141,308 @@
     const stop = event.target.closest("[data-cancel-conversion]");
     if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
+
+  // ================================================================ story
+  const story = { id: storage.get("hawkH3Story") || "", view: null, attach: [], timer: null };
+  const ST_ACTIVE = ["planning", "rendering", "appending"];
+  const putJson = (path, data, method = "PUT") => api(path, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+
+  async function loadStories() {
+    try {
+      const { stories } = await api("/v1/stories");
+      if (!stories.some((x) => x.id === story.id)) story.id = stories[0]?.id || "";
+      $("stPick").innerHTML = stories.length ? stories.map((x) => `<option value="${esc(x.id)}"${x.id === story.id ? " selected" : ""}>${esc(x.title)} (${x.done}/${x.chapters})</option>`).join("") : `<option value="">No stories yet</option>`;
+      if (story.id) await stShow(); else stEmpty();
+    } catch (error) { toast("Could not load stories", error.message, "bad"); }
+  }
+
+  function stEmpty() {
+    story.view = null;
+    ["stTitle", "stPremise", "stStyle"].forEach((id) => { $(id).value = ""; });
+    $("stThread").innerHTML = `<span class="hint">Press New story to begin.</span>`;
+    $("stCast").innerHTML = ""; $("stChapters").innerHTML = `<span class="hint">No chapters yet.</span>`;
+    $("stFilm").innerHTML = `<span class="hint">Chapters you turn into video are joined here, in order.</span>`;
+  }
+
+  async function stShow(keepThread = false) {
+    clearTimeout(story.timer);
+    storage.set("hawkH3Story", story.id);
+    const view = await api(`/v1/stories/${encodeURIComponent(story.id)}`);
+    story.view = view;
+    if (document.activeElement?.closest("#stMeta") == null) {
+      $("stTitle").value = view.title; $("stPremise").value = view.premise || ""; $("stStyle").value = view.style || "";
+    }
+    stSettingsPaint(view.settings);
+    stFilmPaint(view.film);
+    if (!document.activeElement?.closest("#stCast")) stCastPaint(view.characters);
+    if (!document.activeElement?.closest("#stChapters")) stChaptersPaint(view.chapters);
+    if (!keepThread) await stThreadLoad();
+    const busy = view.chapters.some((c) => ST_ACTIVE.includes(c.status));
+    $("storyBusy").hidden = !busy;
+    if (busy) story.timer = setTimeout(() => stShow(true).catch(() => {}), 5000);
+  }
+
+  async function stThreadLoad() {
+    const { messages } = await api(`/v1/stories/${encodeURIComponent(story.id)}/messages`);
+    $("stThread").innerHTML = messages.length ? messages.map(stBubble).join("") : `<span class="hint">Give the co-writer your first idea: who, where, what happens.</span>`;
+    $("stThread").scrollTop = $("stThread").scrollHeight;
+  }
+
+  function stBubble(m) {
+    if (m.role === "event") return `<div class="st-msg event">— ${esc(m.text)} —</div>`;
+    const pics = (m.attachments || []).map((id) => `<img src="${esc(PREFIX)}/v1/assets/${esc(id)}/file?w=320" alt="">`).join("");
+    return `<div class="st-msg ${m.role === "user" ? "user" : "assistant"}">${esc(m.text || "")}${pics ? `<div>${pics}</div>` : ""}${m.model ? `<span class="hint">${esc(m.model)}</span>` : ""}</div>`;
+  }
+
+  function stSettingsPaint(set) {
+    if (document.activeElement?.closest("#stSettings")) return;
+    const models = $("stModels");
+    if (![...models.options].some((o) => o.value === set.models)) models.add(new Option(set.models, set.models));
+    models.value = set.models;
+    $("stModelHint").textContent = set.models.split(",")[0].split("/").pop();
+    $("stAspect").innerHTML = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((a) => `<option${a === set.aspect_ratio ? " selected" : ""}>${a}</option>`).join("");
+    $("stSeconds").value = set.segment_seconds;
+    $("stSteps").value = (set.render || {}).steps ?? "";
+    $("stSubs").value = set.subtitles || "file";
+    const o = state.options || {};
+    const unet = (set.render || {}).unet_name || "";
+    $("stUnet").innerHTML = `<option value="">Server default</option>` + (o.diffusion_models || []).concat(unet && !(o.diffusion_models || []).includes(unet) ? [unet] : [])
+      .map((f) => `<option value="${esc(f)}"${f === unet ? " selected" : ""}>${esc(shortName(f))}</option>`).join("");
+  }
+
+  function stFilmPaint(film) {
+    if (!film || !film.file_url) { $("stFilm").innerHTML = `<span class="hint">Chapters you turn into video are joined here, in order.</span>`; return; }
+    $("stFilm").innerHTML = `<div class="grid" style="gap:6px"><a class="btn btn-primary" href="${esc(film.file_url)}" target="_blank" rel="noopener">▶ Play the main video</a>`
+      + `<span class="hint">${film.chapters.length} chapter${film.chapters.length === 1 ? "" : "s"} joined${film.drive ? ` · Drive: ${esc(film.drive)}` : ""}</span>`
+      + (film.subtitles ? `<a href="#story" data-st-srt>Download subtitles (.srt)</a>` : "") + `</div>`;
+  }
+
+  function stCastPaint(characters) {
+    $("stCast").innerHTML = characters.length ? characters.map((c) => {
+      const roles = ["cast", "extra", "narrator"].map((r) => `<option value="${r}"${r === c.role ? " selected" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("");
+      const pics = c.images.map((i) => `<a href="${esc(i.file_url)}" target="_blank" rel="noopener"><img class="mh-portrait" src="${esc(i.thumb_url)}" alt=""></a>`).join("")
+        || `<span class="mh-portrait mh-noface">${c.role === "narrator" ? "🎙" : "?"}</span>`;
+      const canPic = c.role !== "narrator" && !c.minor;
+      return `<form class="mh-char" data-st-char="${esc(c.name)}" autocomplete="off">
+        <div class="row">${pics}<input class="input" data-f="name" value="${esc(c.name)}" style="flex:1;height:30px;font-weight:600"><select class="select" data-f="role" style="width:auto;height:30px">${roles}</select></div>
+        ${c.minor ? `<div class="hint" style="color:var(--bad)">Reads as under 18: never given a picture.</div>` : ""}
+        <textarea class="textarea" data-f="description" rows="2" style="min-height:48px" placeholder="${c.role === "narrator" ? "Voice: e.g. warm, low, unhurried" : "Adult age, build, face, hair, usual clothes, voice"}">${esc(c.description || "")}</textarea>
+        <div class="row mh-char-actions"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button>
+          ${canPic ? `<button class="btn btn-sm" type="button" data-st-act="pick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" data-st-act="upload" hidden></label>` : ""}
+          ${c.images.length ? `<button class="btn btn-sm" type="button" data-st-act="clear">Remove picture</button>` : ""}
+          <button class="btn btn-sm btn-danger" type="button" data-st-act="remove">Remove</button></div>
+        <div class="mh-picker" hidden></div></form>`;
+    }).join("") : `<span class="hint">Characters appear here as the co-writer drafts chapters, or add them yourself.</span>`;
+  }
+
+  const stDialogueText = (lines) => (lines || []).map((d) => `${d.speaker}: ${d.text}`).join("\n");
+  const stDialogueParse = (text) => text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+    const at = l.indexOf(":");
+    return at > 0 ? { speaker: l.slice(0, at).trim(), text: l.slice(at + 1).trim() } : { speaker: "narration", text: l };
+  });
+
+  function stChaptersPaint(chapters) {
+    $("stChapters").innerHTML = chapters.length ? chapters.map((c) => {
+      const busy = ST_ACTIVE.includes(c.status);
+      const badge = c.status === "done" ? "done" : c.status === "failed" ? "failed" : c.status === "draft" ? "plain" : "rendering";
+      const scenes = c.scenes.map((sc, n) => `<div class="st-scene" data-scene="${n}"><strong class="hint">Scene ${n + 1}</strong>
+        <textarea class="textarea" data-s="description" rows="2" placeholder="What the camera sees">${esc(sc.description)}</textarea>
+        <div class="grid grid-2"><input class="input" data-s="setting" value="${esc(sc.setting || "")}" placeholder="Setting" style="height:30px"><input class="input" data-s="characters" value="${esc((sc.characters || []).join(", "))}" placeholder="Who is in it" style="height:30px"></div>
+        <textarea class="textarea" data-s="dialogue" rows="2" placeholder="One line each — Name: what they say (or narration: …)">${esc(stDialogueText(sc.dialogue))}</textarea></div>`).join("");
+      const imgs = (c.image_views || []).map((i) => `<figure><img src="${esc(i.thumb_url || "")}" alt=""><span>${esc(i.label || "")}</span><button class="btn btn-sm" type="button" data-st-unimg="${esc(i.asset_id)}">×</button></figure>`).join("");
+      return `<form class="st-chapter" data-st-ch="${esc(c.id)}" autocomplete="off">
+        <div class="row"><strong>Ch ${c.idx + 1}</strong><input class="input" data-c="title" value="${esc(c.title)}" style="flex:1;height:30px"><span class="badge ${badge}">${esc(c.status)}</span></div>
+        <textarea class="textarea" data-c="summary" rows="2" style="min-height:44px" placeholder="Summary">${esc(c.summary || "")}</textarea>
+        ${c.error ? `<div class="alert bad">${errorHtml(c.error)}</div>` : ""}
+        <details${c.status === "draft" ? " open" : ""}><summary class="hint">${c.scenes.length} scene${c.scenes.length === 1 ? "" : "s"}${c.drafted_by ? ` · drafted by ${esc(c.drafted_by.split("/").pop())}` : ""}</summary><div class="grid" style="margin-top:6px">${scenes}
+          <button class="btn btn-sm" type="button" data-st-addscene>+ Scene</button></div></details>
+        <div class="field"><span class="label">Supporting pictures <span class="hint">places, objects, a look</span></span><div class="st-imgs">${imgs || `<span class="hint">None yet.</span>`}</div>
+          <div class="row"><button class="btn btn-sm" type="button" data-st-chpick>Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" data-st-chupload hidden></label></div>
+          <div class="mh-picker" hidden></div></div>
+        <div class="row">${c.video_url ? `<a class="btn btn-sm" href="${esc(c.video_url)}" target="_blank" rel="noopener">▶ Chapter video</a>` : ""}${(c.history || []).length ? `<span class="hint">${c.history.length} earlier version${c.history.length === 1 ? "" : "s"}</span>` : ""}<div class="spacer"></div>
+          <button class="btn btn-sm btn-danger" type="button" data-st-chdel${busy ? " disabled" : ""}>Delete</button>
+          <button class="btn btn-sm" type="submit"${busy ? " disabled" : ""}>Save</button>
+          ${c.render_job_id ? `<button class="btn btn-sm" type="button" data-st-video="redo"${busy ? " disabled" : ""} title="Make a new video and put it in this chapter's place in the main video">Redo video</button>`
+            : `<button class="btn btn-sm btn-primary" type="button" data-st-video="make"${busy ? " disabled" : ""} title="Plan, render and append to the main video">Make video</button>`}</div>
+      </form>`;
+    }).join("") : `<span class="hint">Chat some ideas, then press Draft chapter.</span>`;
+  }
+
+  function stChapterBody(form) {
+    return {
+      title: form.querySelector('[data-c="title"]').value, summary: form.querySelector('[data-c="summary"]').value,
+      scenes: [...form.querySelectorAll("[data-scene]")].map((el) => ({
+        description: el.querySelector('[data-s="description"]').value, setting: el.querySelector('[data-s="setting"]').value,
+        characters: el.querySelector('[data-s="characters"]').value.split(",").map((x) => x.trim()).filter(Boolean),
+        dialogue: stDialogueParse(el.querySelector('[data-s="dialogue"]').value),
+      })),
+    };
+  }
+
+  // a Media picker inside a card: search + collection, click a picture to use it
+  async function stPicker(picker, onPick) {
+    if (!picker.hidden) { picker.hidden = true; return; }
+    picker.hidden = false;
+    picker.innerHTML = `<div class="row mh-picker-bar"><input class="input" data-pick-q placeholder="Search Media…" style="flex:1;height:30px"><select class="select" data-pick-coll style="width:auto;max-width:50%;height:30px"><option value="">All collections</option></select></div><div class="mh-picker-grid"><span class="hint">Loading…</span></div>`;
+    picker.onPick = onPick;
+    await mhPickerLoad(picker, true);
+    picker.oninput = (e) => { if (e.target.matches("[data-pick-q]")) { clearTimeout(picker.t); picker.t = setTimeout(() => mhPickerLoad(picker), 300); } };
+    picker.onchange = (e) => { if (e.target.matches("[data-pick-coll]")) mhPickerLoad(picker); };
+    picker.onclick = async (e) => { const img = e.target.closest("[data-pick]"); if (img) { e.stopPropagation(); await picker.onPick(img.dataset.pick); } };
+  }
+
+  const stPath = (rest = "") => `/v1/stories/${encodeURIComponent(story.id)}${rest}`;
+  const stWrap = (fn, failTitle) => async (...args) => { try { await fn(...args); } catch (error) { toast(failTitle, readableError(error.message).short, "bad", 8000); } };
+
+  $("stPick").onchange = (e) => { story.id = e.target.value; stShow().catch((er) => toast("Could not open", er.message, "bad")); };
+  $("stNew").onclick = stWrap(async () => {
+    const title = await askInput("New story", "Title", "");
+    if (!title) return;
+    const created = await post("/v1/stories", { title });
+    story.id = created.id;
+    await loadStories();
+  }, "Could not create");
+  $("stDelete").onclick = stWrap(async () => {
+    if (!story.id || !await confirmAction("Delete this story?", "Its chat and chapters are removed. Videos and the main film stay in Media.", "Delete")) return;
+    await api(stPath(), { method: "DELETE" }); story.id = ""; await loadStories();
+  }, "Could not delete");
+  $("stMeta").onsubmit = stWrap(async (e) => {
+    e.preventDefault();
+    await putJson(stPath(), { title: $("stTitle").value, premise: $("stPremise").value, style: $("stStyle").value }, "PATCH");
+    toast("Saved"); await loadStories();
+  }, "Could not save");
+  $("stSettings").onsubmit = stWrap(async (e) => {
+    e.preventDefault();
+    const steps = $("stSteps").value.trim();
+    await putJson(stPath(), { settings: { models: $("stModels").value, aspect_ratio: $("stAspect").value,
+      segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value,
+      render: { unet_name: $("stUnet").value || null, steps: steps ? Number(steps) : null } } }, "PATCH");
+    toast("Settings saved"); document.activeElement.blur(); await stShow(true);
+  }, "Could not save");
+
+  // ---- chat
+  function stAttachPaint() {
+    $("stAttach").innerHTML = story.attach.map((id) => `<span><img src="${esc(PREFIX)}/v1/assets/${esc(id)}/file?w=320" alt=""><button class="btn btn-sm" type="button" data-st-unattach="${esc(id)}">×</button></span>`).join("");
+  }
+  $("stAttach").onclick = (e) => { const b = e.target.closest("[data-st-unattach]"); if (b) { story.attach = story.attach.filter((x) => x !== b.dataset.stUnattach); stAttachPaint(); } };
+  $("stAttachBtn").onclick = () => stPicker($("stAttachPicker"), async (id) => { if (!story.attach.includes(id)) story.attach.push(id); stAttachPaint(); });
+  $("stAttachUpload").onchange = stWrap(async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    const asset = await uploadFile(file, () => {}, { collection: "story uploads" });
+    story.attach.push(asset.id); stAttachPaint(); e.target.value = "";
+  }, "Upload failed");
+  $("stChatForm").onsubmit = stWrap(async (e) => {
+    e.preventDefault();
+    if (!story.id) { toast("Start a story first", "", "warn"); return; }
+    const text = $("stInput").value.trim();
+    if (!text && !story.attach.length) return;
+    $("stSend").disabled = true;
+    $("stThread").insertAdjacentHTML("beforeend", stBubble({ role: "user", text, attachments: story.attach }) + `<div class="st-msg assistant" id="stTyping">…</div>`);
+    $("stThread").scrollTop = $("stThread").scrollHeight;
+    try {
+      await post(stPath("/messages"), { text, attachments: story.attach });
+      $("stInput").value = ""; story.attach = []; stAttachPaint(); $("stAttachPicker").hidden = true;
+    } finally { $("stSend").disabled = false; await stThreadLoad(); }
+  }, "The co-writer did not answer");
+  $("stInput").onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); $("stChatForm").requestSubmit(); } };
+  $("stDraft").onclick = stWrap(async () => {
+    if (!story.id) return;
+    $("stDraft").disabled = true; $("stDraft").textContent = "Drafting…";
+    try { const ch = await post(stPath("/chapters/draft"), {}); toast("Chapter drafted", `${ch.title}: ${ch.scenes.length} scenes. Edit it, then Make video.`); await stShow(); }
+    finally { $("stDraft").disabled = false; $("stDraft").textContent = "Draft chapter"; }
+  }, "Could not draft the chapter");
+
+  // ---- main film
+  $("stRebuild").onclick = stWrap(async () => { await post(stPath("/film"), {}); toast("Main video rebuilt"); await stShow(true); }, "Could not rebuild");
+  $("stFilm").onclick = (e) => {
+    if (!e.target.closest("[data-st-srt]")) return;
+    e.preventDefault();
+    const headers = !PREFIX && token ? { Authorization: `Bearer ${token}` } : {};
+    fetch(PREFIX + stPath("/film.srt"), { headers }).then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
+      .then((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `story_${story.id}.srt`; a.click(); })
+      .catch((er) => toast("Could not download", er.message, "bad"));
+  };
+
+  // ---- cast
+  $("stAddChar").onsubmit = stWrap(async (e) => {
+    e.preventDefault();
+    await post(stPath("/characters"), { name: $("stAddCharName").value.trim(), role: "cast" });
+    $("stAddCharName").value = ""; document.activeElement.blur(); await stShow(true);
+  }, "Could not add");
+  const stSetImage = (name, assetId) => putJson(stPath("/characters/image"), { name, asset_id: assetId });
+  $("stCast").addEventListener("submit", stWrap(async (e) => {
+    const form = e.target.closest("[data-st-char]"); if (!form) return;
+    e.preventDefault();
+    const name = form.dataset.stChar, newName = form.querySelector('[data-f="name"]').value.trim();
+    await putJson(stPath("/characters"), { name, new_name: newName !== name ? newName : null, role: form.querySelector('[data-f="role"]').value,
+      description: form.querySelector('[data-f="description"]').value }, "PATCH");
+    toast("Saved", newName); document.activeElement.blur(); await stShow(true);
+  }, "Could not save"));
+  $("stCast").addEventListener("change", stWrap(async (e) => {
+    const form = e.target.closest("[data-st-char]"); if (!form) return;
+    const name = form.dataset.stChar;
+    if (e.target.dataset.f === "role") { await putJson(stPath("/characters"), { name, role: e.target.value }, "PATCH"); document.activeElement.blur(); await stShow(true); }
+    if (e.target.dataset.stAct === "upload" && e.target.files[0]) {
+      const asset = await uploadFile(e.target.files[0], () => {}, { collection: "story uploads" });
+      await stSetImage(name, asset.id); toast("Picture set", name); await stShow(true);
+    }
+  }, "Not used"));
+  $("stCast").addEventListener("click", stWrap(async (e) => {
+    const button = e.target.closest("[data-st-act]"); const form = e.target.closest("[data-st-char]");
+    if (!button || !form || button.tagName === "INPUT") return;
+    const name = form.dataset.stChar, act = button.dataset.stAct;
+    if (act === "pick") await stPicker(form.querySelector(".mh-picker"), async (id) => {
+      try { await stSetImage(name, id); toast("Picture set", name); await stShow(true); } catch (er) { toast("Not used", readableError(er.message).short, "bad", 8000); }
+    });
+    if (act === "clear") { await stSetImage(name, null); await stShow(true); }
+    if (act === "remove" && await confirmAction(`Remove ${name}?`, "They leave the cast list; chapters keep their lines.", "Remove")) {
+      await api(stPath(`/characters?name=${encodeURIComponent(name)}`), { method: "DELETE" }); await stShow(true);
+    }
+  }, "Could not do that"));
+
+  // ---- chapters
+  $("stChapters").addEventListener("submit", stWrap(async (e) => {
+    const form = e.target.closest("[data-st-ch]"); if (!form) return;
+    e.preventDefault();
+    await putJson(stPath(`/chapters/${form.dataset.stCh}`), stChapterBody(form), "PATCH");
+    toast("Chapter saved"); document.activeElement.blur(); await stShow(true);
+  }, "Could not save the chapter"));
+  $("stChapters").addEventListener("click", stWrap(async (e) => {
+    const form = e.target.closest("[data-st-ch]"); if (!form) return;
+    const id = form.dataset.stCh;
+    if (e.target.closest("[data-st-addscene]")) {
+      const body = stChapterBody(form); body.scenes.push({ description: "New scene", setting: "", characters: [], dialogue: [] });
+      await putJson(stPath(`/chapters/${id}`), body, "PATCH"); document.activeElement.blur(); await stShow(true);
+    }
+    const video = e.target.closest("[data-st-video]");
+    if (video) {
+      const redo = video.dataset.stVideo === "redo";
+      if (redo && !await confirmAction("Redo this chapter's video?", "A new video is planned and rendered; it replaces this chapter's place in the main video. The old one is kept in the chapter's history.", "Redo")) return;
+      await putJson(stPath(`/chapters/${id}`), stChapterBody(form), "PATCH");  // what is on screen is what gets filmed
+      await post(stPath(`/chapters/${id}/video${redo ? "?redo=true" : ""}`), {});
+      toast(redo ? "Redoing the video" : "Making the video", "Plan → render → appended to the main video. This takes a while.");
+      document.activeElement.blur(); await stShow(true);
+    }
+    if (e.target.closest("[data-st-chdel]") && await confirmAction("Delete this chapter?", "Its video stays in Media; press Rebuild on the main video to drop it from there.", "Delete")) {
+      await api(stPath(`/chapters/${id}`), { method: "DELETE" }); await stShow(true);
+    }
+    const unimg = e.target.closest("[data-st-unimg]");
+    if (unimg) {
+      const keep = (story.view.chapters.find((c) => c.id === id)?.images || []).filter((i) => i.asset_id !== unimg.dataset.stUnimg);
+      await putJson(stPath(`/chapters/${id}`), { images: keep }, "PATCH"); await stShow(true);
+    }
+    if (e.target.closest("[data-st-chpick]")) await stPicker(form.querySelector(".field .mh-picker"), async (assetId) => {
+      const label = await askInput("Picture for this chapter", "What is it? (e.g. the rooftop bar at night)", "");
+      try { await post(stPath(`/chapters/${id}/images`), { asset_id: assetId, label: label || "" }); await stShow(true); }
+      catch (er) { toast("Not used", readableError(er.message).short, "bad", 8000); }
+    });
+  }, "Could not do that"));
+  $("stChapters").addEventListener("change", stWrap(async (e) => {
+    const form = e.target.closest("[data-st-ch]"); if (!form || !e.target.matches("[data-st-chupload]") || !e.target.files[0]) return;
+    const asset = await uploadFile(e.target.files[0], () => {}, { collection: "story uploads" });
+    const label = await askInput("Picture for this chapter", "What is it?", "");
+    await post(stPath(`/chapters/${form.dataset.stCh}/images`), { asset_id: asset.id, label: label || "" }); await stShow(true);
+  }, "Not used"));
 
   // ------------------------------------------------ Photograph settings: the Manhwa page's own Qwen 2.1 config
   // Who looks at each panel and writes its prompt; "" is the fixed template, with no model call.

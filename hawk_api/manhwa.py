@@ -675,6 +675,81 @@ def burn_subtitles(video: str, srt: str, out: str) -> None:
         raise RuntimeError(f"ffmpeg could not burn the subtitles: {result.stderr.strip()[-300:]}")
 
 
+async def rendered_file(service, job_id: str, target: str) -> str:
+    """A finished render's video on disk: ComfyUI's own file when its output folder is here, else downloaded."""
+    location = service.video_location(job_id)
+    local = service.local_output(*location)
+    if local:
+        return local
+    opened = await service.open_remote(*location, None)
+    with open(target, "wb") as handle:
+        async for chunk in opened["body"]:
+            handle.write(chunk)
+    return target
+
+
+async def film_to_drive(service, path: str, name: str) -> str:
+    """Copy a film (or its subtitles) into the Drive video folder when render export is on. Never raises."""
+    exporter = getattr(service, "drive_exporter", None)
+    try:
+        if exporter is None or not exporter.browser.available or not exporter.settings().get("enabled"):
+            return ""
+        day = time.strftime("%Y-%m-%d")
+        folder = f"{exporter.settings()['folder']}/{day}"
+        target = os.path.join(exporter.browser.root, folder, name)
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        await asyncio.to_thread(shutil.copyfile, path, target)
+        return f"{folder}/{name}"
+    except Exception as exc:  # Drive full or unmounted: the film is still in Media
+        log.warning("film not copied to Drive: %s", exc)
+        return ""
+
+
+def shows_real_person(service, asset: dict) -> bool:
+    """Whether this image, or an upload it was made from, was judged to show a real, identifiable person."""
+    seen, queue = set(), [asset]
+    while queue:
+        current = queue.pop()
+        if current is None or current.get("id") in seen:
+            continue
+        seen.add(current.get("id"))
+        source = current.get("source") or {}
+        if (source.get("person_check") or {}).get("identifiable") is True:
+            return True
+        queue += [service.store.lineage(ref) for ref in source.get("references") or []]
+    return False
+
+
+async def vet_face_image(service, asset_id: str) -> dict:
+    """The image a user picked as a character's face, once it is safe to use: it must not show -- or have been
+    made from a photo of -- a real, identifiable person. Uploads are checked (through their lineage) first; one
+    that could not be checked is refused with a try-again message rather than a wrong accusation."""
+    from .local_images import from_upload
+
+    asset = service.store.get_asset(asset_id)
+    if asset is None or asset.get("kind") != "image":
+        raise RequestError(f"{asset_id!r} is not an image in the library.")
+    if from_upload(asset, service.store.lineage):
+        check_roots = getattr(service, "_check_upload_roots", None)
+        checker = getattr(service, "person_check", None)
+        try:
+            if check_roots is not None:
+                await check_roots([asset])
+            elif checker is not None:
+                await checker(asset_id)
+        except Exception as exc:
+            log.warning("person check on %s failed: %s", asset_id, exc)
+        asset = service.store.get_asset(asset_id) or asset
+        if from_upload(asset, service.store.lineage):
+            if shows_real_person(service, asset):
+                raise RequestError("That picture shows, or was made from a photo of, a real, identifiable person, so "
+                                   "it can't be a character's face. Use art, an image made here from a prompt, or "
+                                   "Make portrait.")
+            raise RequestError("Couldn't check whether that picture shows a real person (the vision model gave no "
+                               "answer). Try again in a minute.")
+    return asset
+
+
 class SkipPanel(Exception):
     """A panel that must not be converted (someone reads as a minor)."""
 
@@ -1832,32 +1907,10 @@ class ManhwaManager:
         return build_srt(parts)
 
     async def _part_file(self, job_id: str, target: str) -> str:
-        """A rendered part on disk: ComfyUI's own file when its output folder is here, else downloaded."""
-        location = self.service.video_location(job_id)
-        local = self.service.local_output(*location)
-        if local:
-            return local
-        opened = await self.service.open_remote(*location, None)
-        with open(target, "wb") as handle:
-            async for chunk in opened["body"]:
-                handle.write(chunk)
-        return target
+        return await rendered_file(self.service, job_id, target)
 
     async def _film_to_drive(self, path: str, name: str) -> str:
-        """Copy the film into the Drive video folder when render export is on. Never fails the merge."""
-        exporter = getattr(self.service, "drive_exporter", None)
-        try:
-            if exporter is None or not exporter.browser.available or not exporter.settings().get("enabled"):
-                return ""
-            day = time.strftime("%Y-%m-%d")
-            folder = f"{exporter.settings()['folder']}/{day}"
-            target = os.path.join(exporter.browser.root, folder, name)
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            await asyncio.to_thread(shutil.copyfile, path, target)
-            return f"{folder}/{name}"
-        except Exception as exc:  # Drive full or unmounted: the film is still in Media
-            log.warning("manhwa: film not copied to Drive: %s", exc)
-            return ""
+        return await film_to_drive(self.service, path, name)
 
     @staticmethod
     def _plan_request(chapter, part, number, parts, aspect_ratio, segment_seconds, model,
@@ -2182,50 +2235,18 @@ class ManhwaManager:
         if name not in roster:
             raise NotFound(f"No character {name!r} in {series!r}.")
         if asset_id:
-            from .local_images import from_upload
-
             data = roster[name]
-            asset = self.service.store.get_asset(asset_id)
-            if asset is None or asset.get("kind") != "image":
+            if self.service.store.get_asset(asset_id) is None:
                 raise RequestError(f"{asset_id!r} is not an image in the library.")
             if is_minor(name, data):
                 raise RequestError(f"{name} reads as under 18 and can't be given a portrait.")
             if role_of(name, data) in ("narrator", "hidden"):
                 raise RequestError(f"{name} is the {role_of(name, data)}: set them to Cast first.")
-            if from_upload(asset, self.service.store.lineage):
-                # the upload itself, or the uploads a generated image was made from: check each for a real person
-                check_roots = getattr(self.service, "_check_upload_roots", None)
-                checker = getattr(self.service, "person_check", None)
-                try:
-                    if check_roots is not None:
-                        await check_roots([asset])
-                    elif checker is not None:
-                        await checker(asset_id)
-                except Exception as exc:
-                    log.warning("manhwa: person check on %s failed: %s", asset_id, exc)
-                asset = self.service.store.get_asset(asset_id) or asset
-                if from_upload(asset, self.service.store.lineage):
-                    if self._shows_real_person(asset):
-                        raise RequestError("That picture shows, or was made from a photo of, a real, identifiable "
-                                           "person, so it can't be a character's portrait. Use art, an image made "
-                                           "here from a prompt, or Make portrait.")
-                    raise RequestError("Couldn't check whether that picture shows a real person (the vision model "
-                                       "gave no answer). Try again in a minute.")
+            await vet_face_image(self.service, asset_id)
         return self.set_portrait(series, name, asset_id)
 
     def _shows_real_person(self, asset: dict) -> bool:
-        """Whether this image, or an upload it was made from, was judged to show a real, identifiable person."""
-        seen, queue = set(), [asset]
-        while queue:
-            current = queue.pop()
-            if current is None or current.get("id") in seen:
-                continue
-            seen.add(current.get("id"))
-            source = current.get("source") or {}
-            if (source.get("person_check") or {}).get("identifiable") is True:
-                return True
-            queue += [self.service.store.lineage(ref) for ref in source.get("references") or []]
-        return False
+        return shows_real_person(self.service, asset)
 
     def set_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
         """Use this image as the character's portrait (None removes it)."""

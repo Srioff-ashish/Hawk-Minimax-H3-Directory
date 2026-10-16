@@ -59,7 +59,7 @@ def _error(exc: Exception) -> ToolError:
     return ToolError(message)
 
 
-def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MCPServer:
+def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stories=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
@@ -581,5 +581,54 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
         @mcp.tool(description="The character roster of a catalogued series: name, aliases, appearance, chapters they appear in.")
         async def manhwa_characters(series: str) -> dict:
             return {"characters": manhwa.characters(series)}
+
+    if stories is not None:
+        @mcp.tool(description="The user's stories (Story page): id, title, premise, chapters and how many have video.")
+        async def list_stories() -> dict:
+            return {"stories": stories.list_stories()}
+
+        @mcp.tool(description=(
+            "One story in full: premise, style, settings, cast (roles, descriptions, pictures), chapters (title, "
+            "summary, scenes with exact dialogue, supporting images, video status) and the main film."))
+        async def get_story(story_id: str) -> dict:
+            return await run(_sync(lambda: stories.view(story_id)))
+
+        @mcp.tool(description="Start a new story on the Story page. Only when the user asks.")
+        async def create_story(title: str, premise: str = "", style: str = "") -> dict:
+            return await run(_sync(lambda: stories.create_story(title, premise, style)))
+
+        @mcp.tool(description=(
+            "Send the user's idea to the story's co-writer (Gemma 4 31B, then Kimi K2.6, then DeepSeek V4.1 Flash) "
+            "and return its answer. Both are kept in the story's chat. attachments: image asset ids to show it."))
+        async def story_chat(story_id: str, text: str, attachments: list[str] | None = None) -> dict:
+            return await run(stories.chat(story_id, text, attachments))
+
+        @mcp.tool(description=(
+            "Turn the story chat since the last chapter into the next chapter: title, summary and scenes (what is "
+            "seen, setting, who is there, exact lines). Saved as an editable draft. When the user says the chapter "
+            "is ready."))
+        async def draft_story_chapter(story_id: str) -> dict:
+            return await run(stories.draft_chapter(story_id))
+
+        @mcp.tool(description=(
+            "Edit a story chapter's draft: title, summary, scenes ([{description, setting, characters, dialogue: "
+            "[{speaker, text}]}]) or its supporting images ([{asset_id, label}]). Only what the user asks to change."))
+        async def edit_story_chapter(story_id: str, chapter_id: str, title: str | None = None, summary: str | None = None,
+                                     scenes: list[dict] | None = None, images: list[dict] | None = None) -> dict:
+            return await run(_sync(lambda: stories.edit_chapter(story_id, chapter_id, title=title, summary=summary,
+                                                                scenes=scenes, images=images)))
+
+        @mcp.tool(description=(
+            "Make a story chapter's video with no stops: plan it (cast pictures and the chapter's images as "
+            "references), render it, and append it to the story's main film. redo=true replaces an existing video "
+            "in place. Poll get_story for the chapter's status (planning, rendering, appending, done, failed)."))
+        async def make_story_chapter_video(story_id: str, chapter_id: str, redo: bool = False) -> dict:
+            return await run(_sync(lambda: stories.make_video(story_id, chapter_id, redo=redo)))
+
+        @mcp.tool(description=(
+            "Give a story character a picture from Media (asset_id; empty removes them). A picture of, or made from "
+            "a photo of, a real identifiable person is refused; minors and the narrator get none."))
+        async def set_story_character_image(story_id: str, name: str, asset_id: str = "", add: bool = False) -> dict:
+            return await run(stories.set_character_image(story_id, name, asset_id or None, add=add))
 
     return mcp

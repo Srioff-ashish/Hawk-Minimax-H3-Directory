@@ -474,3 +474,59 @@ class ManhwaCatalogIn(BaseModel):
     cookies: str = Field("", description="Optional Cookie header for a site you are logged in to, e.g. 'session=abc; age_ok=1'.")
     follow_next: bool = Field(False, description="Keep going to the next chapters by following the page's 'next' link.")
     max_chapters: int = Field(5, ge=1, le=50, description="With follow_next: stop after this many chapters.")
+
+
+# ------------------------------------------------------------------ story
+
+
+StoryRole = Literal["cast", "extra", "narrator"]
+
+
+class StoryIn(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    premise: str = Field("", max_length=2000, description="What the story is about, in a few sentences.")
+    style: str = Field("", max_length=600, description="Genre, tone, look: e.g. 'slow-burn romance, warm film grain'.")
+
+
+class StoryPatch(BaseModel):
+    title: str | None = Field(None, max_length=120)
+    premise: str | None = Field(None, max_length=2000)
+    style: str | None = Field(None, max_length=600)
+    settings: dict | None = Field(None, description="models (a comma-separated chain), aspect_ratio, segment_seconds, "
+                                  "render (RenderSettings fields), subtitles (file | off).")
+
+
+class StoryCharacterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field("", max_length=2000, description="Adult age, build, face, hair, usual clothes, voice.")
+    role: StoryRole = "cast"
+
+
+class StoryCharacterPatch(BaseModel):
+    name: str
+    new_name: str | None = Field(None, max_length=80)
+    description: str | None = Field(None, max_length=2000)
+    role: StoryRole | None = None
+
+
+class StoryImageIn(BaseModel):
+    name: str = Field(description="The character.")
+    asset_id: str | None = Field(None, description="An image from Media; null removes the character's pictures.")
+    add: bool = Field(False, description="Keep the pictures they have and add this one.")
+
+
+class StoryChatIn(BaseModel):
+    text: str = Field("", max_length=6000)
+    attachments: list[str] = Field(default_factory=list, max_length=4, description="Image asset ids to show the co-writer.")
+
+
+class StoryChapterPatch(BaseModel):
+    title: str | None = Field(None, max_length=160)
+    summary: str | None = Field(None, max_length=1200)
+    scenes: list[dict] | None = Field(None, description="[{description, setting, characters, dialogue:[{speaker, text}]}]")
+    images: list[dict] | None = Field(None, description="[{asset_id, label}]: the chapter's supporting pictures.")
+
+
+class StoryChapterImageIn(BaseModel):
+    asset_id: str
+    label: str = Field("", max_length=200, description="What it is for, e.g. 'the rooftop bar at night'.")

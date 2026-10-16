@@ -21,6 +21,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
+from .story import StoryManager
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -32,7 +33,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -100,10 +101,11 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     drive = DriveBrowser(settings.drive_root)
     imports = ImportManager(service, drive)
     manhwa = ManhwaManager(service)
+    stories = StoryManager(service)
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
-    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa)
+    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -122,6 +124,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         await snapshots.start()
         # An autopilot the last runtime was in the middle of carries on once ComfyUI answers.
         resume = asyncio.create_task(manhwa.resume_pipelines())
+        resume_stories = asyncio.create_task(stories.resume())
         try:
             async with mcp.session_manager.run():
                 yield
@@ -129,8 +132,10 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             # In a finally: a shutdown that skipped these would also skip the last snapshot, which is
             # the one copy that matters when a Colab runtime is going away.
             resume.cancel()
+            resume_stories.cancel()
             await imports.stop()
             await manhwa.stop()
+            await stories.stop()
             await exporter.stop()
             await agent.stop()
             await service.stop()
@@ -145,6 +150,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     app.state.service = service
     app.state.agent = agent
     app.state.manhwa = manhwa
+    app.state.stories = stories
     app.state.snapshots = snapshots
 
     @app.exception_handler(RequestError)
@@ -461,6 +467,90 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/manhwa/characters", tags=["manhwa"])
     async def manhwa_characters(series: str):
         return {"characters": manhwa.characters(series)}
+
+    # ------------------------------------------------------------- story
+
+    @app.get("/v1/stories", tags=["story"])
+    async def story_list():
+        return {"stories": stories.list_stories()}
+
+    @app.post("/v1/stories", tags=["story"], status_code=201)
+    async def story_create(body: StoryIn):
+        return stories.create_story(body.title, body.premise, body.style)
+
+    @app.get("/v1/stories/{story_id}", tags=["story"])
+    async def story_get(story_id: str):
+        return stories.view(story_id)
+
+    @app.patch("/v1/stories/{story_id}", tags=["story"])
+    async def story_patch(story_id: str, body: StoryPatch):
+        return stories.update_story(story_id, title=body.title, premise=body.premise, style=body.style,
+                                    settings=body.settings)
+
+    @app.delete("/v1/stories/{story_id}", tags=["story"])
+    async def story_delete(story_id: str):
+        """The story, its chat and chapters. Its videos and main film stay in Media."""
+        return await stories.delete_story(story_id)
+
+    @app.post("/v1/stories/{story_id}/characters", tags=["story"], status_code=201)
+    async def story_character_add(story_id: str, body: StoryCharacterIn):
+        return stories.add_character(story_id, body.name, body.description, body.role)
+
+    @app.patch("/v1/stories/{story_id}/characters", tags=["story"])
+    async def story_character_edit(story_id: str, body: StoryCharacterPatch):
+        return stories.edit_character(story_id, body.name, new_name=body.new_name, description=body.description,
+                                      role=body.role)
+
+    @app.delete("/v1/stories/{story_id}/characters", tags=["story"])
+    async def story_character_remove(story_id: str, name: str):
+        return stories.remove_character(story_id, name)
+
+    @app.put("/v1/stories/{story_id}/characters/image", tags=["story"])
+    async def story_character_image(story_id: str, body: StoryImageIn):
+        """A character's picture from Media. A picture of (or made from a photo of) a real person is refused."""
+        return await stories.set_character_image(story_id, body.name, body.asset_id, add=body.add)
+
+    @app.get("/v1/stories/{story_id}/messages", tags=["story"])
+    async def story_messages(story_id: str):
+        return {"messages": stories.messages(story_id)}
+
+    @app.post("/v1/stories/{story_id}/messages", tags=["story"])
+    async def story_chat(story_id: str, body: StoryChatIn):
+        """Your idea, and the co-writer's answer (Gemma 4 31B, then Kimi K2.6, then DeepSeek V4.1 Flash)."""
+        return await stories.chat(story_id, body.text, body.attachments)
+
+    @app.post("/v1/stories/{story_id}/chapters/draft", tags=["story"], status_code=201)
+    async def story_draft(story_id: str):
+        """The chat since the last chapter, written up as the next chapter's scenes (an editable draft)."""
+        return await stories.draft_chapter(story_id)
+
+    @app.patch("/v1/stories/{story_id}/chapters/{chapter_id}", tags=["story"])
+    async def story_chapter_edit(story_id: str, chapter_id: str, body: StoryChapterPatch):
+        return stories.edit_chapter(story_id, chapter_id, title=body.title, summary=body.summary, scenes=body.scenes,
+                                    images=body.images)
+
+    @app.post("/v1/stories/{story_id}/chapters/{chapter_id}/images", tags=["story"])
+    async def story_chapter_image(story_id: str, chapter_id: str, body: StoryChapterImageIn):
+        return await stories.add_chapter_image(story_id, chapter_id, body.asset_id, body.label)
+
+    @app.delete("/v1/stories/{story_id}/chapters/{chapter_id}", tags=["story"])
+    async def story_chapter_delete(story_id: str, chapter_id: str):
+        return stories.delete_chapter(story_id, chapter_id)
+
+    @app.post("/v1/stories/{story_id}/chapters/{chapter_id}/video", tags=["story"], status_code=202)
+    async def story_chapter_video(story_id: str, chapter_id: str, redo: bool = False):
+        """Plan, render and append the chapter to the main film, with no stops. redo=true replaces its video."""
+        return stories.make_video(story_id, chapter_id, redo=redo)
+
+    @app.post("/v1/stories/{story_id}/film", tags=["story"])
+    async def story_film(story_id: str):
+        """Rebuild the main film from every chapter with a finished video."""
+        return {"film": await stories.rebuild_film(story_id)}
+
+    @app.get("/v1/stories/{story_id}/film.srt", tags=["story"])
+    async def story_subtitles(story_id: str):
+        return Response(stories.subtitles(story_id), media_type="application/x-subrip; charset=utf-8",
+                        headers={"content-disposition": f'attachment; filename="story_{story_id}.srt"'})
 
     @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
     async def asset_file(asset_id: str, w: int = 0):
