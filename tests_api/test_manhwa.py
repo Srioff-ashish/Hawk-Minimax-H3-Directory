@@ -135,7 +135,8 @@ class FakeService:
         self.settings = SimpleNamespace(db_path=os.path.join(tmp, "jobs.sqlite3"), agent_vision_model="vis-a, vis-b")
         self.atlas = FakeChat()
         self.assets: dict[str, dict] = {}
-        self.store = SimpleNamespace(get_asset=self.assets.get, all_assets=lambda: list(self.assets.values()))
+        self.store = SimpleNamespace(get_asset=self.assets.get, all_assets=lambda: list(self.assets.values()),
+                                     lineage=self.assets.get)
 
     def delete_asset(self, asset_id):
         from hawk_api.jobs import NotFound
@@ -1173,7 +1174,8 @@ class CastAndTriage(unittest.IsolatedAsyncioTestCase):
         await Convert.asyncSetUp(self)
         self.chat = PanelChat()
         self.service.atlas = self.chat
-        self.manager.store.save_characters("S", {"Mina": {"appearance": "short black hair, grey coat", "tiles": 4},
+        self.manager.store.save_characters("S", {"Mina": {"appearance": "short black hair, grey coat", "tiles": 4,
+                                                          "role": "cast"},
                                                  "unknown-1": {"appearance": "hooded", "tiles": 9}})
         for page in self.manager.store.pages("ch1"):
             page["characters"] = [{"name": "Mina", "appearance": "short black hair"}]
@@ -1330,3 +1332,114 @@ class Subtitles(unittest.IsolatedAsyncioTestCase):
                                                      text=True).stdout
         self.assertEqual(film["subtitles"], "burned" if has_libass else "file",
                          "burned when this ffmpeg can, else the .srt beside the film")
+
+
+
+class CastEditor(unittest.IsolatedAsyncioTestCase):
+    """The user decides the cast: roles, descriptions, merges, portraits. Minors are locked out of all of it."""
+
+    asyncTearDown = Convert.asyncTearDown
+
+    async def asyncSetUp(self):
+        await Convert.asyncSetUp(self)
+        self.chat = PanelChat()
+        self.service.atlas = self.chat
+        self.manager.save_settings({"qa": False})
+        self.manager.store.save_characters("S", {
+            "Mrs. Cha": {"appearance": "brown hair, black top", "tiles": 28, "chapters": ["86"]},
+            "Eun-ae Cha": {"appearance": "long light brown hair", "tiles": 126, "chapters": ["86", "88"]},
+            "Narrator": {"appearance": "Text", "tiles": 5},
+            "Mi-ah": {"appearance": "Child with light hair", "tiles": 1},
+            "schoolgirl": {"appearance": "Long dark hair", "tiles": 5},
+            "classmate": {"appearance": "Short brown hair, school uniform", "tiles": 1}})
+        self.manager.store.save_pages("ch1", "S", [dict(p, characters=[{"name": "Eun-ae Cha"}],
+                                                        dialogue=[{"speaker": "Eun-ae Cha", "text": "hi"}])
+                                                   for p in self.manager.store.pages("ch1")])
+
+    def roster(self):
+        return {c["name"]: c for c in self.manager.characters("S")}
+
+    def test_defaults_narrator_and_minors(self):
+        roster = self.roster()
+        self.assertEqual(roster["Narrator"]["role"], "narrator")
+        self.assertEqual(roster["Mrs. Cha"]["role"], "extra", "no one is cast until the user says so")
+        self.assertEqual({n for n, c in roster.items() if c["minor"]}, {"Mi-ah", "schoolgirl", "classmate"})
+        self.assertNotIn("Narrator", manhwa._roster_text(self.manager.store.characters("S")), "a voice is not looked for")
+
+    def test_a_minor_can_never_be_cast(self):
+        from hawk_api.jobs import RequestError
+
+        for name in ("Mi-ah", "schoolgirl", "classmate"):
+            with self.assertRaises(RequestError):
+                self.manager.edit_character("S", name, role="cast")
+        with self.assertRaises(RequestError):
+            self.manager.add_character("S", "Little sister", "a child of eight", "cast")
+
+    def test_edits_survive_the_catalogue_and_renames_follow_into_tiles(self):
+        self.manager.edit_character("S", "Mrs. Cha", appearance="late 30s, auburn hair in a low bun", role="cast")
+        roster = self.manager.store.characters("S")
+        pages = [{"characters": [{"name": "Mrs. Cha", "appearance": "black hair"}]}]
+        self.manager._merge_roster(roster, pages, [], "90", "ch9")
+        self.assertEqual(roster["Mrs. Cha"]["appearance"], "late 30s, auburn hair in a low bun")
+        self.manager.edit_character("S", "Eun-ae Cha", new_name="Eun-ae")
+        self.assertIn("Eun-ae", self.roster())
+        self.assertNotIn("Eun-ae Cha", self.roster(), "the old name is only an alias now")
+        page = self.manager.store.pages("ch1")[0]
+        self.assertEqual((page["characters"][0]["name"], page["dialogue"][0]["speaker"]), ("Eun-ae", "Eun-ae"))
+
+    def test_merging_duplicates(self):
+        merged = self.manager.merge_characters("S", "Mrs. Cha", ["Eun-ae Cha"])
+        self.assertEqual((merged["tiles"], merged["aliases"]), (154, ["Eun-ae Cha"]))
+        self.assertNotIn("Eun-ae Cha", self.roster())
+        self.assertEqual(self.manager.store.pages("ch1")[0]["characters"][0]["name"], "Mrs. Cha")
+        roster = self.manager.store.characters("S")  # a later chapter still says Eun-ae Cha
+        pages = [{"characters": [{"name": "Eun-ae Cha", "appearance": "x"}], "dialogue": []}]
+        self.manager._merge_roster(roster, pages, [], "90", "ch9")
+        self.assertEqual(pages[0]["characters"][0]["name"], "Mrs. Cha")
+        self.assertEqual(roster["Mrs. Cha"]["tiles"], 155)
+
+    async def test_portraits_only_for_the_cast_and_from_the_description_when_added(self):
+        self.manager.edit_character("S", "Mrs. Cha", role="cast")
+        self.manager.add_character("S", "Professor Kim", "50s, grey beard, tweed jacket", "cast")
+        state = await self.manager.make_cast("S")
+        while state["status"] == "running":
+            await asyncio.sleep(0.02)
+        self.assertEqual(sorted(d["name"] for d in state["done"]), ["Mrs. Cha", "Professor Kim"], state)
+        prompts = {c["prompt"].split(",")[0]: c for c in self.service.calls}
+        kim = next(c for c in self.service.calls if "Professor Kim" in c["prompt"])
+        self.assertEqual(kim["refs"], [], "a character the user added is drawn from the description alone")
+        self.assertIn("grey beard", kim["prompt"])
+        named = await self.manager.make_cast("S", names=["Mi-ah", "Narrator"])
+        while named["status"] == "running":
+            await asyncio.sleep(0.02)
+        self.assertEqual(named["done"], [])
+        self.assertEqual({s["name"] for s in named["skipped"]}, {"Mi-ah", "Narrator"})
+
+    async def test_assigning_a_picture(self):
+        from hawk_api.jobs import RequestError
+
+        made = await self.service.add_asset("art.png", io.BytesIO(b"a"), source={"type": "generated"})
+        self.assertEqual((await self.manager.assign_portrait("S", "Mrs. Cha", made["id"]))["portrait_asset_id"], made["id"])
+        photo = await self.service.add_asset("me.jpg", io.BytesIO(b"p"), source={"type": "upload"})
+        checked = []
+
+        async def person_check(asset_id):
+            checked.append(asset_id)
+            self.service.assets[asset_id]["source"]["person_check"] = {"identifiable": True}
+        self.service.person_check = person_check
+        with self.assertRaises(RequestError):
+            await self.manager.assign_portrait("S", "Mrs. Cha", photo["id"])
+        self.assertEqual(checked, [photo["id"]], "an upload is checked for a real person first")
+        drawing = await self.service.add_asset("drawn.png", io.BytesIO(b"d"),
+                                               source={"type": "upload", "person_check": {"identifiable": False}})
+        await self.manager.assign_portrait("S", "Mrs. Cha", drawing["id"])
+        with self.assertRaises(RequestError):
+            await self.manager.assign_portrait("S", "Mi-ah", made["id"])
+        with self.assertRaises(RequestError):
+            await self.manager.assign_portrait("S", "Narrator", made["id"])
+
+    async def test_a_panel_showing_a_minor_is_not_converted(self):
+        self.chat.people = ["Mi-ah"]
+        state = await self.manager.wait_conversion((await self.manager.convert("ch1", plan_after=False))["id"], 30)
+        self.assertEqual((state["converted"], self.service.calls), (0, []), state)
+        self.assertIn("reads as under 18", state["results"][0]["error"])

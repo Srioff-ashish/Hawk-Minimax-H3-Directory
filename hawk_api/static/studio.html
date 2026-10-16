@@ -137,9 +137,14 @@
   .mh-context { margin-top: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 8px 10px; background: var(--surface); }
   .mh-context summary { cursor: pointer; font-weight: 600; font-size: 13.5px; }
   .mh-loras { display: grid; gap: 6px; }
-  .mh-portrait { width: 48px; height: 48px; object-fit: cover; border-radius: 50%; float: left; margin-right: 8px; background: var(--surface-3); }
-  .mh-char [data-clear-portrait] { float: right; padding: 0 6px; height: 22px; }
-  .mh-char::after { content: ""; display: block; clear: both; }
+  .mh-portrait { width: 44px; height: 44px; flex: none; object-fit: cover; border-radius: 50%; background: var(--surface-3); }
+  .mh-noface { display: inline-grid; place-items: center; color: var(--ink-2); font-size: 18px; }
+  form.mh-char { display: grid; gap: 6px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  form.mh-role-hidden { opacity: .55; }
+  .mh-char-actions { gap: 6px; }
+  .mh-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; max-height: 260px; overflow: auto; }
+  .mh-picker img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 6px; cursor: pointer; border: 2px solid transparent; }
+  .mh-picker img:hover { border-color: var(--brand); }
   .mh-lora { display: grid; grid-template-columns: auto minmax(0, 1fr) 80px; align-items: center; gap: 8px; font-size: 13px; }
   .mh-lora > span:first-child { overflow-wrap: anywhere; }
   div.mh-lora { grid-template-columns: minmax(0, 1fr) auto; }
@@ -238,7 +243,17 @@
   .progress.indeterminate > i { width: 35%; animation: slide 1.3s ease-in-out infinite; }
   @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
 
-  .alert { padding: 10px 12px; border-radius: var(--r-sm); font-size: 13px; border: 1px solid transparent; }
+  .alert { padding: 10px 12px; border-radius: var(--r-sm); font-size: 13px; border: 1px solid transparent;
+           overflow-wrap: anywhere; min-width: 0; max-height: 320px; overflow: auto; }
+  .alert details { margin-top: 6px; }
+  .alert details summary { cursor: pointer; font-size: 12px; opacity: .8; }
+  .alert details pre, .gen-error pre { margin: 6px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 var(--mono); }
+  /* long provider errors (raw JSON, URLs, CUDA dumps) have no spaces to break at: never let one widen the page */
+  .chip { max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast, .toast .hint, .gen-status, .job-card, .drawer-body, .kv dt, .kv dd { overflow-wrap: anywhere; min-width: 0; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .gen-error { border-radius: var(--r-sm); padding: 10px 12px; background: var(--bad-soft); color: var(--bad); font-size: 13px; overflow-wrap: anywhere; }
+  .gen-error .said { margin-top: 6px; padding: 8px 10px; border-left: 3px solid var(--bad); background: var(--surface); color: var(--ink); border-radius: 4px; font-style: italic; white-space: pre-wrap; }
   .alert.bad { background: var(--bad-soft); color: var(--bad); }
   .alert.warn { background: var(--warn-soft); color: var(--warn); }
   .alert.info { background: var(--info-soft); color: var(--info); }
@@ -326,7 +341,8 @@
   .job-body { display: grid; gap: 8px; padding: 12px 14px 14px; }
   .job-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .job-title { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .job-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+  .job-meta { display: flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
+  .job-meta .chip.bad { display: block; max-width: 100%; }
   .job-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
   .plabel { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
 
@@ -1082,8 +1098,7 @@
               </div>
               <label class="check"><input type="checkbox" id="mhSetAutoContext">Autopilot drafts each chapter's scene context from its catalogue summary</label>
               <div class="row"><label class="check"><input type="checkbox" id="mhSetCastRefs">Use cast portraits so faces stay the same</label>
-                <label class="check"><input type="checkbox" id="mhSetAutoCast">Autopilot makes missing portraits</label>
-                <label class="check">for the top <input class="input" id="mhSetCastSize" type="number" min="1" max="20" style="width:64px;height:30px"> characters</label></div>
+                <label class="check"><input type="checkbox" id="mhSetAutoCast">Autopilot makes missing portraits for characters marked Cast</label></div>
               <label class="check"><input type="checkbox" id="mhSetTriage">Skip text-only, blank and repeated panels</label>
               <label class="field"><span class="label">Added to every prompt</span><input class="input" id="mhSetPrompt" placeholder="e.g. soft evening light, 35mm film"></label>
               <label class="field"><span class="label">Added to every negative</span><input class="input" id="mhSetNegative" placeholder="e.g. tattoos, glasses"></label>
@@ -1137,8 +1152,12 @@
             <div class="card-body"><div class="mh-list" id="mhChapters"><span class="hint">Nothing catalogued yet.</span></div></div>
           </section>
           <section class="card" aria-label="Characters">
-            <div class="card-head"><h2>Characters</h2><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhMakeCast" title="One photoreal portrait per main character, used as a reference so faces stay the same">Make cast portraits</button></div>
-            <div class="card-body" id="mhCharacters"><span class="hint">Pick a series.</span></div>
+            <div class="card-head"><h2>Cast</h2><div class="spacer"></div><button class="btn btn-sm" type="button" id="mhMakeCast" title="A photoreal portrait for every character marked Cast that has none, used as a face reference">Make portraits</button></div>
+            <div class="card-body grid">
+              <span class="hint">Mark who is <b>Cast</b> (gets a portrait that keeps their face), an <b>Extra</b>, the <b>Narrator</b> (voice only) or <b>Hidden</b>. Your descriptions are never overwritten by the catalogue.</span>
+              <form class="row" id="mhAddChar" autocomplete="off"><input class="input" id="mhAddCharName" placeholder="Add a character…" style="flex:1;height:30px" required><button class="btn btn-sm" type="submit">Add</button></form>
+              <div id="mhCharacters"><span class="hint">Pick a series.</span></div>
+            </div>
           </section>
         </aside>
       </div>
@@ -1568,6 +1587,27 @@
 
   // ------------------------------------------------------------------ API
 
+  // A provider error often arrives as "Atlas error 429 for x: {json...}". Show what it says, keep the raw text.
+  function readableError(text) {
+    const raw = String(text || "");
+    const at = raw.indexOf("{");
+    if (at < 0) return { short: raw, raw: "" };
+    let said = "";
+    try {
+      const data = JSON.parse(raw.slice(at, raw.lastIndexOf("}") + 1));
+      const err = data.error || data;
+      said = [typeof err === "string" ? err : err.message || err.msg, err.metadata && (err.metadata.raw || err.metadata.reason)]
+        .filter((v) => typeof v === "string" && v).join(" — ");
+    } catch { /* not JSON after all */ }
+    const head = raw.slice(0, at).replace(/[:\s]+$/, "");
+    return said ? { short: `${head}${head ? ": " : ""}${said}`, raw } : { short: raw.length > 400 ? raw.slice(0, 400) + "…" : raw, raw: raw.length > 400 ? raw : "" };
+  }
+
+  function errorHtml(text) {
+    const { short, raw } = readableError(text);
+    return `${esc(short)}${raw ? `<details><summary>Full error</summary><pre>${esc(raw)}</pre></details>` : ""}`;
+  }
+
   function errorText(body, fallback) {
     if (body && typeof body.error === "string") return body.error;
     if (body && Array.isArray(body.detail)) return body.detail.map((d) => `${(d.loc || []).slice(1).join(".") || "request"}: ${d.msg}`).join("; ");
@@ -1769,9 +1809,56 @@
     $("mhChapters").innerHTML = chapters.length ? chapters.map((c) =>
       `<button type="button" data-chapter="${esc(c.id)}"><div class="row"><strong>Ch ${esc(c.chapter || "?")}</strong><span class="badge ${c.status === "done" ? "done" : c.status === "failed" ? "failed" : "rendering"}">${esc(c.status)}</span><div class="spacer"></div><span class="hint">${c.tiles || 0} tiles</span></div>${c.summary ? `<div class="hint" style="margin-top:4px">${esc(c.summary.slice(0, 180))}${c.summary.length > 180 ? "…" : ""}</div>` : ""}</button>`).join("")
       : `<span class="hint">Nothing catalogued yet.</span>`;
-    $("mhCharacters").innerHTML = characters.length ? characters.map((c) =>
-      `<div class="mh-char">${c.portrait_thumb ? `<a href="${esc(c.portrait_url || c.portrait_thumb)}" target="_blank" rel="noopener"><img class="mh-portrait" src="${esc(c.portrait_thumb)}" alt="" loading="lazy"></a><button class="btn btn-sm" type="button" data-clear-portrait="${esc(c.name)}" title="Stop using this portrait">×</button>` : ""}<strong>${esc(c.name)}</strong>${(c.aliases || []).length ? ` <span class="hint">aka ${esc(c.aliases.join(", "))}</span>` : ""}<div class="hint">${esc(c.appearance || "")}</div><div class="hint">ch ${esc((c.chapters || []).join(", "))}</div></div>`).join("")
-      : `<span class="hint">No named characters yet.</span>`;
+    manhwa.cast = characters;
+    const order = { cast: 0, extra: 1, narrator: 2, hidden: 3 };
+    characters.sort((a, b) => (order[a.role] - order[b.role]) || ((b.tiles || 0) - (a.tiles || 0)));
+    $("mhCharacters").innerHTML = characters.length ? characters.map(mhCharCard).join("") : `<span class="hint">No named characters yet.</span>`;
+  }
+
+  function mhCharCard(c) {
+    const others = (manhwa.cast || []).filter((o) => o.name !== c.name).map((o) => `<option value="${esc(o.name)}">${esc(o.name)}</option>`).join("");
+    const visual = c.role === "cast" || c.role === "extra";
+    const portrait = c.portrait_thumb
+      ? `<a href="${esc(c.portrait_url || c.portrait_thumb)}" target="_blank" rel="noopener"><img class="mh-portrait" src="${esc(c.portrait_thumb)}" alt=""></a>`
+      : `<span class="mh-portrait mh-noface">${c.role === "narrator" ? "🎙" : "?"}</span>`;
+    const roles = ["cast", "extra", "narrator", "hidden"].map((r) => `<option value="${r}"${r === c.role ? " selected" : ""}${r === "cast" && c.minor ? " disabled" : ""}>${r[0].toUpperCase() + r.slice(1)}</option>`).join("");
+    return `<form class="mh-char mh-role-${esc(c.role)}" data-char="${esc(c.name)}" autocomplete="off">
+      <div class="row">${portrait}<input class="input" data-f="name" value="${esc(c.name)}" style="flex:1;height:30px;font-weight:600"><select class="select" data-f="role" style="width:auto;height:30px">${roles}</select></div>
+      ${c.minor ? `<div class="hint" style="color:var(--bad)">Reads as under 18: never cast, never given a portrait, and panels showing them are not converted.</div>` : ""}
+      ${c.role === "hidden" ? "" : `<textarea class="textarea" data-f="appearance" rows="2" style="min-height:48px" placeholder="${c.role === "narrator" ? "Voice: e.g. calm adult male, low" : "Adult age, build, face, hair, usual clothes"}">${esc(c.appearance || "")}</textarea>`}
+      <input class="input" data-f="aliases" value="${esc((c.aliases || []).join(", "))}" placeholder="Also called… (comma-separated)" style="height:30px">
+      <div class="row mh-char-actions"><span class="hint">${c.tiles || 0} tiles · ch ${esc((c.chapters || []).join(", ") || "—")}</span><div class="spacer"></div>
+        <button class="btn btn-sm btn-primary" type="submit">Save</button>
+        ${c.role === "cast" && !c.minor ? `<button class="btn btn-sm" type="button" data-act="make">${c.portrait_thumb ? "Remake" : "Make"} portrait</button>
+        <button class="btn btn-sm" type="button" data-act="choose">Choose image</button>
+        <label class="btn btn-sm" title="Upload art or an image made elsewhere (not a photo of a real person)">Upload<input type="file" accept="image/*" data-act="upload" hidden></label>` : ""}
+        ${c.portrait_thumb ? `<button class="btn btn-sm" type="button" data-act="clear" title="Stop using this portrait">Remove portrait</button>` : ""}
+        ${others ? `<select class="select" data-act="merge" style="width:auto;height:30px" title="This is the same person as…"><option value="">Same person as…</option>${others}</select>` : ""}
+      </div>
+      <div class="mh-picker" hidden></div>
+    </form>`;
+  }
+
+  async function mhCharSave(form) {
+    const name = form.dataset.char;
+    const body = { series: manhwa.series, name, role: form.querySelector('[data-f="role"]').value,
+                   aliases: form.querySelector('[data-f="aliases"]').value.split(",").map((a) => a.trim()).filter(Boolean) };
+    const appearance = form.querySelector('[data-f="appearance"]');
+    if (appearance) body.appearance = appearance.value;
+    const newName = form.querySelector('[data-f="name"]').value.trim();
+    if (newName && newName !== name) body.new_name = newName;
+    await api("/v1/manhwa/characters", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  }
+
+  async function mhAssign(name, assetId) {
+    await api("/v1/manhwa/cast/portrait", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ series: manhwa.series, name, asset_id: assetId }) });
+  }
+
+  async function mhWaitCast(run) {
+    while (run.status === "running") { await new Promise((r) => setTimeout(r, 5000)); run = await api(`/v1/manhwa/cast-runs/${run.id}`); }
+    toast(run.done.length ? `${run.done.length} portrait${run.done.length === 1 ? "" : "s"} made` : "No portrait made",
+          [...run.skipped.map((s) => `${s.name}: ${s.why}`), ...(run.errors || [])].slice(0, 3).join(" · "), run.errors.length ? "bad" : "");
+    return run;
   }
 
   async function mhOpenChapter(id) {
@@ -1988,7 +2075,6 @@
     $("mhSetAutoContext").checked = set.auto_context !== false;
     $("mhSetCastRefs").checked = set.cast_refs !== false;
     $("mhSetAutoCast").checked = set.auto_cast !== false;
-    $("mhSetCastSize").value = set.cast_size ?? 8;
     $("mhSetTriage").checked = set.triage !== false;
     $("mhSetNegative").value = set.negative || "";
     mhPaintLoras();
@@ -2084,7 +2170,7 @@
       qa: $("mhSetQa").checked, qa_model: $("mhSetQaModel").value, qa_retries: Number($("mhSetQaRetries").value || 0),
       qa_min_score: Number($("mhSetQaMin").value || 7), auto_context: $("mhSetAutoContext").checked,
       cast_refs: $("mhSetCastRefs").checked, auto_cast: $("mhSetAutoCast").checked,
-      cast_size: Number($("mhSetCastSize").value || 8), triage: $("mhSetTriage").checked,
+      triage: $("mhSetTriage").checked,
     };
     if (model) body.prompt_model = model;
     body.loras = $("mhSetAuto").checked ? [] : [...$("mhSetLoras").querySelectorAll("[data-lora]:checked")].map((box) => ({
@@ -2202,20 +2288,81 @@
     if (!manhwa.series) { toast("Pick a series", "", "bad"); return; }
     $("mhMakeCast").disabled = true;
     try {
-      let run = await post("/v1/manhwa/cast", { series: manhwa.series });
-      toast("Making cast portraits", "One per main character; this takes a minute or two each");
-      while (run.status === "running") { await new Promise((r) => setTimeout(r, 5000)); run = await api(`/v1/manhwa/cast-runs/${run.id}`); }
-      toast(`Cast: ${run.done.length} made`, [run.skipped.length ? `${run.skipped.length} skipped` : "", ...(run.errors || []).slice(0, 2)].filter(Boolean).join(" · "), run.errors.length ? "bad" : "");
+      if (!(manhwa.cast || []).some((c) => c.role === "cast")) { toast("No one is marked Cast", "Set a character's role to Cast first", "bad"); return; }
+      toast("Making portraits", "For everyone marked Cast without one; about a minute each");
+      await mhWaitCast(await post("/v1/manhwa/cast", { series: manhwa.series }));
       mhShowSeries();
     } catch (error) { toast("Could not make the cast", error.message, "bad"); }
     finally { $("mhMakeCast").disabled = false; }
   };
-  $("mhCharacters").addEventListener("click", async (event) => {
-    const clear = event.target.closest("[data-clear-portrait]");
-    if (!clear) return;
-    try { await api("/v1/manhwa/cast/portrait", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ series: manhwa.series, name: clear.dataset.clearPortrait, asset_id: null }) }); mhShowSeries(); }
-    catch (error) { toast("Could not remove", error.message, "bad"); }
+  $("mhCharacters").addEventListener("submit", async (event) => {
+    const form = event.target.closest("[data-char]");
+    if (!form) return;
+    event.preventDefault();
+    try { await mhCharSave(form); toast("Saved", form.querySelector('[data-f="name"]').value); mhShowSeries(); }
+    catch (error) { toast("Could not save", error.message, "bad"); }
   });
+  $("mhCharacters").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-act]");
+    const form = event.target.closest("[data-char]");
+    if (!button || !form || button.tagName === "SELECT" || button.tagName === "INPUT") return;
+    const name = form.dataset.char;
+    const act = button.dataset.act;
+    try {
+      if (act === "clear") { await mhAssign(name, null); mhShowSeries(); }
+      if (act === "make") {
+        await mhCharSave(form);  // the description as it stands is what the portrait follows
+        button.disabled = true;
+        toast("Making the portrait", `${name}: about a minute`);
+        await mhWaitCast(await post("/v1/manhwa/cast", { series: manhwa.series, names: [name], force: true }));
+        mhShowSeries();
+      }
+      if (act === "choose") {
+        const picker = form.querySelector(".mh-picker");
+        if (!picker.hidden) { picker.hidden = true; return; }
+        const { assets } = await api(`/v1/library?kind=image&q=${encodeURIComponent(manhwa.series)}&limit=120`);
+        const shown = assets.filter((a) => /\/(real|cast)$/.test(a.collection || "") || (a.tags || []).includes("cast"));
+        picker.innerHTML = (shown.length ? shown : assets).slice(0, 60).map((a) => `<img src="${esc(a.thumb_url)}" data-pick="${esc(a.id)}" title="${esc(a.filename)}" loading="lazy">`).join("")
+          || `<span class="hint">No images for this series yet: make photographs or upload one.</span>`;
+        picker.hidden = false;
+      }
+    } catch (error) { toast("Could not do that", error.message, "bad"); button.disabled = false; }
+  });
+  $("mhCharacters").addEventListener("click", async (event) => {
+    const pick = event.target.closest("[data-pick]");
+    const form = event.target.closest("[data-char]");
+    if (!pick || !form) return;
+    try { await mhAssign(form.dataset.char, pick.dataset.pick); toast("Portrait set", form.dataset.char); mhShowSeries(); }
+    catch (error) { toast("Not used", error.message, "bad"); }
+  });
+  $("mhCharacters").addEventListener("change", async (event) => {
+    const form = event.target.closest("[data-char]");
+    if (!form) return;
+    const name = form.dataset.char;
+    if (event.target.dataset.act === "upload" && event.target.files[0]) {
+      try {
+        const asset = await uploadFile(event.target.files[0], () => {}, { collection: `manhwa/${manhwa.series}/cast`, tags: "manhwa,cast" });
+        await mhAssign(name, asset.id);
+        toast("Portrait set", `${name}, from your upload`);
+        mhShowSeries();
+      } catch (error) { toast("Not used", error.message, "bad"); }
+    }
+    if (event.target.dataset.act === "merge" && event.target.value) {
+      const keep = event.target.value;
+      if (!await confirmAction(`Merge ${name} into ${keep}?`, `${name} becomes another name for ${keep}: their tiles and chapters join, and later chapters file ${name} under ${keep}.`, "Merge")) { event.target.value = ""; return; }
+      try { await post("/v1/manhwa/characters/merge", { series: manhwa.series, keep, merge: [name] }); toast("Merged", `${name} → ${keep}`); mhShowSeries(); }
+      catch (error) { toast("Could not merge", error.message, "bad"); }
+    }
+  });
+  $("mhAddChar").onsubmit = async (event) => {
+    event.preventDefault();
+    if (!manhwa.series) { toast("Pick a series", "", "bad"); return; }
+    try {
+      await post("/v1/manhwa/characters", { series: manhwa.series, name: $("mhAddCharName").value.trim(), role: "cast" });
+      $("mhAddCharName").value = "";
+      mhShowSeries();
+    } catch (error) { toast("Could not add", error.message, "bad"); }
+  };
   $("mhSeriesPick").onchange = (event) => { manhwa.series = event.target.value; mhShowSeries().catch((e) => toast("Could not load", e.message, "bad")); };
   $("mhChapters").onclick = (event) => { const button = event.target.closest("[data-chapter]"); if (button) mhOpenChapter(button.dataset.chapter); };
   $("mhSearchForm").onsubmit = async (event) => {
@@ -2991,7 +3138,7 @@
     return structured ? text : `duration: ${seconds}\n${text}`;
   }
 
-  function showError(message) { $("formError").textContent = message; $("formError").hidden = false; }
+  function showError(message) { $("formError").innerHTML = errorHtml(message); $("formError").hidden = false; }
   function clearError() { $("formError").hidden = true; }
   function setBusy(busy) { ["generate", "planBtn", "planRender"].forEach((id) => { $(id).disabled = busy; }); }
 
@@ -3196,7 +3343,7 @@
     badge.textContent = STATUS[job.status] || job.status;
     el.querySelector(".job-title").textContent = jobTitle(job);
     el.querySelector(".job-title").title = jobTitle(job);
-    el.querySelector(".job-meta").innerHTML = metaChips(job) + (job.error ? `<span class="chip bad" title="${esc(job.error)}">${esc(job.error.split("\n")[0].slice(0, 80))}</span>` : "");
+    el.querySelector(".job-meta").innerHTML = metaChips(job) + (job.error ? `<span class="chip bad" title="${esc(readableError(job.error).short)}">${esc(readableError(job.error).short.split("\n")[0].slice(0, 80))}</span>` : "");
     el.querySelector(".job-time").textContent = `${job.kind === "plan" ? "Plan" : "Video"} · ${ago(job.created_at)} · ${job.id.slice(0, 8)}`;
     el.querySelector(".job-actions").innerHTML = actionsHtml(job);
     el.hidden = !matchesFilter(job);
@@ -3348,7 +3495,7 @@
 
     const sections = [];
     if (ACTIVE.includes(job.status)) sections.push(`<div style="display:grid;gap:6px">${progressHtml(job)}</div>`);
-    if (job.error) sections.push(`<div class="alert bad">${esc(job.error)}</div>`);
+    if (job.error) sections.push(`<div class="alert bad">${errorHtml(job.error)}</div>`);
     for (const warning of job.warnings || []) sections.push(`<div class="alert warn">${esc(warning)}</div>`);
 
     const actions = [];
@@ -3417,7 +3564,7 @@
     if (!["done", "failed"].includes(job.status)) return;
     notified.add(`${job.id}:${job.status}`);
     const title = job.status === "done" ? (job.kind === "plan" ? "Plan ready" : "Video ready") : (job.kind === "plan" ? "Plan failed" : "Render failed");
-    const detail = job.status === "done" ? jobTitle(job) : (job.error || "").split("\n")[0].slice(0, 120);
+    const detail = job.status === "done" ? jobTitle(job) : readableError(job.error || "").short.split("\n")[0].slice(0, 120);
     toast(title, detail, job.status === "done" ? "ok" : "bad", 8000);
     if (document.hidden && "Notification" in window && Notification.permission === "granted") {
       try { new Notification(title, { body: detail }); } catch { /* ignore */ }
@@ -4010,12 +4157,23 @@
       box.hidden = false;
       box.innerHTML = `<div class="row"><strong>${esc(names[result.engine] || result.model)}</strong><span class="hint">${seconds} s · ${result.assets.length} image${result.assets.length === 1 ? "" : "s"} in Generated${result.cost_usd ? ` · about $${result.cost_usd.toFixed(3)}` : ""}${result.loras?.length ? ` · LoRAs: ${esc(result.loras.map((l) => `${(l.file || l.name || "").replace(/\.safetensors$/, "")} ${l.strength ?? ""}`).join(", "))}` : ""}</span></div>`
         + (result.note ? `<div class="gen-status warn">${esc(result.note)}</div>` : "")
-        + (result.tried?.length ? `<div class="hint">Fell back from: ${esc(result.tried.map((t) => typeof t === "string" ? t : `${t.engine || t.model}: ${t.skipped || t.error || ""}`).join(" · "))}</div>` : "")
+        + (result.tried?.length ? `<div class="hint">Fell back from: ${esc(result.tried.map((t) => typeof t === "string" ? t : `${t.engine || t.model}: ${readableError(t.skipped || t.error || "").short}`).join(" · "))}</div>` : "")
         + `<div class="thumb-grid">${result.assets.map((a) => `<a href="${esc(a.file_url || a.thumb_url)}" target="_blank" rel="noopener" title="${esc(a.filename)}"><img src="${esc(a.thumb_url)}" alt="${esc(a.filename)}" loading="lazy"><span class="thumb-id">${esc(a.id)}</span></a>`).join("")}</div>`;
       box.scrollIntoView({ block: "nearest" });
       loadMedia();
     } catch (error) {
-      toast("Generation failed", error.message, "bad", 8000);
+      const box = $("genResult");
+      box.hidden = false;
+      const message = String(error.message || "");
+      // "Google returned no image: <what Gemini wrote instead>" -- show its words as its words
+      const said = message.match(/returned no image:\s*([\s\S]+)$/);
+      box.innerHTML = `<div class="gen-error"><strong>No image this time.</strong> `
+        + (said ? `The model answered in words instead of drawing:<div class="said">${esc(said[1])}</div>`
+                  + `<div class="hint" style="margin-top:6px">It read the prompt as a request for text. Start it with what to show, e.g. "Photo of …", and try again.</div>`
+                : errorHtml(message))
+        + `</div>`;
+      box.scrollIntoView({ block: "nearest" });
+      toast("Generation failed", readableError(message).short, "bad", 8000);
     } finally {
       gen.busy = false;
       go.disabled = false; go.textContent = "Generate";

@@ -82,7 +82,7 @@ SETTINGS_DEFAULTS = {
     "auto_context": True,
     # Cast sheet: one photoreal portrait per character, given to Qwen as an extra reference on every panel that
     # character is in, so a face stays the same across panels and chapters. The autopilot makes missing ones.
-    "cast_refs": True, "auto_cast": True, "cast_size": 8,
+    "cast_refs": True, "auto_cast": True, "cast_size": 8,  # auto_cast: portraits for characters marked cast only
     # Panel triage: text-only and blank panels, and near-duplicates of the panel before, are not converted.
     "triage": True,
     # Video plans group neighbouring panels of one tile into a shot (up to 3 pictures) and time each shot by its
@@ -1489,7 +1489,7 @@ class ManhwaManager:
         pages = self.store.pages(chapter_id)
         tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
         wanted = set(state["tile_ids"])
-        roster = self.store.characters(series) if state["analyze"] else {}
+        roster = self.store.characters(series)
         chapter_row = self.store.get_chapter(chapter_id) or {}
         context = chapter_row.get("context") or {}
         summary = chapter_row.get("summary") or ""
@@ -1558,6 +1558,15 @@ class ManhwaManager:
                         self._mark_skipped(tile, asset["id"], number, written["content"], pages, chapter_id, series)
                         row.update(status="skipped", error=f"Triage: {written['content'].replace('_', ' ')} panel")
                         state["skipped"] += 1
+                        state["results"].append(row)
+                        state["panels_done"] += 1
+                        continue
+                    minors = [n for n in written.get("people") or [] if n in roster and is_minor(n, roster[n])]
+                    if minors:
+                        self._drop(panel["id"])
+                        row.update(status="skipped", error=f"Not converted: shows {', '.join(minors)}, who reads as under 18")
+                        state["skipped"] += 1
+                        self._mark_skipped(tile, asset["id"], number, "shows a minor", pages, chapter_id, series)
                         state["results"].append(row)
                         state["panels_done"] += 1
                         continue
@@ -2018,9 +2027,14 @@ class ManhwaManager:
     # ----------------------------------------------------------------- cast sheet
 
     def _portraits(self, series: str) -> dict[str, str]:
-        """Character name -> portrait asset id, for the portraits still in the library."""
-        return {name: data["portrait_asset_id"] for name, data in self.store.characters(series).items()
-                if data.get("portrait_asset_id") and self.service.store.get_asset(data["portrait_asset_id"])}
+        """Character name (and alias) -> portrait asset id, for the cast whose portrait is still in the library."""
+        found = {}
+        for name, data in self.store.characters(series).items():
+            if (data.get("portrait_asset_id") and role_of(name, data) == "cast" and not is_minor(name, data)
+                    and self.service.store.get_asset(data["portrait_asset_id"])):
+                for key in [name, *(data.get("aliases") or [])]:
+                    found.setdefault(key, data["portrait_asset_id"])
+        return found
 
     @staticmethod
     def _converted_panels(pages: list[dict]) -> set[tuple[str, int]]:
@@ -2053,7 +2067,8 @@ class ManhwaManager:
                         best = (key, page["asset_id"], int(page.get("part") or 0))
         return (best[1], best[2]) if best else None
 
-    async def make_cast(self, series: str, *, names: list[str] | None = None, force: bool = False) -> dict:
+    async def make_cast(self, series: str, *, names: list[str] | None = None, force: bool = False,
+                        source_asset_id: str | None = None) -> dict:
         """Make the photoreal portraits of a series' main characters in the background. Poll cast_run()."""
         key = series_key(series)
         series = next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
@@ -2062,8 +2077,13 @@ class ManhwaManager:
         for other in self.cast_runs.values():
             if other["status"] == "running":
                 raise RequestError(f"Cast run {other['id']} is still running.", {"cast_run_id": other["id"]})
+        if source_asset_id and (not names or len(names) != 1):
+            raise RequestError("A source picture is for one character: name exactly one.")
+        if source_asset_id and self.service.store.get_asset(source_asset_id) is None:
+            raise NotFound(f"No asset {source_asset_id!r}.")
         state = {"id": uuid.uuid4().hex[:12], "status": "running", "series": series, "done": [], "skipped": [],
-                 "errors": [], "created_at": time.time(), "finished_at": None}
+                 "errors": [], "created_at": time.time(), "finished_at": None,
+                 "sources": {names[0]: source_asset_id} if source_asset_id else {}}
         self.cast_runs[state["id"]] = state
         self._cast_tasks[state["id"]] = asyncio.create_task(self._cast_task(state, names, force))
         return state
@@ -2092,9 +2112,15 @@ class ManhwaManager:
     async def _cast(self, state: dict, names: list[str] | None, force: bool) -> None:
         series, conf = state["series"], self.settings()
         roster = self.store.characters(series)
-        named = [n for n in roster if not re.fullmatch(r"unknown-\d+", n, re.I)]
-        wanted = [n for n in (names or sorted(named, key=lambda n: -int(roster[n].get("tiles") or 0)))
-                  if n in roster][:max(1, int(conf["cast_size"] or 8)) if not names else None]
+        # Only the characters the user cast: never an extra, the narrator, or anyone who reads as under 18.
+        wanted = [n for n in (names or [n for n in roster if role_of(n, roster[n]) == "cast"]) if n in roster]
+        for name in list(wanted):
+            if is_minor(name, roster[name]):
+                state["skipped"].append({"name": name, "why": "reads as under 18: never given a portrait"})
+                wanted.remove(name)
+            elif role_of(name, roster[name]) in ("narrator", "hidden"):
+                state["skipped"].append({"name": name, "why": f"a {role_of(name, roster[name])}: no image"})
+                wanted.remove(name)
         loras = [dict(l) for l in conf["loras"]] if conf["loras"] else await self.real_loras(conf["realism"],
                                                                                               conf["age_slider"])
         have = self._portraits(series)
@@ -2102,21 +2128,26 @@ class ManhwaManager:
             if name in have and not force:
                 state["skipped"].append({"name": name, "why": "already has a portrait"})
                 continue
-            source = self._cast_source(series, name)
-            page = self.service.store.get_asset(source[0]) if source else None
-            if page is None:
-                state["skipped"].append({"name": name, "why": "no panel shows them"})
-                continue
-            tiles = await asyncio.to_thread(slice_image, await self.service.asset_bytes(page))
-            crop = tiles[min(source[1], len(tiles) - 1)]
-            ref = await self.service.add_asset(
-                f"cast_{series_key(name)[:30] or 'person'}_source.jpg", io.BytesIO(crop), "image/jpeg", len(crop),
-                collection=f"manhwa/{series}/cast/source", tags=["manhwa", series, "cast"],
-                source={"type": "manhwa", "from_asset": page["id"], "cast_of": name})
-            appearance = " ".join(str(roster[name].get("appearance") or "as drawn").split())[:400]
+            appearance = " ".join(str(roster[name].get("appearance") or "as drawn").split())[:600]
+            chosen = (state.get("sources") or {}).get(name) or roster[name].get("portrait_source")
+            ref_id = chosen if chosen and self.service.store.get_asset(chosen) else None
+            if ref_id is None and not roster[name].get("user_edited"):
+                source = self._cast_source(series, name)
+                page = self.service.store.get_asset(source[0]) if source else None
+                if page is not None:
+                    tiles = await asyncio.to_thread(slice_image, await self.service.asset_bytes(page))
+                    crop = tiles[min(source[1], len(tiles) - 1)]
+                    ref = await self.service.add_asset(
+                        f"cast_{series_key(name)[:30] or 'person'}_source.jpg", io.BytesIO(crop), "image/jpeg",
+                        len(crop), collection=f"manhwa/{series}/cast/source", tags=["manhwa", series, "cast"],
+                        source={"type": "manhwa", "from_asset": page["id"], "cast_of": name})
+                    ref_id = ref["id"]
             try:
-                result = await self._convert_panel(ref["id"], CAST_PROMPT.format(name=name, appearance=appearance),
-                                                   loras, REAL_NEGATIVE, steps=conf["steps"], cfg=conf["cfg"])
+                if ref_id:
+                    result = await self._convert_panel(ref_id, CAST_PROMPT.format(name=name, appearance=appearance),
+                                                       loras, REAL_NEGATIVE, steps=conf["steps"], cfg=conf["cfg"])
+                else:  # the user's description alone: a text-to-image portrait
+                    result = await self._portrait_from_text(name, appearance, conf)
             except Exception as exc:  # a refusal or a busy GPU: the next character still gets theirs
                 state["errors"].append(f"{name}: {exc}"[:300])
                 continue
@@ -2127,6 +2158,49 @@ class ManhwaManager:
             self.service.update_asset(ids[0], collection=f"manhwa/{series}/cast", add_tags=["manhwa", series, "cast", name])
             self.set_portrait(series, name, ids[0])
             state["done"].append({"name": name, "asset_id": ids[0]})
+
+    async def _portrait_from_text(self, name: str, appearance: str, conf: dict) -> dict:
+        prompt = (f"A photorealistic head-and-shoulders portrait photograph of {name}, a real adult: {appearance}. "
+                  "Facing the camera, calm expression, fully clothed, plain light-grey studio background, soft even "
+                  "light, 85mm lens. Only one person, no text.")
+        for attempt in range(BUSY_RETRIES + 1):
+            try:
+                return await self.service.generate_images(prompt, engine="qwen21", steps=conf["steps"], cfg=conf["cfg"],
+                                                          negative=REAL_NEGATIVE)
+            except RequestError as exc:
+                if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
+                    raise
+            await asyncio.sleep(self.busy_wait)
+        raise RequestError("ComfyUI stayed busy.")
+
+    async def assign_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
+        """The user's pick for a character's portrait. An uploaded photo is checked for a real, identifiable person
+        first: a real person's face is never put into these scenes."""
+        roster = self.store.characters(series)
+        if name not in roster:
+            raise NotFound(f"No character {name!r} in {series!r}.")
+        if asset_id:
+            from .local_images import from_upload
+
+            asset = self.service.store.get_asset(asset_id)
+            if asset is None or asset.get("kind") != "image":
+                raise RequestError(f"{asset_id!r} is not an image in the library.")
+            if is_minor(name, roster[name]):
+                raise RequestError(f"{name} reads as under 18 and can't be given a portrait.")
+            if role_of(name, roster[name]) in ("narrator", "hidden"):
+                raise RequestError(f"{name} is a {role_of(name, roster[name])}: make them cast or an extra first.")
+            if from_upload(asset, self.service.store.lineage):
+                checker = getattr(self.service, "person_check", None)
+                if checker is not None:
+                    try:
+                        await checker(asset_id)
+                    except Exception as exc:
+                        log.warning("manhwa: person check on %s failed: %s", asset_id, exc)
+                asset = self.service.store.get_asset(asset_id) or asset
+                if from_upload(asset, self.service.store.lineage):
+                    raise RequestError("That picture may show a real, identifiable person, so it can't be a "
+                                       "character's portrait. Use art, an image made here, or Make portrait.")
+        return self.set_portrait(series, name, asset_id)
 
     def set_portrait(self, series: str, name: str, asset_id: str | None) -> dict:
         """Use this image as the character's portrait (None removes it)."""
@@ -2193,11 +2267,107 @@ class ManhwaManager:
     def search(self, query: str, series: str = "", limit: int = 30) -> list[dict]:
         return [self._with_thumb(hit) for hit in self.store.search(query, series, limit)]
 
+    # ----------------------------------------------------------------- the cast, as the user edits it
+
+    def _series_name(self, series: str) -> str:
+        key = series_key(series)
+        return next((s["series"] for s in self.store.series() if series_key(s["series"]) == key), series)
+
+    def _rename_in_pages(self, series: str, mapping: dict[str, str]) -> None:
+        """Rename characters (and speakers) in every catalogued tile of the series."""
+        for chapter in self.store.list_chapters(series):
+            pages = self.store.pages(chapter["id"])
+            changed = False
+            for page in pages:
+                for person in page.get("characters") or []:
+                    if person.get("name") in mapping:
+                        person["name"], changed = mapping[person["name"]], True
+                for line in page.get("dialogue") or []:
+                    if line.get("speaker") in mapping:
+                        line["speaker"], changed = mapping[line["speaker"]], True
+            if changed:
+                self.store.save_pages(chapter["id"], series, pages)
+
+    def edit_character(self, series: str, name: str, *, new_name: str | None = None, appearance: str | None = None,
+                       role: str | None = None, aliases: list[str] | None = None) -> dict:
+        """The user's word on a character: name, description, role, aliases. Kept over anything the catalogue
+        says later."""
+        series = self._series_name(series)
+        roster = self.store.characters(series)
+        if name not in roster:
+            raise NotFound(f"No character {name!r} in {series!r}.")
+        data = roster[name]
+        if role is not None:
+            if role not in ROLES:
+                raise RequestError(f"role should be one of {', '.join(ROLES)}.")
+            data["role"] = role
+        if appearance is not None:
+            data["appearance"] = " ".join(appearance.split())[:CONTEXT_MAX]
+            data["user_edited"] = True
+        if aliases is not None:
+            data["aliases"] = sorted({" ".join(a.split()) for a in aliases if a.strip()})
+        if data.get("role") == "cast" and is_minor(name, data):
+            raise RequestError(f"{name} reads as under 18 and can't be cast or given a portrait.")
+        new_name = " ".join((new_name or "").split())
+        if new_name and new_name != name:
+            if new_name in roster and not roster[new_name].get("merged_into"):
+                raise RequestError(f"{new_name!r} already exists: merge the two instead.")
+            data["aliases"] = sorted(set(data.get("aliases") or []) | {name})
+            self.store.delete_characters(series, [name])
+            self.store.save_characters(series, {new_name: data, name: {"merged_into": new_name}})
+            self._rename_in_pages(series, {name: new_name})
+            name = new_name
+        else:
+            self.store.save_characters(series, {name: data})
+        return dict(data, name=name, role=role_of(name, data), minor=is_minor(name, data))
+
+    def add_character(self, series: str, name: str, appearance: str = "", role: str = "cast") -> dict:
+        series = self._series_name(series)
+        name = " ".join((name or "").split())
+        if not name:
+            raise RequestError("Give the character a name.")
+        roster = self.store.characters(series)
+        if name in roster and not roster[name].get("merged_into"):
+            raise RequestError(f"{name!r} is already in the cast.")
+        if role not in ROLES:
+            raise RequestError(f"role should be one of {', '.join(ROLES)}.")
+        data = {"appearance": " ".join(appearance.split())[:CONTEXT_MAX], "role": role, "user_edited": True,
+                "tiles": 0, "chapters": [], "chapter_ids": [], "added_by_user": True}
+        if role == "cast" and is_minor(name, data):
+            raise RequestError(f"{name} reads as under 18 and can't be cast.")
+        self.store.save_characters(series, {name: data})
+        return dict(data, name=name, role=role_of(name, data), minor=is_minor(name, data))
+
+    def merge_characters(self, series: str, keep: str, merge: list[str]) -> dict:
+        """Fold duplicates into one character: their tiles, chapters and aliases join it, the catalogue's tiles are
+        renamed, and later chapters that use the old names are filed under it too."""
+        series = self._series_name(series)
+        roster = self.store.characters(series)
+        if keep not in roster:
+            raise NotFound(f"No character {keep!r} in {series!r}.")
+        target = roster[keep]
+        for other in [m for m in merge if m != keep]:
+            data = roster.get(other)
+            if data is None:
+                raise NotFound(f"No character {other!r} in {series!r}.")
+            target["aliases"] = sorted(set(target.get("aliases") or []) | set(data.get("aliases") or []) | {other})
+            target["tiles"] = int(target.get("tiles") or 0) + int(data.get("tiles") or 0)
+            for key in ("chapters", "chapter_ids"):
+                target[key] = list(dict.fromkeys((target.get(key) or []) + (data.get(key) or [])))
+            if not target.get("portrait_asset_id") and data.get("portrait_asset_id"):
+                target["portrait_asset_id"] = data["portrait_asset_id"]
+            self.store.save_characters(series, {other: {"merged_into": keep}})
+        self.store.save_characters(series, {keep: target})
+        self._rename_in_pages(series, {m: keep for m in merge if m != keep})
+        return dict(target, name=keep, role=role_of(keep, target), minor=is_minor(keep, target))
+
     def characters(self, series: str) -> list[dict]:
         roster = self.store.characters(series)
         out = []
         for name, data in roster.items():
-            row = dict(data, name=name)
+            if data.get("merged_into"):
+                continue
+            row = dict(data, name=name, role=role_of(name, data), minor=is_minor(name, data))
             asset = self.service.store.get_asset(data.get("portrait_asset_id") or "") if data.get("portrait_asset_id") else None
             if asset is not None:
                 shown = self.service.asset_view(asset)
@@ -2450,6 +2620,19 @@ class ManhwaManager:
 
     @staticmethod
     def _merge_roster(roster: dict, pages: list[dict], listed, number: str, chapter_id: str) -> None:
+        # A name the user merged into another (or listed as an alias) is that character: catalogue it as them.
+        canonical = {}
+        for name, data in roster.items():
+            if data.get("merged_into"):
+                canonical[name] = data["merged_into"]
+            for alias in data.get("aliases") or []:
+                if not roster.get(alias, {}).get("aliases"):
+                    canonical.setdefault(alias, name)
+        for entry in pages:
+            for person in entry.get("characters") or []:
+                person["name"] = canonical.get(person.get("name"), person.get("name"))
+            for line in entry.get("dialogue") or []:
+                line["speaker"] = canonical.get(line.get("speaker"), line.get("speaker"))
         counts: dict[str, int] = {}
         looks: dict[str, str] = {}
         for entry in pages:
@@ -2468,7 +2651,8 @@ class ManhwaManager:
                     known["aliases"] = sorted(set(known.get("aliases") or []) | set(aliases))
         for name, count in counts.items():
             known = roster.setdefault(name, {})
-            known["appearance"] = looks.get(name) or known.get("appearance", "")
+            if not known.get("user_edited"):  # the user's description is never overwritten by the catalogue
+                known["appearance"] = looks.get(name) or known.get("appearance", "")
             chapters = known.setdefault("chapters", [])
             if number not in chapters:
                 chapters.append(number)
@@ -2478,6 +2662,35 @@ class ManhwaManager:
             known.setdefault("chapter_ids", [])
             if chapter_id not in known["chapter_ids"]:
                 known["chapter_ids"].append(chapter_id)
+
+
+#: What a character can be in the film. cast: gets a portrait that keeps their face; extra: appears, no portrait;
+#: narrator: a voice, never an image; hidden: left out of the cast list and of the prompts.
+ROLES = ("cast", "extra", "narrator", "hidden")
+_NARRATOR = re.compile(r"^(?:the )?(?:narrat(?:or|ion)|voice[- ]?over|text|captions?|sfx|sound effects?)$", re.I)
+#: On top of local_images' under-18 words: descriptions that put someone at school age.
+_SCHOOL_AGE = re.compile(r"school ?uniform|elementary|middle[- ]school|high[- ]school|little (?:girl|boy)|"
+                         r"\b(?:pupil|grade[- ]?schooler|kindergarten)\b", re.I)
+
+
+def is_minor(name: str, data: dict) -> bool:
+    """A character whose name or description reads as under 18. They never get a portrait, are never cast, and
+    a panel the vision model says shows them is not converted. Not something a role choice can lift."""
+    from .local_images import _MINOR
+
+    text = " ".join([name, str(data.get("appearance") or ""), " ".join(data.get("aliases") or [])])
+    return bool(_MINOR.search(text) or _SCHOOL_AGE.search(text))
+
+
+def default_role(name: str, data: dict) -> str:
+    if _NARRATOR.match(name.strip()) or str(data.get("appearance") or "").strip().lower() in ("text", "narration"):
+        return "narrator"
+    return "extra"
+
+
+def role_of(name: str, data: dict) -> str:
+    role = data.get("role") if data.get("role") in ROLES else default_role(name, data)
+    return "extra" if role == "cast" and is_minor(name, data) else role
 
 
 def series_key(name: str) -> str:
@@ -2509,10 +2722,13 @@ def _roster_text(roster: dict) -> str:
     if not roster:
         return "(empty)"
     lines = []
-    for name, data in list(roster.items())[:60]:
+    for name, data in list(roster.items())[:80]:
+        if data.get("merged_into") or role_of(name, data) in ("narrator", "hidden"):
+            continue  # a voice or a left-out name is not someone to find in a picture
         alias = f" (also {', '.join(data.get('aliases') or [])})" if data.get("aliases") else ""
-        lines.append(f"- {name}{alias}: {data.get('appearance', '')}")
-    return "\n".join(lines)
+        minor = " [a minor]" if is_minor(name, data) else ""
+        lines.append(f"- {name}{alias}{minor}: {data.get('appearance', '')}")
+    return "\n".join(lines[:60]) or "(empty)"
 
 
 def _bump(number: str) -> str:

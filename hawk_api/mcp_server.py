@@ -537,13 +537,35 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
                 raise ToolError(str(exc)) from None
 
         @mcp.tool(description=(
-            "Make the cast sheet of a catalogued manhwa series: one photoreal head-and-shoulders portrait per main "
-            "character (cast_size from the settings, or names), made from the panel that shows them most plainly. "
+            "Make portraits for a catalogued manhwa series' cast: one photoreal head-and-shoulders portrait per character "
+            "whose role is cast (or the names given), made from source_asset_id when given (one name), else the panel "
+            "that shows them most plainly, else the user's description. Never for the narrator, a hidden character, "
+            "or anyone who reads as under 18. "
             "Every later conversion gives Qwen the portraits of the people in a panel as extra references, so faces "
             "stay the same across panels and chapters. Characters with a portrait are skipped unless force. "
             "Runs in the background; poll get_manhwa_cast_run."))
-        async def make_manhwa_cast(series: str, names: list[str] | None = None, force: bool = False) -> dict:
-            return await run(manhwa.make_cast(series, names=names, force=force))
+        async def make_manhwa_cast(series: str, names: list[str] | None = None, force: bool = False,
+                                   source_asset_id: str = "") -> dict:
+            return await run(manhwa.make_cast(series, names=names, force=force, source_asset_id=source_asset_id or None))
+
+        @mcp.tool(description=(
+            "Edit a manhwa character as the user says: new_name (the old one becomes an alias), appearance (their "
+            "description), role -- cast (portrait + face reference), extra (appears, no portrait), narrator (voice "
+            "only, no image), hidden (left out) -- and aliases. A character who reads as under 18 can't be cast. "
+            "Only when the user asks."))
+        async def edit_manhwa_character(series: str, name: str, new_name: str = "", appearance: str | None = None,
+                                        role: str = "", aliases: list[str] | None = None) -> dict:
+            return await run(_sync(lambda: manhwa.edit_character(series, name, new_name=new_name or None,
+                                                                 appearance=appearance, role=role or None,
+                                                                 aliases=aliases)))
+
+        @mcp.tool(description="Add a character the catalogue missed (role cast by default). Only when the user asks.")
+        async def add_manhwa_character(series: str, name: str, appearance: str = "", role: str = "cast") -> dict:
+            return await run(_sync(lambda: manhwa.add_character(series, name, appearance, role)))
+
+        @mcp.tool(description="Fold duplicate manhwa characters into one (keep); the others' names become its aliases. Only when the user asks.")
+        async def merge_manhwa_characters(series: str, keep: str, merge: list[str]) -> dict:
+            return await run(_sync(lambda: manhwa.merge_characters(series, keep, merge)))
 
         @mcp.tool(description="Progress of a cast run: done (name, asset_id), skipped, errors.")
         async def get_manhwa_cast_run(run_id: str) -> dict:
@@ -554,10 +576,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None) -> MC
 
         @mcp.tool(description="Use an image as a manhwa character's cast portrait (asset_id), or remove it (asset_id empty). Only when the user asks.")
         async def set_manhwa_cast_portrait(series: str, name: str, asset_id: str = "") -> dict:
-            try:
-                return manhwa.set_portrait(series, name, asset_id or None)
-            except NotFound as exc:
-                raise ToolError(str(exc)) from None
+            return await run(manhwa.assign_portrait(series, name, asset_id or None))
 
         @mcp.tool(description="The character roster of a catalogued series: name, aliases, appearance, chapters they appear in.")
         async def manhwa_characters(series: str) -> dict:

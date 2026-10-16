@@ -32,7 +32,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -430,7 +430,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def manhwa_cast(body: ManhwaCastIn):
         """Make photoreal portraits of a series' main characters, used as references so faces stay the same.
         Poll GET /v1/manhwa/cast-runs/{id}."""
-        return await manhwa.make_cast(body.series, names=body.names or None, force=body.force)
+        return await manhwa.make_cast(body.series, names=body.names or None, force=body.force,
+                                      source_asset_id=body.source_asset_id)
 
     @app.get("/v1/manhwa/cast-runs/{run_id}", tags=["manhwa"])
     async def manhwa_cast_run(run_id: str):
@@ -438,8 +439,24 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.put("/v1/manhwa/cast/portrait", tags=["manhwa"])
     async def manhwa_cast_portrait(body: ManhwaPortraitIn):
-        """Choose (or with asset_id null, remove) a character's portrait."""
-        return manhwa.set_portrait(body.series, body.name, body.asset_id)
+        """Choose (or with asset_id null, remove) a character's portrait. An uploaded photo of a real, identifiable
+        person is refused."""
+        return await manhwa.assign_portrait(body.series, body.name, body.asset_id)
+
+    @app.patch("/v1/manhwa/characters", tags=["manhwa"])
+    async def manhwa_character_edit(body: ManhwaCharacterIn):
+        """Edit a character: rename, describe, set the role (cast / extra / narrator / hidden), aliases."""
+        return manhwa.edit_character(body.series, body.name, new_name=body.new_name, appearance=body.appearance,
+                                     role=body.role, aliases=body.aliases)
+
+    @app.post("/v1/manhwa/characters", tags=["manhwa"], status_code=201)
+    async def manhwa_character_add(body: ManhwaNewCharacterIn):
+        return manhwa.add_character(body.series, body.name, body.appearance, body.role)
+
+    @app.post("/v1/manhwa/characters/merge", tags=["manhwa"])
+    async def manhwa_character_merge(body: ManhwaMergeCharactersIn):
+        """Fold duplicate characters into one; their names become aliases."""
+        return manhwa.merge_characters(body.series, body.keep, body.merge)
 
     @app.get("/v1/manhwa/characters", tags=["manhwa"])
     async def manhwa_characters(series: str):

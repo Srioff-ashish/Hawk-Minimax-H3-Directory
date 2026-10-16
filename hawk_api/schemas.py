@@ -418,8 +418,37 @@ class ManhwaPipelineIn(BaseModel):
 
 class ManhwaCastIn(BaseModel):
     series: str
-    names: list[str] = Field(default_factory=list, description="Only these characters. Empty: the main cast (cast_size).")
+    names: list[str] = Field(default_factory=list, description="Only these characters. Empty: every character whose role is cast.")
     force: bool = Field(False, description="Make a new portrait even for characters that have one.")
+    source_asset_id: str | None = Field(None, description="With one name: the picture to make the portrait from "
+                                        "(a panel, art, an image made here). Default: the catalogue's best panel, or "
+                                        "the description alone for a character you added or described.")
+
+
+CharacterRole = Literal["cast", "extra", "narrator", "hidden"]
+
+
+class ManhwaCharacterIn(BaseModel):
+    series: str
+    name: str
+    new_name: str | None = Field(None, description="Rename; the old name becomes an alias.")
+    appearance: str | None = Field(None, max_length=2000, description="Your description: adult age, build, face, hair, clothes.")
+    role: CharacterRole | None = Field(None, description="cast: portrait + face reference; extra: appears, no portrait; "
+                                       "narrator: voice only, no image; hidden: left out.")
+    aliases: list[str] | None = None
+
+
+class ManhwaNewCharacterIn(BaseModel):
+    series: str
+    name: str
+    appearance: str = Field("", max_length=2000)
+    role: CharacterRole = "cast"
+
+
+class ManhwaMergeCharactersIn(BaseModel):
+    series: str
+    keep: str = Field(description="The character to keep.")
+    merge: list[str] = Field(min_length=1, description="Duplicates folded into it (their names become aliases).")
 
 
 class ManhwaPortraitIn(BaseModel):
