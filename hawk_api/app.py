@@ -33,7 +33,7 @@ from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
-    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
+    ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate
 )
 
@@ -516,13 +516,25 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
 
     @app.post("/v1/stories/{story_id}/messages", tags=["story"])
     async def story_chat(story_id: str, body: StoryChatIn):
-        """Your idea, and the co-writer's answer (Gemma 4 31B, then Kimi K2.6, then DeepSeek V4.1 Flash)."""
-        return await stories.chat(story_id, body.text, body.attachments)
+        """Your idea; the co-writer's answer (Gemma 4 31B, then DeepSeek V4.1 Flash, then Kimi K2.6) is written in the
+        background and appears in GET .../messages -- a slow model must not outlast the tunnel's 100 s."""
+        return stories.start_chat(story_id, body.text, body.attachments)
 
-    @app.post("/v1/stories/{story_id}/chapters/draft", tags=["story"], status_code=201)
+    @app.post("/v1/stories/{story_id}/chapters/draft", tags=["story"], status_code=202)
     async def story_draft(story_id: str):
-        """The chat since the last chapter, written up as the next chapter's scenes (an editable draft)."""
-        return await stories.draft_chapter(story_id)
+        """The chat since the last chapter, written up as the next chapter's scenes (an editable draft), in the
+        background: the chapter appears in GET /v1/stories/{id}. A second request while one runs is refused."""
+        return stories.start_draft(story_id)
+
+    @app.post("/v1/stories/{story_id}/autopilot", tags=["story"], status_code=202)
+    async def story_autopilot(story_id: str, body: StoryAutopilotIn):
+        """From the premise: outline the next chapters and the cast, make the cast's pictures, then draft each
+        chapter and make its video, appended to the main film. Progress in GET /v1/stories/{id} (autopilot)."""
+        return stories.start_autopilot(story_id, chapters=body.chapters, portraits=body.portraits, videos=body.videos)
+
+    @app.post("/v1/stories/{story_id}/autopilot/stop", tags=["story"])
+    async def story_autopilot_stop(story_id: str):
+        return await stories.stop_autopilot(story_id)
 
     @app.patch("/v1/stories/{story_id}/chapters/{chapter_id}", tags=["story"])
     async def story_chapter_edit(story_id: str, chapter_id: str, body: StoryChapterPatch):

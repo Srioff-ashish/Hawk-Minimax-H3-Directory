@@ -101,6 +101,35 @@ Reply with only JSON:
 """
 
 
+OUTLINE_PROMPT = """\
+Plan the next {count} chapter{plural} of this story, to be filmed one chapter at a time. Continue from where the
+earlier chapters end (or begin the story if there are none), following the premise and its arc closely.
+
+Title: {title}
+Premise: {premise}
+Style and tone: {style}
+Cast so far:
+{cast}
+Earlier chapters:
+{chapters}
+
+For each chapter: a short title and "beats" -- 3-6 sentences on what happens, where, who is there, how it moves
+the arc forward, and one or two key lines of dialogue. List the characters too: everyone the chapters need, with a
+description an image model can draw (adult age, build, face, hair, usual clothes) and a role: "cast" for people
+who appear on screen, "narrator" for a voice-over. Every character is an adult (18 or older).
+
+Reply with only JSON:
+{{"characters": [{{"name": "", "description": "", "role": "cast"}}],
+"chapters": [{{"title": "", "beats": ""}}]}}
+"""
+
+PORTRAIT_PROMPT = ("A photorealistic portrait photograph of {name}, an adult: {description}. Head and shoulders, "
+                   "facing the camera, natural expression, soft even light, plain background, 85mm lens. Only one "
+                   "person, no text.")
+
+_CHAPTER_PREFIX = re.compile(r"^\s*(?:chapter|ch\.?)\s*\d+\s*[:.\-\u2013\u2014]\s*", re.I)
+
+
 def _clean(value, limit: int = CONTEXT_MAX) -> str:
     return " ".join(str(value or "").split())[:limit]
 
@@ -243,10 +272,13 @@ class StoryManager:
         self.store = store or StoryStore(service.settings.db_path)
         self._tasks: dict[str, asyncio.Task] = {}
         self._film_locks: dict[str, asyncio.Lock] = {}
+        self._busy: dict[str, dict] = {}  # story id -> {"what": "chat" | "draft", "since"}: one co-writer call at a time
+        self._jobs: dict[str, asyncio.Task] = {}  # background chat / draft calls, by story
+        self._autopilots: dict[str, asyncio.Task] = {}
         self.poll = POLL
 
     async def stop(self) -> None:
-        tasks = list(self._tasks.values())
+        tasks = list(self._tasks.values()) + list(self._jobs.values()) + list(self._autopilots.values())
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -327,6 +359,7 @@ class StoryManager:
         return (viewer(job) or {}).get("video_url") if viewer else None
 
     def view(self, story_id: str) -> dict:
+        self._renumber(story_id)
         story = self._story(story_id)
         characters = []
         for c in story.get("characters") or []:
@@ -341,7 +374,7 @@ class StoryManager:
         if film:
             shown = self._image_view(film.get("asset_id"))  # any asset: the view only needs its urls
             film.update(file_url=(shown or {}).get("file_url"))
-        return dict(story, characters=characters, chapters=chapters, film=film,
+        return dict(story, characters=characters, chapters=chapters, film=film, busy=self._busy.get(story_id),
                     settings={**SETTINGS_DEFAULTS, **(story.get("settings") or {})}, model_choices=list(MODEL_CHOICES))
 
     # ----------------------------------------------------------------- cast
@@ -471,14 +504,27 @@ class StoryManager:
         return parts
 
     async def chat(self, story_id: str, text: str, attachments: list[str] | None = None) -> dict:
-        """The user's idea and the co-writer's answer, both kept in the story's chat."""
-        story = self._story(story_id)
-        text = (text or "").strip()
-        if not text and not attachments:
+        """The user's idea and the co-writer's answer, both kept in the story's chat (waits for the answer)."""
+        self._story(story_id)
+        if not (text or "").strip() and not attachments:
             raise RequestError("Write an idea first.")
+        self._claim(story_id, "chat")
+        try:
+            user, history, text, attachments = self._prepare_chat(story_id, text, attachments)
+            answer = await self._answer(story_id, user, history, text, attachments)
+        finally:
+            self._busy.pop(story_id, None)
+        return {"user": user, "assistant": answer}
+
+    def _prepare_chat(self, story_id: str, text: str, attachments: list[str] | None):
+        text = (text or "").strip()
         attachments = [a for a in attachments or [] if self.service.store.get_asset(a)]
         history = self._since_last_chapter(story_id)
         user = self.store.add_message(story_id, "user", {"text": text[:6000], "attachments": attachments})
+        return user, history, text, attachments
+
+    async def _answer(self, story_id: str, user: dict, history: list[dict], text: str, attachments: list[str]) -> dict:
+        story = self._story(story_id)
         system = CHAT_PROMPT.format(title=story["title"], premise=story.get("premise") or "(open)",
                                     style=story.get("style") or "(not set)", cast=self._cast_text(story),
                                     chapters=self._chapters_text(story_id))
@@ -488,25 +534,94 @@ class StoryManager:
         messages.append({"role": "user", "content": content if len(content) > 1 else content[0]["text"]})
         reply, model = await self._ask(await self._models(story, vision=len(content) > 1), messages, json_mode=False,
                                        max_tokens=CHAT_MAX_TOKENS, purpose="story writer")
-        answer = self.store.add_message(story_id, "assistant", {"text": reply[:8000], "model": model})
-        return {"user": user, "assistant": answer}
+        return self.store.add_message(story_id, "assistant", {"text": reply[:8000], "model": model})
+
+    def _claim(self, story_id: str, what: str) -> None:
+        """One co-writer call per story at a time: a second press while one runs is refused, not duplicated."""
+        busy = self._busy.get(story_id)
+        if busy:
+            raise RequestError(f"The co-writer is still {'answering' if busy['what'] == 'chat' else 'drafting a chapter'} "
+                               f"(started {int(time.time() - busy['since'])} s ago). Wait for it.")
+        self._busy[story_id] = {"what": what, "since": time.time()}
+
+    def _background(self, story_id: str, what: str, work) -> None:
+        async def run():
+            try:
+                await work
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # said in the chat, where the user is looking
+                log.warning("story %s %s failed: %s", story_id, what, exc)
+                self.store.add_message(story_id, "event", {"text": f"{'Reply' if what == 'chat' else 'Draft'} failed: "
+                                                                   f"{str(exc)[:400]}", "error": True})
+            finally:
+                self._busy.pop(story_id, None)
+                self._jobs.pop(story_id, None)
+        self._jobs[story_id] = asyncio.create_task(run())
+
+    def start_chat(self, story_id: str, text: str, attachments: list[str] | None = None) -> dict:
+        """Save the user's idea and answer it in the background: a slow model must not outlast the tunnel's 100 s
+        and leave the browser thinking it failed. Poll messages for the reply."""
+        self._story(story_id)
+        if not (text or "").strip() and not attachments:
+            raise RequestError("Write an idea first.")
+        self._claim(story_id, "chat")
+        try:
+            prepared = self._prepare_chat(story_id, text, attachments)
+        except Exception:
+            self._busy.pop(story_id, None)
+            raise
+        self._background(story_id, "chat", self._answer(story_id, *prepared))
+        return {"user": prepared[0], "pending": True}
+
+    def start_draft(self, story_id: str) -> dict:
+        """Draft the next chapter in the background (it can take minutes); the chapter appears when it is done."""
+        self._story(story_id)
+        if not self._since_last_chapter(story_id):
+            raise RequestError("Chat a few ideas first: the chapter is drafted from the conversation since the last one.")
+        self._claim(story_id, "draft")
+        self._background(story_id, "draft", self.draft_chapter(story_id, claimed=True))
+        return {"drafting": True}
+
+    def _next_idx(self, story_id: str) -> int:
+        return max((c["idx"] for c in self.store.chapters(story_id)), default=-1) + 1
+
+    def _renumber(self, story_id: str) -> None:
+        """Chapters numbered 0, 1, 2... in their order (position, then when they were made), with no gaps or ties."""
+        chapters = sorted(self.store.chapters(story_id), key=lambda c: (c["idx"], c.get("created_at") or 0))
+        for n, chapter in enumerate(chapters):
+            if chapter["idx"] != n:
+                chapter["idx"] = n
+                self.store.save_chapter(chapter)
 
     def messages(self, story_id: str) -> list[dict]:
         self._story(story_id)
         return self.store.messages(story_id)
 
-    async def draft_chapter(self, story_id: str) -> dict:
-        """The conversation since the last chapter, turned into the next chapter's scenes. Saved as a draft."""
+    async def draft_chapter(self, story_id: str, *, claimed: bool = False, plan: str = "") -> dict:
+        """The next chapter's scenes, drafted from the conversation since the last chapter -- or, for the autopilot,
+        from that chapter's outline (``plan``). Saved as a draft."""
+        if not claimed:
+            self._claim(story_id, "draft")
+        try:
+            return await self._draft(story_id, plan)
+        finally:
+            if not claimed:
+                self._busy.pop(story_id, None)
+
+    async def _draft(self, story_id: str, plan: str = "") -> dict:
         story = self._story(story_id)
         conversation = self._since_last_chapter(story_id)
-        if not conversation:
+        if not conversation and not plan:
             raise RequestError("Chat a few ideas first: the chapter is drafted from the conversation since the last one.")
-        chapters = self.store.chapters(story_id)
+        self._renumber(story_id)
+        number = self._next_idx(story_id)
+        source = (f"PLAN FOR THIS CHAPTER: {plan}" if plan else
+                  "\n".join(f"{m['role'].upper()}: {m.get('text') or ''}" for m in conversation))
         text = DRAFT_PROMPT.format(
-            number=len(chapters) + 1, max_scenes=min(MAX_SCENES, 12), title=story["title"],
+            number=number + 1, max_scenes=min(MAX_SCENES, 12), title=story["title"],
             premise=story.get("premise") or "(open)", style=story.get("style") or "(not set)",
-            cast=self._cast_text(story), chapters=self._chapters_text(story_id),
-            conversation="\n".join(f"{m['role'].upper()}: {m.get('text') or ''}" for m in conversation)[:40000])
+            cast=self._cast_text(story), chapters=self._chapters_text(story_id), conversation=source[:40000])
         reply, model = await self._ask(await self._models(story, vision=False), [{"role": "user", "content": text}],
                                        json_mode=True, max_tokens=DRAFT_MAX_TOKENS, purpose="story chapter")
         data = parse_json(reply) or {}
@@ -514,8 +629,10 @@ class StoryManager:
         scenes = [s for s in scenes if s["description"] or s["dialogue"]]
         if not scenes:
             raise Unavailable(f"{model} did not write any scenes. Try Draft chapter again.")
-        chapter = {"id": uuid.uuid4().hex[:12], "story_id": story_id, "idx": len(chapters),
-                   "title": _clean(data.get("title"), 160) or f"Chapter {len(chapters) + 1}",
+        number = self._next_idx(story_id)  # again: another chapter may have arrived while this one was written
+        title = _CHAPTER_PREFIX.sub("", _clean(data.get("title"), 160)).strip()
+        chapter = {"id": uuid.uuid4().hex[:12], "story_id": story_id, "idx": number,
+                   "title": title or f"Chapter {number + 1}",
                    "summary": _clean(data.get("summary"), 1200), "scenes": scenes, "images": [], "status": "draft",
                    "drafted_by": model, "created_at": time.time(), "history": []}
         self.store.save_chapter(chapter)
@@ -574,10 +691,7 @@ class StoryManager:
         if chapter.get("status") in ACTIVE:
             raise RequestError("This chapter's video is being made: wait for it, then delete.")
         self.store.delete_chapter(chapter_id)
-        for n, other in enumerate(self.store.chapters(story_id)):  # keep the numbering continuous
-            if other["idx"] != n:
-                other["idx"] = n
-                self.store.save_chapter(other)
+        self._renumber(story_id)  # keep the numbering continuous
         return {"deleted": chapter_id, "film_outdated": bool(chapter.get("render_job_id"))}
 
     def _chapter(self, story_id: str, chapter_id: str) -> dict:
@@ -634,9 +748,11 @@ class StoryManager:
         self._tasks[chapter["id"]] = asyncio.create_task(self._convert(chapter["story_id"], chapter["id"]))
 
     async def resume(self, wait_for_gpu: float = 600.0) -> list[str]:
-        """Carry on with every chapter a restart interrupted, once ComfyUI answers."""
+        """Carry on with every chapter -- and every autopilot -- a restart interrupted, once ComfyUI answers."""
         active = [c for c in self.store.active_chapters() if c["id"] not in self._tasks]
-        if not active:
+        pilots = [s["id"] for s in self.store.stories()
+                  if (s.get("autopilot") or {}).get("status") == "running" and s["id"] not in self._autopilots]
+        if not active and not pilots:
             return []
         deadline = time.monotonic() + wait_for_gpu
         while time.monotonic() < deadline:
@@ -648,7 +764,156 @@ class StoryManager:
             await asyncio.sleep(10)
         for chapter in active:
             self._launch(chapter)
-        return [c["id"] for c in active]
+        for story_id in pilots:
+            self._autopilots[story_id] = asyncio.create_task(self._autopilot(story_id))
+        return [c["id"] for c in active] + pilots
+
+    # ----------------------------------------------------------------- autopilot: premise to film
+
+    def start_autopilot(self, story_id: str, *, chapters: int = 5, portraits: bool = True, videos: bool = True) -> dict:
+        """From the premise alone: outline the next chapters and the cast, make the cast's pictures, then for each
+        chapter draft its scenes and (with videos) make its video, appended to the main film. Saved as it goes, so a
+        restart carries on; stop_autopilot halts it."""
+        story = self._story(story_id)
+        if not (story.get("premise") or "").strip():
+            raise RequestError("Write the story's premise first: the autopilot plans the chapters from it.")
+        if story_id in self._autopilots or (story.get("autopilot") or {}).get("status") == "running":
+            raise RequestError("The autopilot is already running for this story.")
+        story["autopilot"] = {"status": "running", "stage": "outlining", "count": max(1, min(int(chapters or 1), 30)),
+                              "portraits": bool(portraits), "videos": bool(videos), "outline": [], "next": 0,
+                              "errors": [], "started_at": time.time(), "finished_at": None}
+        self.store.save_story(story)
+        self._autopilots[story_id] = asyncio.create_task(self._autopilot(story_id))
+        return story["autopilot"]
+
+    async def stop_autopilot(self, story_id: str) -> dict:
+        """Stop after the step it is on. Chapters, pictures and videos made so far are kept."""
+        story = self._story(story_id)
+        task = self._autopilots.pop(story_id, None)
+        if task is not None:
+            task.cancel()
+            await asyncio.wait([task], timeout=30)
+        story = self._story(story_id)
+        if story.get("autopilot"):
+            story["autopilot"].update(status="stopped", finished_at=time.time())
+            self.store.save_story(story)
+        return story.get("autopilot") or {}
+
+    def _pilot(self, story_id: str, **fields) -> dict:
+        story = self._story(story_id)
+        pilot = story.setdefault("autopilot", {})
+        pilot.update(fields)
+        self.store.save_story(story)
+        return pilot
+
+    async def _autopilot(self, story_id: str) -> None:
+        try:
+            pilot = self._story(story_id)["autopilot"]
+            # 1. the outline and the cast (kept, so a resume does not plan again)
+            if not pilot.get("outline"):
+                self._pilot(story_id, stage="outlining")
+                pilot = self._pilot(story_id, outline=await self._outline(story_id, pilot["count"]))
+            # 2. the cast's pictures
+            if pilot.get("portraits") and not pilot.get("portraits_done"):
+                self._pilot(story_id, stage="character pictures")
+                await self._make_portraits(story_id)
+                pilot = self._pilot(story_id, portraits_done=True)
+            # 3. chapter by chapter: draft, then video (waited for, so the main film grows in order)
+            for n in range(pilot.get("next", 0), len(pilot["outline"])):
+                item = pilot["outline"][n]
+                chapter = self.store.get_chapter(item.get("chapter_id") or "")
+                if chapter is None:
+                    self._pilot(story_id, stage=f"drafting chapter {n + 1} of {len(pilot['outline'])}")
+                    while self._busy.get(story_id):  # a chat or draft the user started: let it finish first
+                        await asyncio.sleep(self.poll)
+                    chapter = await self.draft_chapter(story_id, plan=f"{item['title']}: {item['beats']}")
+                    item["chapter_id"] = chapter["id"]
+                    pilot = self._pilot(story_id, outline=pilot["outline"])
+                if pilot.get("videos"):
+                    chapter = self.store.get_chapter(chapter["id"])
+                    if not chapter.get("render_job_id") and chapter.get("status") not in ACTIVE:
+                        self._pilot(story_id, stage=f"video for chapter {n + 1} of {len(pilot['outline'])}")
+                        self.make_video(story_id, chapter["id"])
+                    while (self.store.get_chapter(chapter["id"]) or {}).get("status") in ACTIVE:
+                        await asyncio.sleep(self.poll)
+                    finished = self.store.get_chapter(chapter["id"]) or {}
+                    if finished.get("status") == "failed":
+                        pilot = self._pilot(story_id, errors=(pilot.get("errors") or []) +
+                                            [f"Chapter {n + 1}: {finished.get('error') or 'failed'}"[:300]])
+                pilot = self._pilot(story_id, next=n + 1)
+            self._pilot(story_id, status="done", stage="finished", finished_at=time.time())
+        except asyncio.CancelledError:
+            raise  # a stop sets "stopped"; a shutdown leaves "running", so resume() carries on
+        except Exception as exc:
+            log.warning("story autopilot %s failed: %s", story_id, exc)
+            pilot = self._story(story_id).get("autopilot") or {}
+            self._pilot(story_id, status="failed", stage="failed", finished_at=time.time(),
+                        errors=(pilot.get("errors") or []) + [f"{type(exc).__name__}: {exc}"[:400]])
+        finally:
+            self._autopilots.pop(story_id, None)
+
+    async def _outline(self, story_id: str, count: int) -> list[dict]:
+        story = self._story(story_id)
+        text = OUTLINE_PROMPT.format(count=count, plural="s" if count != 1 else "", title=story["title"],
+                                     premise=story.get("premise") or "", style=story.get("style") or "(not set)",
+                                     cast=self._cast_text(story), chapters=self._chapters_text(story_id))
+        reply, model = await self._ask(await self._models(story, vision=False), [{"role": "user", "content": text}],
+                                       json_mode=True, max_tokens=DRAFT_MAX_TOKENS, purpose="story outline")
+        data = parse_json(reply) or {}
+        outline = [{"title": _CHAPTER_PREFIX.sub("", _clean(c.get("title"), 160)), "beats": _clean(c.get("beats"), 2000)}
+                   for c in data.get("chapters") or [] if isinstance(c, dict) and _clean(c.get("beats"))][:count]
+        if not outline:
+            raise Unavailable(f"{model} did not write an outline.")
+        story = self._story(story_id)
+        known = {c["name"]: c for c in story.get("characters") or []}
+        for person in data.get("characters") or []:
+            if not isinstance(person, dict) or not _clean(person.get("name"), 80):
+                continue
+            name, role = _clean(person["name"], 80), person.get("role") if person.get("role") in ROLES else "cast"
+            if name in known:  # the user's own description and role always win
+                if not known[name].get("description"):
+                    known[name]["description"] = _clean(person.get("description"))
+                continue
+            story.setdefault("characters", []).append({"name": name, "description": _clean(person.get("description")),
+                                                       "role": role, "image_asset_ids": []})
+        self.store.save_story(story)
+        return outline
+
+    async def _make_portraits(self, story_id: str) -> None:
+        """A picture made on this GPU from the description, for every cast character who has none. A character
+        who reads as under 18, or the narrator, gets none."""
+        story = self._story(story_id)
+        for character in story.get("characters") or []:
+            if (character.get("role") != "cast" or character.get("image_asset_ids")
+                    or is_minor(character["name"], {"appearance": character.get("description")})):
+                continue
+            prompt = PORTRAIT_PROMPT.format(name=character["name"], description=character.get("description") or "as described")
+            try:
+                result = await self._generate(prompt)
+            except Exception as exc:  # the chapters still get made, just without this face
+                pilot = self._story(story_id).get("autopilot") or {}
+                self._pilot(story_id, errors=(pilot.get("errors") or []) + [f"Picture of {character['name']}: {exc}"[:300]])
+                continue
+            ids = [a["id"] for a in result.get("assets") or []]
+            if ids:
+                update = getattr(self.service, "update_asset", None)
+                if update:
+                    update(ids[0], collection=f"story/{story['title']}/cast", add_tags=["story", "cast"])
+                fresh = self._story(story_id)
+                for c in fresh.get("characters") or []:
+                    if c["name"] == character["name"] and not c.get("image_asset_ids"):
+                        c["image_asset_ids"] = [ids[0]]
+                self.store.save_story(fresh)
+
+    async def _generate(self, prompt: str) -> dict:
+        for attempt in range(11):
+            try:
+                return await self.service.generate_images(prompt, engine="qwen21")
+            except RequestError as exc:
+                if "busy" not in str(exc).lower() or attempt == 10:
+                    raise
+            await asyncio.sleep(60 if self.poll >= 1 else 0)
+        raise RequestError("ComfyUI stayed busy.")
 
     def _set(self, chapter_id: str, **fields) -> dict:
         chapter = self.store.get_chapter(chapter_id) or {}

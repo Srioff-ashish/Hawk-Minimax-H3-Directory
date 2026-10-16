@@ -527,6 +527,12 @@ class StoryChapterPatch(BaseModel):
     images: list[dict] | None = Field(None, description="[{asset_id, label}]: the chapter's supporting pictures.")
 
 
+class StoryAutopilotIn(BaseModel):
+    chapters: int = Field(5, ge=1, le=30, description="How many chapters to plan and make.")
+    portraits: bool = Field(True, description="Make a picture for every cast character that has none, from the description.")
+    videos: bool = Field(True, description="Make each chapter's video and append it to the main film; false stops at drafts.")
+
+
 class StoryChapterImageIn(BaseModel):
     asset_id: str
     label: str = Field("", max_length=200, description="What it is for, e.g. 'the rooftop bar at night'.")

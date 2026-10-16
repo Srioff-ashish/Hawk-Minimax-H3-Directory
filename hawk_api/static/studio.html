@@ -1193,6 +1193,20 @@
               <div class="row"><button class="btn btn-sm btn-danger" type="button" id="stDelete">Delete story</button><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button></div>
             </form>
           </section>
+          <section class="card" aria-label="Story autopilot">
+            <div class="card-head"><h2>Autopilot</h2><span class="hint">premise → outline → cast pictures → chapters → videos</span></div>
+            <div class="card-body grid">
+              <div class="row">
+                <label class="check">Plan <input class="input" id="stApCount" type="number" min="1" max="30" value="5" style="width:64px;height:30px"> chapters</label>
+                <label class="check"><input type="checkbox" id="stApPortraits" checked>Make character pictures</label>
+                <label class="check"><input type="checkbox" id="stApVideos" checked>Make videos</label>
+                <div class="spacer"></div>
+                <button class="btn btn-sm" type="button" id="stApStop" hidden>Stop</button>
+                <button class="btn btn-sm btn-primary" type="button" id="stApStart">Run autopilot</button>
+              </div>
+              <div id="stApStatus" class="grid" style="gap:6px"><span class="hint">Write the premise above, then run it: it plans the chapters from the premise and makes each one, adding to the main video. Your chat and drafts still work alongside it.</span></div>
+            </div>
+          </section>
           <section class="card" aria-label="Co-writer">
             <div class="card-head"><h2>Co-writer</h2><span class="hint" id="stModelHint"></span><div class="spacer"></div><button class="btn btn-sm btn-primary" type="button" id="stDraft" title="Turn the chat since the last chapter into the next chapter's scenes">Draft chapter</button></div>
             <div class="card-body grid">
@@ -1243,6 +1257,16 @@
                 <label class="field"><span class="label">Aspect ratio</span><select class="select" id="stAspect"></select></label>
                 <label class="field"><span class="label">Seconds <span class="hint">default</span></span><input class="input" id="stSeconds" type="number" min="1" max="15" step="0.5"></label>
               </div>
+              <label class="field"><span class="label">Resolution <span class="hint">megapixels</span></span><select class="select" id="stMp">
+                <option value="">Server default (0.98: 1344×768 at 16:9)</option>
+                <option value="0.4">0.4: quick preview</option>
+                <option value="0.6">0.6</option>
+                <option value="0.8">0.8</option>
+                <option value="0.98">0.98: standard</option>
+                <option value="1.2">1.2</option>
+                <option value="1.5">1.5</option>
+                <option value="2.2">2.2: highest (slow)</option>
+              </select></label>
               <label class="field"><span class="label">Steps <span class="hint">blank: default</span></span><input class="input" id="stSteps" type="number" min="1" max="100" placeholder="8 turbo / 30"></label>
               <div class="row"><label class="check">Subtitles <select class="select" id="stSubs" style="width:auto;height:30px"><option value="file">.srt beside the film</option><option value="off">off</option></select></label><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button></div>
             </form>
@@ -2161,6 +2185,28 @@
     } catch (error) { toast("Could not load stories", error.message, "bad"); }
   }
 
+  function stBusyPaint(busy) {
+    const typing = $("stTyping");
+    if (busy && !typing) $("stThread").insertAdjacentHTML("beforeend", `<div class="st-msg assistant" id="stTyping">${busy.what === "draft" ? "Drafting the chapter…" : "Writing…"}</div>`);
+    if (!busy && typing) typing.remove();
+    $("stSend").disabled = !!busy; $("stDraft").disabled = !!busy;
+    $("stDraft").textContent = busy && busy.what === "draft" ? "Drafting…" : "Draft chapter";
+  }
+
+  function stPilotPaint(pilot, chapters) {
+    const running = pilot && pilot.status === "running";
+    $("stApStart").hidden = !!running; $("stApStop").hidden = !running;
+    if (!pilot) return;
+    const byId = new Map(chapters.map((c) => [c.id, c]));
+    const rows = (pilot.outline || []).map((o, n) => {
+      const c = byId.get(o.chapter_id);
+      const status = c ? c.status : (n < (pilot.next || 0) ? "skipped" : "planned");
+      return `<div class="row" style="gap:8px;font-size:13px"><strong>${n + 1}.</strong><span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(o.title || "")}</span><span class="badge ${status === "done" ? "done" : status === "failed" ? "failed" : status === "planned" ? "plain" : "rendering"}">${esc(status)}</span></div>`;
+    }).join("");
+    $("stApStatus").innerHTML = `<div class="row"><span class="badge ${running ? "rendering" : pilot.status === "done" ? "done" : pilot.status === "failed" ? "failed" : "plain"}">${esc(pilot.status)}</span><span class="hint">${esc(pilot.stage || "")}</span></div>`
+      + rows + ((pilot.errors || []).length ? `<div class="alert bad">${(pilot.errors || []).slice(-3).map(errorHtml).join("<br>")}</div>` : "");
+  }
+
   function stEmpty() {
     story.view = null;
     ["stTitle", "stPremise", "stStyle"].forEach((id) => { $(id).value = ""; });
@@ -2183,9 +2229,12 @@
     if (!document.activeElement?.closest("#stCast")) stCastPaint(view.characters);
     if (!document.activeElement?.closest("#stChapters")) stChaptersPaint(view.chapters);
     if (!keepThread) await stThreadLoad();
-    const busy = view.chapters.some((c) => ST_ACTIVE.includes(c.status));
+    stPilotPaint(view.autopilot, view.chapters);
+    const pilot = view.autopilot && view.autopilot.status === "running";
+    const busy = view.chapters.some((c) => ST_ACTIVE.includes(c.status)) || pilot || !!view.busy;
     $("storyBusy").hidden = !busy;
-    if (busy) story.timer = setTimeout(() => stShow(true).catch(() => {}), 5000);
+    stBusyPaint(view.busy);
+    if (busy) story.timer = setTimeout(() => stShow(!view.busy && !pilot).catch(() => {}), view.busy ? 3000 : 5000);
   }
 
   async function stThreadLoad() {
@@ -2212,6 +2261,9 @@
     $("stAspect").innerHTML = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((a) => `<option${a === set.aspect_ratio ? " selected" : ""}>${a}</option>`).join("");
     $("stSeconds").value = set.segment_seconds;
     $("stSteps").value = (set.render || {}).steps ?? "";
+    const mp = (set.render || {}).megapixels;
+    if (mp != null && ![...$("stMp").options].some((o) => o.value === String(mp))) $("stMp").add(new Option(`${mp}`, String(mp)));
+    $("stMp").value = mp != null ? String(mp) : "";
     $("stSubs").value = set.subtitles || "file";
     const o = state.options || {};
     const unet = (set.render || {}).unet_name || "";
@@ -2335,7 +2387,8 @@
     const steps = $("stSteps").value.trim();
     await putJson(stPath(), { settings: { models: $("stModels").value, plan_models: $("stPlanModels").value, aspect_ratio: $("stAspect").value,
       segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value,
-      render: { unet_name: $("stUnet").value || null, steps: steps ? Number(steps) : null } } }, "PATCH");
+      render: { unet_name: $("stUnet").value || null, steps: steps ? Number(steps) : null,
+                megapixels: $("stMp").value ? Number($("stMp").value) : null } } }, "PATCH");
     toast("Settings saved"); document.activeElement.blur(); await stShow(true);
   }, "Could not save");
 
@@ -2356,20 +2409,32 @@
     const text = $("stInput").value.trim();
     if (!text && !story.attach.length) return;
     $("stSend").disabled = true;
-    $("stThread").insertAdjacentHTML("beforeend", stBubble({ role: "user", text, attachments: story.attach }) + `<div class="st-msg assistant" id="stTyping">…</div>`);
-    $("stThread").scrollTop = $("stThread").scrollHeight;
     try {
-      await post(stPath("/messages"), { text, attachments: story.attach });
+      await post(stPath("/messages"), { text, attachments: story.attach });  // answered in the background
       $("stInput").value = ""; story.attach = []; stAttachPaint(); $("stAttachPicker").hidden = true;
-    } finally { $("stSend").disabled = false; await stThreadLoad(); }
+    } finally { $("stSend").disabled = false; await stShow(); }
   }, "The co-writer did not answer");
   $("stInput").onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); $("stChatForm").requestSubmit(); } };
   $("stDraft").onclick = stWrap(async () => {
     if (stNeedStory()) return;
-    $("stDraft").disabled = true; $("stDraft").textContent = "Drafting…";
-    try { const ch = await post(stPath("/chapters/draft"), {}); toast("Chapter drafted", `${ch.title}: ${ch.scenes.length} scenes. Edit it, then Make video.`); await stShow(); }
-    finally { $("stDraft").disabled = false; $("stDraft").textContent = "Draft chapter"; }
+    await post(stPath("/chapters/draft"), {});  // drafted in the background; the chapter appears when it is done
+    toast("Drafting the chapter", "It appears under Chapters when it is ready -- a minute or two.");
+    await stShow();
   }, "Could not draft the chapter");
+
+  // ---- autopilot
+  $("stApStart").onclick = stWrap(async () => {
+    if (stNeedStory()) return;
+    if (!$("stPremise").value.trim()) { toast("Write the premise first", "The autopilot plans the chapters from it.", "warn"); $("stPremise").focus(); return; }
+    await putJson(stPath(), { premise: $("stPremise").value, style: $("stStyle").value }, "PATCH");
+    const count = Math.max(1, Math.min(30, Number($("stApCount").value) || 5));
+    await post(stPath("/autopilot"), { chapters: count, portraits: $("stApPortraits").checked, videos: $("stApVideos").checked });
+    toast("Autopilot started", `Planning ${count} chapter${count === 1 ? "" : "s"} from the premise`);
+    await stShow();
+  }, "Could not start the autopilot");
+  $("stApStop").onclick = stWrap(async () => {
+    await post(stPath("/autopilot/stop"), {}); toast("Autopilot stopped", "Everything made so far is kept."); await stShow();
+  }, "Could not stop");
 
   // ---- main film
   $("stRebuild").onclick = stWrap(async () => {

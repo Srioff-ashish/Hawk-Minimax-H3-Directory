@@ -36,19 +36,32 @@ DRAFT = {"title": "The rooftop", "summary": "Mina waits; Jun arrives late.", "sc
                                                  {"speaker": "Mina", "text": "You always say that."}]}]}
 
 
+OUTLINE = {"characters": [{"name": "Mina", "description": "late 20s, short black hair", "role": "cast"},
+                          {"name": "Jun", "description": "early 30s, tall, tired eyes", "role": "cast"},
+                          {"name": "Voice", "description": "warm, low", "role": "narrator"}],
+           "chapters": [{"title": "Chapter 1: The rooftop", "beats": "Mina waits; Jun arrives late."},
+                        {"title": "Downstairs", "beats": "They take the stairs down together."}]}
+
+
 class WriterChat:
-    """The co-writer: models in ``down`` fail; chat answers in text, a draft request gets DRAFT."""
+    """The co-writer: models in ``down`` fail; chat answers in text, a draft request gets DRAFT, an outline OUTLINE.
+    ``delay`` makes every call slow, as a reasoning model is."""
 
     def __init__(self):
-        self.calls, self.down, self.sent = [], set(), []
+        self.calls, self.down, self.sent, self.delay = [], set(), [], 0.0
 
     async def chat(self, model, messages, *, purpose="", json_mode=True, **_kw):
         self.calls.append((model, purpose))
         self.sent.append(messages)
+        if self.delay:
+            await asyncio.sleep(self.delay)
         if model in self.down:
             raise AtlasError(f"{model} is unavailable")
+        if purpose == "story outline":
+            return json.dumps(OUTLINE), {}
         if purpose == "story chapter":
-            return json.dumps(DRAFT), {}
+            draft = dict(DRAFT, title="Chapter 9: " + DRAFT["title"]) if "PLAN FOR THIS CHAPTER" in messages[0]["content"] else DRAFT
+            return json.dumps(draft), {}
         return f"Nice -- {model} says: what if Jun is late because he was hiding something?", {}
 
 
@@ -82,7 +95,7 @@ class Story(unittest.IsolatedAsyncioTestCase):
     async def test_chat_uses_gemma_first_and_falls_back(self):
         self.chat.down = {"google/gemma-4-31b-it"}
         out = await self.manager.chat(self.story["id"], "Start on a rooftop at night.")
-        self.assertEqual([m for m, _ in self.chat.calls], ["google/gemma-4-31b-it", "deepseek-ai/deepseek-v4.1-flash"])
+        self.assertEqual([m for m, _ in self.chat.calls][:2], ["google/gemma-4-31b-it", "deepseek-ai/deepseek-v4.1-flash"])
         self.assertIn("deepseek", out["assistant"]["text"])
         self.assertEqual(out["assistant"]["model"], "deepseek-ai/deepseek-v4.1-flash")
         system = self.chat.sent[0][0]["content"]
@@ -177,6 +190,17 @@ class Story(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(film["chapters"], [first["id"], second["id"]], "the redone chapter keeps its place")
         self.assertEqual(self.service.assets[film["asset_id"]]["source"]["jobs"][0], redone["render_job_id"])
 
+    async def test_the_story_resolution_reaches_the_render(self):
+        sid = self.story["id"]
+        with self.assertRaises(RequestError):
+            self.manager.update_story(sid, settings={"render": {"megapixels": 5}})
+        self.manager.update_story(sid, settings={"render": {"megapixels": 0.4, "steps": None}})
+        self.assertEqual(self.manager.view(sid)["settings"]["render"], {"megapixels": 0.4}, "blank keeps the default")
+        chapter = await self.drafted()
+        self.manager.make_video(sid, chapter["id"])
+        await self.finish(chapter["id"])
+        self.assertEqual(self.service.videos[0].settings.megapixels, 0.4)
+
     async def test_a_failed_plan_is_retried_once_then_reported(self):
         self.service.fail_plans = {1}
         chapter = await self.drafted()
@@ -219,6 +243,106 @@ class Story(unittest.IsolatedAsyncioTestCase):
         await self.manager.delete_story(sid)
         with self.assertRaises(NotFound):
             self.manager.view(sid)
+
+
+    async def test_one_co_writer_call_at_a_time_and_replies_in_the_background(self):
+        sid = self.story["id"]
+        self.chat.delay = 0.2
+        out = self.manager.start_chat(sid, "Rooftop, night.")
+        self.assertTrue(out["pending"])
+        with self.assertRaises(RequestError):
+            self.manager.start_draft(sid)  # the reply is still being written: refused, not doubled
+        with self.assertRaises(RequestError):
+            self.manager.start_chat(sid, "again")
+        self.assertEqual(self.manager.view(sid)["busy"]["what"], "chat")
+        while self.manager.view(sid)["busy"]:
+            await asyncio.sleep(0.02)
+        self.assertEqual([m["role"] for m in self.manager.messages(sid)], ["user", "assistant"])
+        self.manager.start_draft(sid)
+        with self.assertRaises(RequestError):
+            self.manager.start_draft(sid)  # the double press that made two Chapter 4s
+        while self.manager.view(sid)["busy"]:
+            await asyncio.sleep(0.02)
+        self.assertEqual(len(self.manager.view(sid)["chapters"]), 1)
+
+    async def test_a_failed_reply_is_said_in_the_chat(self):
+        self.chat.down = {"google/gemma-4-31b-it", "deepseek-ai/deepseek-v4.1-flash", "moonshotai/kimi-k2.6",
+                          "xai/grok-4.6", "xai/grok-4.3"}
+        self.manager.start_chat(self.story["id"], "hello")
+        while self.manager.view(self.story["id"])["busy"]:
+            await asyncio.sleep(0.02)
+        last = self.manager.messages(self.story["id"])[-1]
+        self.assertEqual((last["role"], last.get("error")), ("event", True))
+        self.assertIn("Reply failed", last["text"])
+
+    async def test_chapters_are_numbered_in_order_with_clean_titles(self):
+        sid = self.story["id"]
+        for n in range(3):
+            await self.manager.chat(sid, f"idea {n}")
+            await self.manager.draft_chapter(sid)
+        chapters = self.manager.store.chapters(sid)
+        broken = chapters[2]
+        broken["idx"] = 1  # as the overlapping drafts left them
+        self.manager.store.save_chapter(broken)
+        self.assertEqual([c["idx"] for c in self.manager.view(sid)["chapters"]], [0, 1, 2])
+        await self.manager.chat(sid, "more")
+        chapter = await self.manager.draft_chapter(sid, plan="Chapter 9: The rooftop: x")
+        self.assertEqual((chapter["idx"], chapter["title"]), (3, "The rooftop"), "no 'Chapter 9:' in the title")
+
+    async def test_autopilot_from_the_premise_to_the_main_film(self):
+        sid = self.story["id"]
+        pilot = self.manager.start_autopilot(sid, chapters=2)
+        self.assertEqual(pilot["status"], "running")
+        with self.assertRaises(RequestError):
+            self.manager.start_autopilot(sid)
+        for _ in range(1500):
+            pilot = self.manager.view(sid)["autopilot"]
+            if pilot["status"] != "running":
+                break
+            await asyncio.sleep(0.02)
+        self.assertEqual(pilot["status"], "done", pilot)
+        view = self.manager.view(sid)
+        self.assertEqual([c["title"] for c in view["chapters"]], ["The rooftop", "The rooftop"])
+        self.assertEqual([c["status"] for c in view["chapters"]], ["done", "done"])
+        self.assertEqual(len(view["film"]["chapters"]), 2)
+        cast = {c["name"]: c for c in view["characters"]}
+        self.assertEqual(cast["Voice"]["role"], "narrator")
+        self.assertEqual(len(cast["Mina"]["images"]) + len(cast["Jun"]["images"]), 2, "a picture for each cast member")
+        self.assertEqual(cast["Voice"]["images"], [], "the narrator is a voice")
+        portrait = [c for c in self.service.calls if "portrait photograph of Mina" in c["prompt"]]
+        self.assertEqual(len(portrait), 1)
+        self.assertIn("PLAN FOR THIS CHAPTER: The rooftop: Mina waits", json.dumps(self.chat.sent))
+
+    async def test_autopilot_needs_a_premise_stops_and_resumes(self):
+        bare = self.manager.create_story("No premise yet")
+        with self.assertRaises(RequestError):
+            self.manager.start_autopilot(bare["id"])
+        sid = self.story["id"]
+        self.service.finish_videos = False
+        self.manager.start_autopilot(sid, chapters=2, portraits=False)
+        for _ in range(1500):
+            if (self.manager.view(sid)["autopilot"] or {}).get("stage", "").startswith("video"):
+                break
+            await asyncio.sleep(0.02)
+        await self.manager.stop()  # a restart in the middle of the first video
+        self.assertEqual(self.manager.view(sid)["autopilot"]["status"], "running")
+        for job in self.service.jobs.values():
+            job["status"] = "done"
+        self.service.finish_videos = True
+        fresh = StoryManager(self.service)
+        fresh.poll = 0.01
+        self.manager = fresh
+        await fresh.resume(wait_for_gpu=0)
+        for _ in range(1500):
+            if fresh.view(sid)["autopilot"]["status"] != "running":
+                break
+            await asyncio.sleep(0.02)
+        view = fresh.view(sid)
+        self.assertEqual(view["autopilot"]["status"], "done", view["autopilot"])
+        self.assertEqual(len(view["chapters"]), 2, "the resumed autopilot did not draft chapter 1 again")
+        stopped = fresh.start_autopilot(sid, chapters=1, portraits=False, videos=False)
+        await fresh.stop_autopilot(sid)
+        self.assertEqual(fresh.view(sid)["autopilot"]["status"], "stopped")
 
 
 if __name__ == "__main__":

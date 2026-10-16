@@ -626,6 +626,18 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
             return await run(_sync(lambda: stories.make_video(story_id, chapter_id, redo=redo)))
 
         @mcp.tool(description=(
+            "Story autopilot, from the premise alone: outline the next `chapters` chapters and the cast, make a picture "
+            "for every cast character without one (portraits), then draft each chapter and (videos) make its video, "
+            "appended to the main film. Runs in the background and survives a restart; poll get_story (autopilot)."))
+        async def run_story_autopilot(story_id: str, chapters: int = 5, portraits: bool = True, videos: bool = True) -> dict:
+            return await run(_sync(lambda: stories.start_autopilot(story_id, chapters=max(1, min(chapters, 30)),
+                                                                   portraits=portraits, videos=videos)))
+
+        @mcp.tool(description="Stop a story's autopilot after its current step. Everything made so far is kept.")
+        async def stop_story_autopilot(story_id: str) -> dict:
+            return await run(stories.stop_autopilot(story_id))
+
+        @mcp.tool(description=(
             "Give a story character a picture from Media (asset_id; empty removes them). A picture of, or made from "
             "a photo of, a real identifiable person is refused; minors and the narrator get none."))
         async def set_story_character_image(story_id: str, name: str, asset_id: str = "", add: bool = False) -> dict:
