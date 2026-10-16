@@ -2159,8 +2159,9 @@
   function stEmpty() {
     story.view = null;
     ["stTitle", "stPremise", "stStyle"].forEach((id) => { $(id).value = ""; });
-    $("stThread").innerHTML = `<span class="hint">Press New story to begin.</span>`;
-    $("stCast").innerHTML = ""; $("stChapters").innerHTML = `<span class="hint">No chapters yet.</span>`;
+    $("stThread").innerHTML = `<span class="hint">No story yet: press <b>New story</b> at the top of the Story card to begin.</span>`;
+    $("stCast").innerHTML = `<span class="hint">Characters belong to a story: start one first.</span>`;
+    $("stNew").classList.add("btn-primary"); $("stChapters").innerHTML = `<span class="hint">No chapters yet.</span>`;
     $("stFilm").innerHTML = `<span class="hint">Chapters you turn into video are joined here, in order.</span>`;
   }
 
@@ -2292,6 +2293,13 @@
   }
 
   const stPath = (rest = "") => `/v1/stories/${encodeURIComponent(story.id)}${rest}`;
+  // Everything on the page belongs to a story: with none open, say so instead of failing with "Not Found".
+  function stNeedStory() {
+    if (story.id) return false;
+    toast("Start a story first", "Press New story (top of the Story card) and give it a title.", "warn", 6000);
+    $("stNew").classList.add("btn-primary"); $("stNew").focus();
+    return true;
+  }
   const stWrap = (fn, failTitle) => async (...args) => { try { await fn(...args); } catch (error) { toast(failTitle, readableError(error.message).short, "bad", 8000); } };
 
   $("stPick").onchange = (e) => { story.id = e.target.value; stShow().catch((er) => toast("Could not open", er.message, "bad")); };
@@ -2300,6 +2308,7 @@
     if (!title) return;
     const created = await post("/v1/stories", { title });
     story.id = created.id;
+    $("stNew").classList.remove("btn-primary");
     await loadStories();
   }, "Could not create");
   $("stDelete").onclick = stWrap(async () => {
@@ -2308,11 +2317,13 @@
   }, "Could not delete");
   $("stMeta").onsubmit = stWrap(async (e) => {
     e.preventDefault();
+    if (stNeedStory()) return;
     await putJson(stPath(), { title: $("stTitle").value, premise: $("stPremise").value, style: $("stStyle").value }, "PATCH");
     toast("Saved"); await loadStories();
   }, "Could not save");
   $("stSettings").onsubmit = stWrap(async (e) => {
     e.preventDefault();
+    if (stNeedStory()) return;
     const steps = $("stSteps").value.trim();
     await putJson(stPath(), { settings: { models: $("stModels").value, aspect_ratio: $("stAspect").value,
       segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value,
@@ -2333,7 +2344,7 @@
   }, "Upload failed");
   $("stChatForm").onsubmit = stWrap(async (e) => {
     e.preventDefault();
-    if (!story.id) { toast("Start a story first", "", "warn"); return; }
+    if (stNeedStory()) return;
     const text = $("stInput").value.trim();
     if (!text && !story.attach.length) return;
     $("stSend").disabled = true;
@@ -2346,14 +2357,15 @@
   }, "The co-writer did not answer");
   $("stInput").onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); $("stChatForm").requestSubmit(); } };
   $("stDraft").onclick = stWrap(async () => {
-    if (!story.id) return;
+    if (stNeedStory()) return;
     $("stDraft").disabled = true; $("stDraft").textContent = "Drafting…";
     try { const ch = await post(stPath("/chapters/draft"), {}); toast("Chapter drafted", `${ch.title}: ${ch.scenes.length} scenes. Edit it, then Make video.`); await stShow(); }
     finally { $("stDraft").disabled = false; $("stDraft").textContent = "Draft chapter"; }
   }, "Could not draft the chapter");
 
   // ---- main film
-  $("stRebuild").onclick = stWrap(async () => { await post(stPath("/film"), {}); toast("Main video rebuilt"); await stShow(true); }, "Could not rebuild");
+  $("stRebuild").onclick = stWrap(async () => {
+    if (stNeedStory()) return; await post(stPath("/film"), {}); toast("Main video rebuilt"); await stShow(true); }, "Could not rebuild");
   $("stFilm").onclick = (e) => {
     if (!e.target.closest("[data-st-srt]")) return;
     e.preventDefault();
@@ -2366,6 +2378,7 @@
   // ---- cast
   $("stAddChar").onsubmit = stWrap(async (e) => {
     e.preventDefault();
+    if (stNeedStory()) return;
     await post(stPath("/characters"), { name: $("stAddCharName").value.trim(), role: "cast" });
     $("stAddCharName").value = ""; document.activeElement.blur(); await stShow(true);
   }, "Could not add");
