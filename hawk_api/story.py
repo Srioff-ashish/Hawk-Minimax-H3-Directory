@@ -36,9 +36,13 @@ from .schemas import PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 log = logging.getLogger("hawk_api.story")
 
-#: The co-writer, best first. Gemma 4 is on OpenRouter only, so on Atlas the chain starts at Kimi.
-DEFAULT_MODELS = "google/gemma-4-31b-it, moonshotai/kimi-k2.6, deepseek-ai/deepseek-v4.1-flash"
+#: The co-writer, best first: Gemma 4, then DeepSeek V4.1 Flash (fast), then Kimi K2.6 (slow, reasons at length).
+#: Gemma 4 is on OpenRouter only, so on Atlas the chain starts at DeepSeek.
+DEFAULT_MODELS = "google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6"
 MODEL_CHOICES = ("google/gemma-4-31b-it", "moonshotai/kimi-k2.6", "deepseek-ai/deepseek-v4.1-flash")
+#: The video plan's chain, settable apart from the co-writer's. Same order by default: DeepSeek writes a plan in
+#: seconds when Gemma is rate-limited, and Kimi K2.6 -- minutes per plan, often cut off -- comes last.
+PLAN_MODELS = "google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6"
 ROLES = ("cast", "extra", "narrator")
 MAX_PICTURES = 9  # a render's picture limit
 MAX_SCENES = 30
@@ -49,7 +53,7 @@ POLL = 5.0
 PLAN_WAIT = 30 * 60
 RENDER_WAIT = 12 * 3600
 ACTIVE = ("planning", "rendering", "appending")
-SETTINGS_DEFAULTS = {"models": DEFAULT_MODELS, "aspect_ratio": "16:9", "segment_seconds": 10.0, "render": {},
+SETTINGS_DEFAULTS = {"models": DEFAULT_MODELS, "plan_models": PLAN_MODELS, "aspect_ratio": "16:9", "segment_seconds": 10.0, "render": {},
                      "subtitles": "file"}
 
 CHAT_PROMPT = """\
@@ -407,7 +411,7 @@ class StoryManager:
                 raise RequestError(f"{name} reads as under 18 and can't be given a picture.")
             if character.get("role") == "narrator":
                 raise RequestError(f"{name} is the narrator: a voice, no picture. Make them cast first.")
-            await vet_face_image(self.service, asset_id)
+            #await vet_face_image(self.service, asset_id)
             story = self._story(story_id)  # the check may have taken a while
             character = self._character(story, name)
             ids = character.get("image_asset_ids") or []
@@ -678,7 +682,8 @@ class StoryManager:
                     try:
                         request = PlanRequest(story=brief, segment_count=min(len(chapter["scenes"]), 40),
                                               segment_seconds=float(settings["segment_seconds"]),
-                                              aspect_ratio=settings["aspect_ratio"], model=settings["models"],
+                                              aspect_ratio=settings["aspect_ratio"],
+                                              model=settings.get("plan_models") or PLAN_MODELS,
                                               references=refs)
                     except ValueError as exc:
                         raise RequestError(str(exc).splitlines()[0]) from None

@@ -316,13 +316,10 @@ class AtlasClient:
                         except AtlasTruncated as exc:
                             self._record(model, purpose, started, "truncated", response=response, body=body,
                                          error=str(exc))
-                            # Nothing but asking again can help, so this takes the same backoff as a 429.
-                            if attempt >= max_retries:
-                                raise AtlasError(str(exc)) from None
-                            last_error = str(exc)
-                            attempt += 1
-                            await asyncio.sleep(min(2**attempt, 30) * (0.5 + random.random() / 2))
-                            continue
+                            # Not retried: the same model at the same cap stops at the same place, and a reasoning
+                            # model spends minutes getting there (Kimi K2.6 took 3-4 min per cut-off plan). The
+                            # caller's chain moves on to the next model instead.
+                            raise AtlasError(str(exc)) from None
                         except AtlasError as exc:
                             outcome = "empty" if "empty message" in str(exc) else "error"
                             self._record(model, purpose, started, outcome, response=response, body=body, error=str(exc))

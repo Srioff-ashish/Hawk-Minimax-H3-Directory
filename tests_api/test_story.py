@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from hawk_api.atlas import AtlasError
     from hawk_api.jobs import NotFound, RequestError, Unavailable
-    from hawk_api.story import DEFAULT_MODELS, StoryManager, chapter_brief
+    from hawk_api.story import DEFAULT_MODELS, PLAN_MODELS, StoryManager, chapter_brief
     from test_manhwa import PipelineService, duration
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(f"story test dependencies missing: {exc}")
@@ -82,9 +82,9 @@ class Story(unittest.IsolatedAsyncioTestCase):
     async def test_chat_uses_gemma_first_and_falls_back(self):
         self.chat.down = {"google/gemma-4-31b-it"}
         out = await self.manager.chat(self.story["id"], "Start on a rooftop at night.")
-        self.assertEqual([m for m, _ in self.chat.calls], ["google/gemma-4-31b-it", "moonshotai/kimi-k2.6"])
-        self.assertIn("kimi", out["assistant"]["text"])
-        self.assertEqual(out["assistant"]["model"], "moonshotai/kimi-k2.6")
+        self.assertEqual([m for m, _ in self.chat.calls], ["google/gemma-4-31b-it", "deepseek-ai/deepseek-v4.1-flash"])
+        self.assertIn("deepseek", out["assistant"]["text"])
+        self.assertEqual(out["assistant"]["model"], "deepseek-ai/deepseek-v4.1-flash")
         system = self.chat.sent[0][0]["content"]
         self.assertIn("Two coworkers fall for each other.", system)
         self.assertIn("adult", system)
@@ -150,7 +150,9 @@ class Story(unittest.IsolatedAsyncioTestCase):
         done = await self.finish(first["id"])
         self.assertEqual(done["status"], "done", done)
         plan = self.service.plans[0]
-        self.assertEqual(plan.model, DEFAULT_MODELS, "the plan falls back along the co-writer chain")
+        self.assertEqual(plan.model, PLAN_MODELS, "plans use their own chain: Gemma, DeepSeek, Kimi")
+        self.assertEqual(PLAN_MODELS.split(", "), ["google/gemma-4-31b-it", "deepseek-ai/deepseek-v4.1-flash",
+                                                   "moonshotai/kimi-k2.6"])
         self.assertEqual(plan.segment_count, 2)
         film = self.manager.view(sid)["film"]
         self.assertEqual(film["chapters"], [first["id"]])

@@ -1228,9 +1228,14 @@
             <form class="card-body grid" id="stSettings" autocomplete="off">
               <div class="grid">
                 <label class="field"><span class="label">Co-writer</span><select class="select" id="stModels">
-                  <option value="google/gemma-4-31b-it, moonshotai/kimi-k2.6, deepseek-ai/deepseek-v4.1-flash">Gemma 4 31B → Kimi K2.6 → DeepSeek</option>
-                  <option value="moonshotai/kimi-k2.6, deepseek-ai/deepseek-v4.1-flash, google/gemma-4-31b-it">Kimi K2.6 → DeepSeek → Gemma 4</option>
-                  <option value="deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6, google/gemma-4-31b-it">DeepSeek → Kimi K2.6 → Gemma 4</option>
+                  <option value="google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6">Gemma 4 31B → DeepSeek → Kimi K2.6</option>
+                  <option value="deepseek-ai/deepseek-v4.1-flash, google/gemma-4-31b-it, moonshotai/kimi-k2.6">DeepSeek → Gemma 4 → Kimi K2.6</option>
+                  <option value="moonshotai/kimi-k2.6, google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash">Kimi K2.6 → Gemma 4 → DeepSeek</option>
+                </select></label>
+                <label class="field"><span class="label">Video plan written by</span><select class="select" id="stPlanModels">
+                  <option value="google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6">Gemma 4 → DeepSeek → Kimi K2.6</option>
+                  <option value="deepseek-ai/deepseek-v4.1-flash, google/gemma-4-31b-it, moonshotai/kimi-k2.6">DeepSeek (fast) → Gemma 4 → Kimi K2.6</option>
+                  <option value="moonshotai/kimi-k2.6, google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash">Kimi K2.6 → Gemma 4 → DeepSeek</option>
                 </select></label>
                 <label class="field"><span class="label">Base model</span><select class="select" id="stUnet"></select></label>
               </div>
@@ -2201,6 +2206,9 @@
     if (![...models.options].some((o) => o.value === set.models)) models.add(new Option(set.models, set.models));
     models.value = set.models;
     $("stModelHint").textContent = set.models.split(",")[0].split("/").pop();
+    const planModels = $("stPlanModels"), plans = set.plan_models || planModels.options[0].value;
+    if (![...planModels.options].some((o) => o.value === plans)) planModels.add(new Option(plans, plans));
+    planModels.value = plans;
     $("stAspect").innerHTML = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"].map((a) => `<option${a === set.aspect_ratio ? " selected" : ""}>${a}</option>`).join("");
     $("stSeconds").value = set.segment_seconds;
     $("stSteps").value = (set.render || {}).steps ?? "";
@@ -2325,7 +2333,7 @@
     e.preventDefault();
     if (stNeedStory()) return;
     const steps = $("stSteps").value.trim();
-    await putJson(stPath(), { settings: { models: $("stModels").value, aspect_ratio: $("stAspect").value,
+    await putJson(stPath(), { settings: { models: $("stModels").value, plan_models: $("stPlanModels").value, aspect_ratio: $("stAspect").value,
       segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value,
       render: { unet_name: $("stUnet").value || null, steps: steps ? Number(steps) : null } } }, "PATCH");
     toast("Settings saved"); document.activeElement.blur(); await stShow(true);
