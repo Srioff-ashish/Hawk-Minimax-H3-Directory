@@ -101,6 +101,8 @@ Reply with only JSON:
 """
 
 
+OUTLINE_ATTEMPTS = 4
+
 OUTLINE_PROMPT = """\
 Plan the next {count} chapter{plural} of this story, to be filmed one chapter at a time. Continue from where the
 earlier chapters end (or begin the story if there are none), following the premise and its arc closely.
@@ -112,8 +114,8 @@ Cast so far:
 {cast}
 Earlier chapters:
 {chapters}
-
-For each chapter: a short title and "beats" -- 3-6 sentences on what happens, where, who is there, how it moves
+{planned}
+Write exactly {count} chapter{plural} in "chapters" -- no fewer. For each chapter: a short title and "beats" -- 3-6 sentences on what happens, where, who is there, how it moves
 the arc forward, and one or two key lines of dialogue. List the characters too: everyone the chapters need, with a
 description an image model can draw (adult age, build, face, hair, usual clothes) and a role: "cast" for people
 who appear on screen, "narrator" for a voice-over. Every character is an adult (18 or older).
@@ -853,17 +855,43 @@ class StoryManager:
             self._autopilots.pop(story_id, None)
 
     async def _outline(self, story_id: str, count: int) -> list[dict]:
+        """count chapters of outline. A model that lists fewer is asked again for the rest (a few times), each time
+        shown what is already planned so the arc carries on."""
         story = self._story(story_id)
-        text = OUTLINE_PROMPT.format(count=count, plural="s" if count != 1 else "", title=story["title"],
-                                     premise=story.get("premise") or "", style=story.get("style") or "(not set)",
-                                     cast=self._cast_text(story), chapters=self._chapters_text(story_id))
-        reply, model = await self._ask(await self._models(story, vision=False), [{"role": "user", "content": text}],
-                                       json_mode=True, max_tokens=DRAFT_MAX_TOKENS, purpose="story outline")
-        data = parse_json(reply) or {}
-        outline = [{"title": _CHAPTER_PREFIX.sub("", _clean(c.get("title"), 160)), "beats": _clean(c.get("beats"), 2000)}
-                   for c in data.get("chapters") or [] if isinstance(c, dict) and _clean(c.get("beats"))][:count]
+        models = await self._models(story, vision=False)
+        outline: list[dict] = []
+        people: list = []
+        model = ""
+        for _ in range(OUTLINE_ATTEMPTS):
+            want = count - len(outline)
+            planned = ""
+            if outline:
+                planned = ("Already planned to follow them (do not repeat these; continue after the last one):\n" +
+                           "\n".join(f"- {o['title']}: {o['beats']}" for o in outline) + "\n")
+            text = OUTLINE_PROMPT.format(count=want, plural="s" if want != 1 else "", title=story["title"],
+                                         premise=story.get("premise") or "", style=story.get("style") or "(not set)",
+                                         cast=self._cast_text(story), chapters=self._chapters_text(story_id),
+                                         planned=planned)
+            try:
+                reply, model = await self._ask(models, [{"role": "user", "content": text}], json_mode=True,
+                                               max_tokens=DRAFT_MAX_TOKENS, purpose="story outline")
+            except Exception:
+                if outline:  # keep what is planned rather than lose it
+                    break
+                raise
+            data = parse_json(reply) or {}
+            people += [p for p in data.get("characters") or [] if isinstance(p, dict)]
+            outline += [{"title": _CHAPTER_PREFIX.sub("", _clean(c.get("title"), 160)), "beats": _clean(c.get("beats"), 2000)}
+                        for c in data.get("chapters") or [] if isinstance(c, dict) and _clean(c.get("beats"))][:want]
+            if len(outline) >= count:
+                break
         if not outline:
-            raise Unavailable(f"{model} did not write an outline.")
+            raise Unavailable(f"{model or 'The co-writer'} did not write an outline.")
+        if len(outline) < count:
+            pilot = self._story(story_id).get("autopilot") or {}
+            self._pilot(story_id, errors=(pilot.get("errors") or []) +
+                        [f"The outline has {len(outline)} of {count} chapters: the co-writer would not plan more."])
+        data = {"characters": people}
         story = self._story(story_id)
         known = {c["name"]: c for c in story.get("characters") or []}
         for person in data.get("characters") or []:
@@ -874,8 +902,9 @@ class StoryManager:
                 if not known[name].get("description"):
                     known[name]["description"] = _clean(person.get("description"))
                 continue
-            story.setdefault("characters", []).append({"name": name, "description": _clean(person.get("description")),
-                                                       "role": role, "image_asset_ids": []})
+            known[name] = {"name": name, "description": _clean(person.get("description")), "role": role,
+                           "image_asset_ids": []}
+            story.setdefault("characters", []).append(known[name])
         self.store.save_story(story)
         return outline
 

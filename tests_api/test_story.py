@@ -48,7 +48,7 @@ class WriterChat:
     ``delay`` makes every call slow, as a reasoning model is."""
 
     def __init__(self):
-        self.calls, self.down, self.sent, self.delay = [], set(), [], 0.0
+        self.calls, self.down, self.sent, self.delay, self.outline_size = [], set(), [], 0.0, None
 
     async def chat(self, model, messages, *, purpose="", json_mode=True, **_kw):
         self.calls.append((model, purpose))
@@ -58,6 +58,10 @@ class WriterChat:
         if model in self.down:
             raise AtlasError(f"{model} is unavailable")
         if purpose == "story outline":
+            if self.outline_size:  # a stingy model: this many chapters per reply, whatever was asked
+                n = sum(1 for _, p in self.calls if p == purpose)
+                return json.dumps({"characters": OUTLINE["characters"], "chapters": [
+                    {"title": f"Part {n}.{i}", "beats": f"Beat {n}.{i}."} for i in range(self.outline_size)]}), {}
             return json.dumps(OUTLINE), {}
         if purpose == "story chapter":
             draft = dict(DRAFT, title="Chapter 9: " + DRAFT["title"]) if "PLAN FOR THIS CHAPTER" in messages[0]["content"] else DRAFT
@@ -312,6 +316,16 @@ class Story(unittest.IsolatedAsyncioTestCase):
         portrait = [c for c in self.service.calls if "portrait photograph of Mina" in c["prompt"]]
         self.assertEqual(len(portrait), 1)
         self.assertIn("PLAN FOR THIS CHAPTER: The rooftop: Mina waits", json.dumps(self.chat.sent))
+
+    async def test_an_outline_short_of_chapters_is_asked_again_for_the_rest(self):
+        self.chat.outline_size = 2
+        outline = await self.manager._outline(self.story["id"], 5)
+        self.assertEqual([o["title"] for o in outline], ["Part 1.0", "Part 1.1", "Part 2.0", "Part 2.1", "Part 3.0"])
+        asks = [m[0]["content"] for m in self.chat.sent]
+        self.assertIn("Write exactly 5 chapters", asks[0])
+        self.assertIn("Write exactly 1 chapter in", asks[2])
+        self.assertIn("- Part 2.1: Beat 2.1.", asks[2], "the follow-up shows what is already planned")
+        self.assertEqual(sum(1 for c in self.manager.view(self.story["id"])["characters"] if c["name"] == "Mina"), 1)
 
     async def test_autopilot_needs_a_premise_stops_and_resumes(self):
         bare = self.manager.create_story("No premise yet")
