@@ -23,6 +23,7 @@ Hawk H3 Director renders MiniMax H3 videos with native audio on the user's GPU p
 
 Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
+   Images the user attaches in this chat do NOT reach the server: you can see them, but you cannot pass them to a tool (upload_image needs the file's bytes, which a chat attachment does not give you). So when the user attaches a picture to edit or to use as a reference, never call generate_image or render_film without it and never claim you used it: call upload_page_link, ask them to upload the same picture there, then call list_references(kind="image", limit=5) -- the newest is theirs -- confirm it by its filename or thumb_url, and pass its asset_id.
 2. Plan (optional but recommended for films): plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it.
 3. Render: render_film with the approved script (or plan_job_id, or story to plan and render in one job). Start with settings.megapixels=0.4 for a cheap preview.
 4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
@@ -84,9 +85,10 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         return {"upload_url": service.upload_page_link(), "note": "Open in a browser, upload files, then paste the asset ids into the chat."}
 
     @mcp.tool(description=(
-        "Upload an image you hold (for example one the user attached) straight to the library, as base64 or a data: "
-        "URI. Returns its asset_id. It is stored as an upload and copied to the user's Google Drive image folder. "
-        "For files on the user's device, use upload_page_link instead."))
+        "Upload an image whose file bytes you actually hold (a file in your own workspace) to the library, as base64 "
+        "or a data: URI. Returns its asset_id. It is stored as an upload and copied to the user's Google Drive image folder. "
+        "An image attached in the chat is NOT such a file -- you cannot produce its bytes, so do not try: use "
+        "upload_page_link and have the user upload it there."))
     async def upload_image(data_base64: str, filename: str = "upload.png", collection: str | None = None,
                            tags: list[str] | None = None) -> dict:
         return await run(_viewed(service.add_asset_from_base64(data_base64, filename, collection, tags)))
@@ -139,6 +141,8 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "and style first, then the background, then the frame walked with positional phrases, light its own sentence, "
         "and text to be rendered in straight double quotes. Give ages as a life stage ('in her thirties'), never a "
         "number of years. No 'masterpiece, 8K'. "
+        "An edit needs the picture on the server as an asset_id: an image attached in the chat is not on the server -- "
+        "get it there with upload_page_link (see the instructions), never edit without it. "
         "Edits: with reference_asset_ids, 'auto' / 'local' use Qwen Image 2.1 on this GPU when idle (free; up to 16 "
         "images). Refer to them in the prompt as <image1>, <image2> in the order given -- nothing labels them for you, "
         "so 'the woman in the second photo' points at nothing -- but that tagging is for TWO OR MORE references "
