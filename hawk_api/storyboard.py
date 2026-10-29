@@ -445,11 +445,12 @@ def plan_parts(modes: list[str], identities: int, models: dict) -> list[dict]:
     return parts
 
 
-CHECK_PROMPT = """You check storyboard panels before they are animated. The FIRST image is the identity reference:
-the person every panel must show. The images after it are panels, in the order listed. For each panel decide
-whether it is usable, and say briefly what is wrong if it is not. A panel fails when:
-- it does not show the same person as the identity reference (a different face, hair, skin tone or a clearly
-  different body and proportions);
+CHECK_PROMPT = """You check storyboard panels before they are animated. The first images are the identity references --
+how many is said below, one image per person in the story (they may be different people: a man and a woman, a group).
+The images after them are panels, in the order listed. A panel may show any one or several of these people, or
+nobody. For each panel decide whether it is usable, and say briefly what is wrong if it is not. A panel fails when:
+- a person in it matches NONE of the identity references (a face, hair, skin tone or build that belongs to nobody in
+  the references). Showing only one of the people, or a different one of them, is fine;
 - anatomy is broken: extra or missing fingers, limbs or nipples, twisted joints, a melted or doubled face;
 - there are artifacts: garbled text, a watermark, a duplicated person, a cut-off head where a face matters;
 - it breaks the platform rule given below, when one is given.
@@ -466,9 +467,14 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
     from .atlas import AtlasError
     from .manhwa import parse_json
 
-    try:
-        identity, mime = await service.asset_file(board["identity_asset_ids"][0], 640)
-    except Exception:
+    references = []
+    for asset_id in board["identity_asset_ids"][:3]:  # every person, not only the first
+        try:
+            data, kind = await service.asset_file(asset_id, 640)
+        except Exception:
+            continue
+        references.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
+    if not references:
         return {}
     chain = models_llm.resolve_many("vision", None, await service.model_catalogue(), vision=True)
     rule = PLATFORM_RULE.get(board.get("platform") or "general", "")
@@ -477,14 +483,16 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
         batch = [i for i in shots[start:start + CHECK_BATCH] if board["panels"][i]]
         if not batch:
             continue
-        parts = [{"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(identity).decode()}}]
+        parts = list(references)
         for index in batch:
             try:
                 data, kind = await service.asset_file(board["panels"][index], 640)
             except Exception:
                 continue
             parts.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
-        ask = ("Panels, in order: " + ", ".join(f"shot {i + 1} ({board['shots'][i][:120]})" for i in batch) + "."
+        ask = (f"Identity references: the first {len(references)} image{'s' if len(references) > 1 else ''}"
+               + (f" ({board['character'][:400]})" if board.get("character") else "") + ".\n"
+               "Panels, in order: " + ", ".join(f"shot {i + 1} ({board['shots'][i][:120]})" for i in batch) + "."
                + (f"\nPlatform rule: {rule}" if rule else "\nNo platform rule."))
         messages = [{"role": "system", "content": CHECK_PROMPT},
                     {"role": "user", "content": [{"type": "text", "text": ask}, *parts]}]

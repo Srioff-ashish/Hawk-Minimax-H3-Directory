@@ -171,6 +171,21 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         self.assertIn("is only a look reference", service.videos[1].story.story)
         self.assertEqual(joined, [board["id"]])
 
+    async def test_a_two_person_board_is_checked_against_both_people(self):
+        service = EngineService(sheet_png(2, 1, 2048, 2048, border=40))
+        service.store.assets["him"] = {"id": "him", "kind": "image", "filename": "him.png"}
+        boards = self.manager(service)
+        board = boards.create(title="Two", character="Jun, a man; Mina, a woman.", identity_asset_ids=["him", "face"],
+                              shots=["Jun waits", "Mina arrives"], draw=False)
+        failed = await sb.check_panels(service, dict(boards.board(board["id"]), panels=["face", "him"]), [0, 1])
+        self.assertEqual(failed, {})
+        system, user = service.chats[-1]
+        images = [p for p in user["content"] if p.get("type") == "image_url"]
+        self.assertEqual(len(images), 4, "both people first, then the two panels")
+        self.assertIn("matches NONE of the identity references", system["content"])
+        self.assertIn("first 2 images", user["content"][0]["text"])
+        self.assertIn("Jun, a man; Mina, a woman.", user["content"][0]["text"])
+
     async def test_review_stops_before_the_film_until_approved(self):
         service = EngineService(sheet_png(2, 1, 2048, 2048, border=40))
         boards = self.manager(service)
