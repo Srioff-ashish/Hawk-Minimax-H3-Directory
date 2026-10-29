@@ -1301,6 +1301,10 @@
                 <label class="field"><span class="label">Video shape</span><select class="select" id="sbAspect"><option>9:16</option><option>16:9</option><option>1:1</option><option>3:4</option><option>4:3</option><option>21:9</option></select></label>
                 <label class="field"><span class="label">Look <span class="hint">optional</span></span><input class="input" id="sbStyle" maxlength="1000" placeholder="e.g. luxury boudoir photography, warm window light"></label>
               </div>
+              <div class="field"><span class="label">Your images as panels <span class="hint">optional · nothing is drawn, $0 · one shot per image, in order</span></span>
+                <div class="sb-ids" id="sbOwn"><span class="hint">None: the shots are drawn on Seedream Flash.</span></div>
+                <div class="row"><button class="btn btn-sm" type="button" id="sbOwnPick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="sbOwnUpload" multiple hidden></label></div>
+                <div class="mh-picker" id="sbOwnPicker" hidden></div></div>
               <label class="field"><span class="label">Shots <span class="hint">one per line, in order: pose, place, clothing · 8 per $0.018 sheet</span></span><textarea class="textarea" id="sbShots" rows="8" placeholder="morning: she wakes in white silk sheets and stretches&#10;at the tall window in an open sheer robe, looking at the sea&#10;…"></textarea></label>
               <label class="field"><span class="label">Motion per shot <span class="hint">optional, one per line; blank lines use the shot text</span></span><textarea class="textarea" id="sbMotions" rows="3" placeholder="she slowly stretches her arms up and smiles&#10;she turns her head to the camera"></textarea></label>
               <div class="row"><button class="btn btn-sm btn-danger" type="button" id="sbDelete">Delete board</button><span class="hint" id="sbCost"></span><div class="spacer"></div><button class="btn btn-sm" type="submit">Save</button><button class="btn btn-sm btn-primary" type="button" id="sbDraw">Draw sheets</button></div>
@@ -1340,6 +1344,25 @@
               <label class="check"><input type="checkbox" id="sbPackAnatomy">Add nude views (adult platforms only)</label>
               <div class="row"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit" id="sbPackGo">Make pack</button></div>
               <div class="st-imgs" id="sbPack"></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Merge into one sheet">
+            <div class="card-head"><h2>Merge into one sheet</h2><span class="hint">$0 · no model</span></div>
+            <form class="card-body grid" id="sbMergeForm" autocomplete="off">
+              <span class="hint">Your images laid out as one picture: a contact sheet to share, or several views of a character as <b>one</b> reference (one of a render's nine picture slots).</span>
+              <div class="sb-ids" id="sbMerge"><span class="hint">Pick 2 to 16 images, in order.</span></div>
+              <div class="row"><button class="btn btn-sm" type="button" id="sbMergePick">Choose from Media</button><button class="btn btn-sm" type="button" id="sbMergeClear">Clear</button></div>
+              <div class="mh-picker" id="sbMergePicker" hidden></div>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Columns <span class="hint">0: auto</span></span><input class="input" id="sbMergeCols" type="number" min="0" max="16" value="0"></label>
+                <label class="field"><span class="label">Fit</span><select class="select" id="sbMergeFit"><option value="contain">Whole image</option><option value="cover">Fill and crop</option></select></label>
+              </div>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Cell shape <span class="hint">blank: first image's</span></span><select class="select" id="sbMergeAspect"><option value="">Auto</option><option>9:16</option><option>3:4</option><option>1:1</option><option>4:3</option><option>16:9</option></select></label>
+                <label class="field"><span class="label">Background</span><select class="select" id="sbMergeBg"><option>black</option><option>white</option><option>grey</option></select></label>
+              </div>
+              <div class="row"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit" id="sbMergeGo">Merge</button></div>
+              <div id="sbMergeOut"></div>
             </form>
           </section>
         </aside>
@@ -2624,7 +2647,7 @@
   // ================================================================ storyboard
   // A board: a character, the shot list, its $0.018 Seedream Flash sheet(s) cut into panels, and the film in which
   // every shot opens on its panel. Drawing and rendering run on the server; the page polls while they do.
-  const board = { id: storage.get("hawkH3Board") || "", view: null, ids: [], thumbs: {}, timer: null };
+  const board = { id: storage.get("hawkH3Board") || "", view: null, ids: [], own: [], merge: [], thumbs: {}, timer: null };
   const SB_BUSY = ["drawing", "rendering", "joining"];
   const sbPath = (rest = "") => `/v1/storyboards/${encodeURIComponent(board.id)}${rest}`;
   const sbLines = (id) => $(id).value.split("\n").map((l) => l.trim());
@@ -2649,8 +2672,20 @@
       .map((f) => `<option value="${esc(f)}"${f === keep ? " selected" : ""}>${esc(shortName(f))}</option>`).join("");
   }
 
+  // a row of picked images with an × each; list is board.own or board.merge
+  function sbPickedPaint(el, list, empty) {
+    $(el).innerHTML = list.length ? list.map((id, n) => `<figure style="margin:0;display:grid;gap:2px">${board.thumbs[id] ? `<img src="${esc(board.thumbs[id])}" alt="">` : `<span class="hint" style="width:56px">image</span>`}`
+      + `<span class="hint">${n + 1}</span><button class="btn btn-sm" type="button" data-sb-unpick="${n}">×</button></figure>`).join("") : `<span class="hint">${empty}</span>`;
+  }
+  const sbOwnPaint = () => sbPickedPaint("sbOwn", board.own, "None: the shots are drawn on Seedream Flash.");
+  const sbMergePaint = () => sbPickedPaint("sbMerge", board.merge, "Pick 2 to 16 images, in order.");
+  function sbRemember(pickerId, id) {
+    const img = $(pickerId).querySelector(`[data-pick="${CSS.escape(id)}"]`);
+    if (img) board.thumbs[id] = img.src;
+  }
+
   function sbEmpty() {
-    board.view = null; board.ids = [];
+    board.view = null; board.ids = []; board.own = []; sbOwnPaint();
     ["sbTitle", "sbCharacter", "sbStyle", "sbShots", "sbMotions"].forEach((id) => { $(id).value = ""; });
     $("sbStatus").hidden = true; $("sbCost").textContent = "";
     sbIdsPaint();
@@ -2722,9 +2757,16 @@
   async function sbSave(draw) {
     const body = sbBody();
     if (!body.character) throw new Error("Describe the character first.");
-    if (!body.shots.length) throw new Error("Write at least one shot, one per line.");
+    if (!body.shots.length && !(board.own.length && !board.id)) throw new Error("Write at least one shot, one per line, or pick your images as panels.");
     if (!board.ids.length) throw new Error("Add the character's identity picture first.");
     if (!board.id) {
+      if (board.own.length) {
+        if (body.shots.length && body.shots.length !== board.own.length) throw new Error(`${board.own.length} images need ${board.own.length} shot lines (or none).`);
+        const motions = sbLines("sbMotions");  // read again: sbBody trims them to the (maybe empty) shot list
+        body.motions = motions.some(Boolean) ? motions.slice(0, board.own.length) : null;
+        const made = await post("/v1/storyboards", { ...body, shots: body.shots, panel_asset_ids: board.own, draw: false });
+        board.id = made.id; board.own = []; sbOwnPaint(); await sbLoad(); return made;
+      }
       const made = await post("/v1/storyboards", { ...body, draw });
       board.id = made.id; await sbLoad(); return made;
     }
@@ -2767,6 +2809,35 @@
     if (board.id) { toast("Identity is fixed", "Start a New board to use other identity pictures.", "warn"); return; }
     board.ids = board.ids.filter((i) => i !== x.dataset.sbUnid); sbIdsPaint();
   };
+
+  // the user's own images as panels (a new board only) and the merge picker
+  $("sbOwnPick").onclick = () => {
+    if (board.id) { toast("Use the panel's Media button", "This board exists: swap single panels with their Media button, or start a New board.", "warn"); return; }
+    stPicker($("sbOwnPicker"), async (id) => { sbRemember("sbOwnPicker", id); if (board.own.length < 40) board.own.push(id); sbOwnPaint(); });
+  };
+  $("sbOwnUpload").onchange = sbWrap(async (e) => {
+    for (const file of e.target.files) {
+      const asset = await uploadFile(file, () => {}, { collection: "storyboard uploads" });
+      board.thumbs[asset.id] = asset.thumb_url; if (board.own.length < 40) board.own.push(asset.id);
+    }
+    e.target.value = ""; sbOwnPaint();
+  }, "Upload failed");
+  $("sbOwn").onclick = (e) => { const x = e.target.closest("[data-sb-unpick]"); if (x) { board.own.splice(Number(x.dataset.sbUnpick), 1); sbOwnPaint(); } };
+  $("sbMergePick").onclick = () => stPicker($("sbMergePicker"), async (id) => { sbRemember("sbMergePicker", id); if (board.merge.length < 16) board.merge.push(id); sbMergePaint(); });
+  $("sbMergeClear").onclick = () => { board.merge = []; sbMergePaint(); $("sbMergeOut").innerHTML = ""; };
+  $("sbMerge").onclick = (e) => { const x = e.target.closest("[data-sb-unpick]"); if (x) { board.merge.splice(Number(x.dataset.sbUnpick), 1); sbMergePaint(); } };
+  $("sbMergeForm").onsubmit = sbWrap(async (e) => {
+    e.preventDefault();
+    if (board.merge.length < 2) throw new Error("Pick at least 2 images.");
+    $("sbMergeGo").disabled = true;
+    try {
+      const out = await post("/v1/sheets/compose", { asset_ids: board.merge, columns: Number($("sbMergeCols").value) || 0, fit: $("sbMergeFit").value,
+                                                     cell_aspect: $("sbMergeAspect").value, background: $("sbMergeBg").value, title: $("sbTitle").value.trim() });
+      $("sbMergeOut").innerHTML = `<div class="st-imgs"><figure><a href="${esc(out.sheet.file_url)}" target="_blank" rel="noopener"><img src="${esc(out.sheet.thumb_url)}" alt="" style="width:120px;height:auto"></a>`
+        + `<span>${out.grid.columns} × ${out.grid.rows} · ${out.grid.size[0]}×${out.grid.size[1]} · in Media, tagged composed-sheet</span></figure></div>`;
+      toast("Sheet made", `${board.merge.length} images, $0.`);
+    } finally { $("sbMergeGo").disabled = false; }
+  }, "Could not merge");
 
   // panels
   $("sbPanels").addEventListener("click", sbWrap(async (e) => {

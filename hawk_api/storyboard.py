@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 
 SHEET_ENGINE = "seedream-flash"
 MAX_PANELS = 8
+SPLIT_MAX = 40  # panels a sheet the user brings may have (a board's shot limit)
 RENDER_PICTURES = 9  # a render's picture limit
 #: Seedream Flash presets: one price at every size, so the sheet takes whichever fits its grid best.
 SHEET_SIZES = ((2048, 2048), (2368, 1776), (1776, 2368), (2816, 1584), (1584, 2816), (2496, 1664), (1664, 2496),
@@ -86,11 +87,16 @@ def sheet_prompt(beats: list[str], character: str, columns: int, rows: int, styl
     )
 
 
+#: A column or row is border when fewer than this share (of 255) of its pixels are brighter than the border:
+#: borders are solid black edge to edge, while even a night scene has some light somewhere along its length.
+BORDER_BRIGHT_SHARE = 20
+
+
 def _runs(profile: list[int], minimum: int) -> list[tuple[int, int]]:
-    """(start, end) of each stretch where the profile is mostly bright, skipping stretches shorter than minimum."""
+    """(start, end) of each stretch that isn't border, skipping stretches shorter than minimum."""
     runs, start = [], None
     for index, value in enumerate(profile + [0]):
-        bright = value > 127
+        bright = value > BORDER_BRIGHT_SHARE
         if bright and start is None:
             start = index
         elif not bright and start is not None:
@@ -112,6 +118,18 @@ def _merge_to(runs: list[tuple[int, int]], count: int) -> list[tuple[int, int]]:
     return runs
 
 
+def _uniform_count(runs: list[tuple[int, int]]) -> int:
+    """How many panels the runs really are: the most whose sizes agree. A band that only looks like a border (a
+    bed frame in every panel of a row) splits a panel unevenly, so merging it back is what makes the sizes agree."""
+    for count in range(len(runs), 1, -1):
+        sizes = [end - start for start, end in _merge_to(runs, count)]
+        mean = sum(sizes) / len(sizes)
+        spread = (sum((size - mean) ** 2 for size in sizes) / len(sizes)) ** 0.5 / mean
+        if spread <= 0.12:
+            return count
+    return 1
+
+
 def find_grid(data: bytes, columns: int, rows: int) -> tuple[list[tuple[int, int, int, int]], bool]:
     """Panel boxes (left, top, right, bottom) in reading order, and whether the borders were found.
 
@@ -124,8 +142,13 @@ def find_grid(data: bytes, columns: int, rows: int) -> tuple[list[tuple[int, int
     mask = image.point(lambda level: 255 if level > BORDER_LEVEL else 0)
     across = list(mask.resize((width, 1), Image.BOX).tobytes())
     down = list(mask.resize((1, height), Image.BOX).tobytes())
-    xs = _merge_to(_runs(across, max(1, round(width * MIN_PANEL_SHARE))), columns)
-    ys = _merge_to(_runs(down, max(1, round(height * MIN_PANEL_SHARE))), rows)
+    xs = _runs(across, max(1, round(width * MIN_PANEL_SHARE * (0.5 if columns <= 0 else 1))))
+    ys = _runs(down, max(1, round(height * MIN_PANEL_SHARE * (0.5 if rows <= 0 else 1))))
+    if columns <= 0 or rows <= 0:  # a sheet whose grid nobody wrote down: take what the borders show
+        if not xs or not ys or len(xs) * len(ys) > SPLIT_MAX:
+            raise StoryboardError("Couldn't find the sheet's panels from its borders: give columns and rows.")
+        columns, rows = _uniform_count(xs), _uniform_count(ys)
+    xs, ys = _merge_to(xs, columns), _merge_to(ys, rows)
     found = len(xs) == columns and len(ys) == rows
     if not found:
         xs = [(round(width * c / columns), round(width * (c + 1) / columns)) for c in range(columns)]
@@ -190,25 +213,44 @@ async def make_sheet(service, beats: list[str], character: str, identity_asset_i
             "model": result.get("model"), "note": result.get("note", "")}
 
 
-async def split_sheet(service, sheet_asset_id: str, columns: int, rows: int, panels: int | None = None,
+async def split_sheet(service, sheet_asset_id: str, columns: int = 0, rows: int = 0, panels: int | None = None,
                       collection: str | None = None, tags: list[str] | None = None) -> dict:
-    """The sheet cut into its panels, each stored as an asset that remembers its sheet and position."""
+    """The sheet cut into its panels, each stored as an asset that remembers its sheet and position.
+
+    columns and rows 0: the grid a merged sheet recorded when it was made, else whatever its borders show -- so any
+    sheet works, one drawn here, one merged from the user's images, or one the user made elsewhere."""
+    from PIL import Image
+
     asset = service.store.get_asset(sheet_asset_id)
     if asset is None or asset.get("kind") != "image":
         raise StoryboardError(f"No image asset {sheet_asset_id!r}.")
-    if columns < 1 or rows < 1 or columns * rows > MAX_PANELS:
-        raise StoryboardError(f"columns x rows should be 1 to {MAX_PANELS} panels.")
+    if columns <= 0 or rows <= 0:
+        recorded = (asset.get("source") or {}).get("grid")
+        if isinstance(recorded, list) and len(recorded) == 2:
+            columns, rows = int(recorded[0]), int(recorded[1])
+    if columns * rows > SPLIT_MAX:
+        raise StoryboardError(f"columns x rows should be at most {SPLIT_MAX} panels.")
     data = await service.asset_bytes(asset)
-    images, found = cut_grid(data, columns, rows)
-    images = images[: panels or len(images)]
+    boxes, found = find_grid(data, columns, rows)
+    if columns <= 0 or rows <= 0:  # detected from the borders
+        found = True
+    image = Image.open(io.BytesIO(data)).convert("RGB")
+    images = []
+    for box in boxes:
+        buffer = io.BytesIO()
+        image.crop(box).save(buffer, format="PNG")
+        images.append(buffer.getvalue())
+    recorded = (asset.get("source") or {}).get("images") or []
+    count = panels or (len(recorded) if recorded and len(recorded) <= len(images) else len(images))
+    images = images[:count]  # a merged sheet's empty last cells are not panels
     stem = (asset.get("filename") or "sheet").rsplit(".", 1)[0][:40]
     out = []
-    for number, image in enumerate(images, 1):
+    for number, cut in enumerate(images, 1):
         stored = await service.add_asset(
-            f"{stem}_panel_{number}.png", io.BytesIO(image), "image/png", len(image),
+            f"{stem}_panel_{number}.png", io.BytesIO(cut), "image/png", len(cut),
             collection=collection or asset.get("collection") or "Generated",
             tags=["storyboard-panel", *(tags or [])],
-            source={"type": "storyboard", "sheet": sheet_asset_id, "panel": number, "grid": [columns, rows]},
+            source={"type": "storyboard", "sheet": sheet_asset_id, "panel": number},
         )
         out.append(service.asset_view(stored))
     note = "" if found else ("The sheet's borders weren't clear, so it was cut as an even grid; check the panel edges.")
@@ -398,9 +440,35 @@ class StoryboardManager:
     # ---- writing
     def create(self, *, title: str, character: str, identity_asset_ids: list[str], shots: list[str],
                aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None, draw: bool = True,
-               link: dict | None = None, then_render: dict | None = None) -> dict:
+               link: dict | None = None, then_render: dict | None = None,
+               panel_asset_ids: list[str] | None = None, sheet_asset_id: str | None = None,
+               sheet_columns: int = 0, sheet_rows: int = 0) -> dict:
+        """panel_asset_ids: the user's own images as the panels, in shot order -- nothing is drawn (no model call),
+        the board is ready at once, and shots default to "shot N" (say what moves in motions).
+
+        sheet_asset_id: a ready-made sheet instead. One merged from the user's images gives back those images
+        (sharper than cut-outs); any other sheet is cut into its panels (grid from columns/rows or its borders)."""
         shots = [s.strip() for s in shots or [] if s and s.strip()]
-        if not shots:
+        from_sheet = None
+        if sheet_asset_id:
+            sheet = self.service.store.get_asset(sheet_asset_id)
+            if sheet is None or sheet.get("kind") != "image":
+                raise StoryboardError(f"No image asset {sheet_asset_id!r}.")
+            source = sheet.get("source") or {}
+            if source.get("type") == "composed" and source.get("images"):
+                panel_asset_ids = [i for i in source["images"] if self.service.store.get_asset(i)]
+            else:
+                from_sheet = {"asset_id": sheet_asset_id, "columns": sheet_columns, "rows": sheet_rows}
+        if panel_asset_ids:
+            for asset_id in panel_asset_ids:
+                asset = self.service.store.get_asset(asset_id)
+                if asset is None or asset.get("kind") != "image":
+                    raise StoryboardError(f"No image asset {asset_id!r}.")
+            if shots and len(shots) != len(panel_asset_ids):
+                raise StoryboardError(f"{len(panel_asset_ids)} images need {len(panel_asset_ids)} shots, one each (or none).")
+            shots = shots or [f"shot {n}: animate this frame with natural, realistic motion"
+                              for n in range(1, len(panel_asset_ids) + 1)]
+        if not shots and not from_sheet:
             raise StoryboardError("Give at least one shot.")
         if len(shots) > 40:
             raise StoryboardError("At most 40 shots on one board.")
@@ -412,14 +480,25 @@ class StoryboardManager:
             asset = self.service.store.get_asset(asset_id)
             if asset is None or asset.get("kind") != "image":
                 raise StoryboardError(f"No image asset {asset_id!r}.")
-        grid_for(min(len(shots), MAX_PANELS), aspect_ratio)  # validates the aspect ratio
+        grid_for(max(1, min(len(shots), MAX_PANELS)), aspect_ratio)  # validates the aspect ratio
         board = {"id": uuid.uuid4().hex[:12], "title": (title or "Storyboard").strip()[:120],
                  "character": character.strip(), "identity_asset_ids": list(identity_asset_ids),
                  "aspect_ratio": aspect_ratio, "style": style.strip(), "shots": shots,
                  "motions": [m.strip() for m in motions] if motions else [], "sheets": [], "panels": [None] * len(shots),
                  "status": "draft", "error": "", "cost_usd": 0.0, "render": {}, "link": link or {},
                  # {settings, segment_seconds, mood, music}: render as soon as the drawing is done (one-call films)
-                 "then_render": then_render, "created_at": time.time()}
+                 "then_render": then_render, "from_sheet": from_sheet, "created_at": time.time()}
+        if from_sheet:  # cut in the background, like a drawing; the shots come from the panel count
+            self.store.save(board)
+            return self.start_draw(board["id"])
+        if panel_asset_ids:
+            board.update(panels=list(panel_asset_ids), status="ready", then_render=None, own_images=True)
+            self.store.save(board)
+            if then_render:
+                return self.start_render(board["id"], RenderSettings(**then_render["settings"]) if then_render.get("settings") else None,
+                                         then_render.get("segment_seconds", 6.0), then_render.get("mood", ""),
+                                         then_render.get("music", ""))
+            return self.view(board)
         self.store.save(board)
         if draw:
             return self.start_draw(board["id"])
@@ -470,9 +549,35 @@ class StoryboardManager:
         self._launch(board_id, self._draw(board_id, only_missing))
         return self.view(board)
 
+    async def _cut(self, board_id: str) -> None:
+        """A board made from a ready-made sheet: its panels become the shots."""
+        board = self.board(board_id)
+        sheet = board["from_sheet"]
+        cut = await split_sheet(self.service, sheet["asset_id"], sheet.get("columns", 0), sheet.get("rows", 0),
+                                collection=f"storyboard/{board['title']}", tags=[f"board:{board_id}"])
+        panels = [p["id"] for p in cut["panels"]]
+        board = self.board(board_id)
+        if board["shots"] and len(board["shots"]) != len(panels):
+            raise StoryboardError(f"The sheet has {len(panels)} panels but {len(board['shots'])} shots were given: "
+                                  "give one shot per panel, or none.")
+        shots = board["shots"] or [f"shot {n}: animate this frame with natural, realistic motion" for n in range(1, len(panels) + 1)]
+        board.update(shots=shots, panels=panels, from_sheet=None, status="ready", error="", note=cut["note"],
+                     sheets=[{"asset_id": sheet["asset_id"], "grid": None, "shots": list(range(len(panels))),
+                              "borders_found": cut["borders_found"]}])
+        self.store.save(board)
+
     async def _draw(self, board_id: str, only_missing: bool) -> None:
         try:
             board = self.board(board_id)
+            if board.get("from_sheet"):
+                await self._cut(board_id)
+                board = self.board(board_id)
+                follow = board.pop("then_render", None)
+                if follow:
+                    self.store.save(board)
+                    self.start_render(board_id, RenderSettings(**follow["settings"]) if follow.get("settings") else None,
+                                      follow.get("segment_seconds", 6.0), follow.get("mood", ""), follow.get("music", ""))
+                return
             todo = [i for i, panel in enumerate(board["panels"]) if not (only_missing and panel)]
             chunks = [todo[i:i + MAX_PANELS] for i in range(0, len(todo), MAX_PANELS)]
             collection = f"storyboard/{board['title']}"
@@ -650,3 +755,87 @@ class StoryboardManager:
                 self._launch(board["id"], self._render(board["id"]))
                 resumed.append(board["id"])
         return resumed
+
+
+# --------------------------------------------------------------------------- sheets from existing images
+
+COMPOSE_MAX = 16
+COMPOSE_LONG_SIDE = 4096  # the sheet's longest side; cells shrink to fit
+
+
+def compose_grid(images: list[bytes], columns: int = 0, cell_aspect: str = "", fit: str = "contain",
+                 border: int = 24, background: str = "black") -> tuple[bytes, dict]:
+    """Images laid out as one sheet (PNG) and the grid used -- Pillow only, no model call.
+
+    contain fits each image whole inside its cell (bars where shapes differ); cover fills the cell and crops the
+    overflow. The cell shape defaults to the first image's."""
+    from PIL import Image, ImageOps
+
+    if not 1 <= len(images) <= COMPOSE_MAX:
+        raise StoryboardError(f"A sheet takes 1 to {COMPOSE_MAX} images, not {len(images)}.")
+    if fit not in ("contain", "cover"):
+        raise StoryboardError("fit should be contain or cover.")
+    opened = [ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("RGB") for data in images]
+    count = len(opened)
+    if cell_aspect:
+        ratio = ASPECTS.get(cell_aspect)
+        if ratio is None:
+            raise StoryboardError(f"cell_aspect should be one of: {', '.join(ASPECTS)}.")
+    else:
+        ratio = opened[0].width / opened[0].height
+    if columns <= 0:  # the most square sheet, preferring full rows: each empty cell costs a little squareness
+        columns = min(range(1, count + 1),
+                      key=lambda c: abs(math.log((c * ratio) / math.ceil(count / c))) + 0.25 * (c * math.ceil(count / c) - count))
+    columns = min(columns, count)
+    rows = math.ceil(count / columns)
+    border = max(0, min(200, border))
+    # each cell as big as the source allows, then shrunk so the sheet's long side stays within the cap
+    cell_h = max(min(image.height, round(image.width / ratio)) for image in opened)
+    cell_w = round(cell_h * ratio)
+    width, height = columns * cell_w + (columns + 1) * border, rows * cell_h + (rows + 1) * border
+    scale = min(1.0, COMPOSE_LONG_SIDE / max(width, height))
+    cell_w, cell_h, border = max(16, math.floor(cell_w * scale)), max(16, math.floor(cell_h * scale)), math.floor(border * scale)
+    width, height = columns * cell_w + (columns + 1) * border, rows * cell_h + (rows + 1) * border
+    fill = {"black": (0, 0, 0), "white": (255, 255, 255), "grey": (128, 128, 128)}.get(background, (0, 0, 0))
+    sheet = Image.new("RGB", (width, height), fill)
+    for index, image in enumerate(opened):
+        row, column = divmod(index, columns)
+        if fit == "cover":
+            cell = ImageOps.fit(image, (cell_w, cell_h), Image.LANCZOS)
+            left, top = 0, 0
+        else:
+            cell = ImageOps.contain(image, (cell_w, cell_h), Image.LANCZOS)
+            left, top = (cell_w - cell.width) // 2, (cell_h - cell.height) // 2
+        sheet.paste(cell, (border + column * (cell_w + border) + left, border + row * (cell_h + border) + top))
+    buffer = io.BytesIO()
+    sheet.save(buffer, format="PNG")
+    return buffer.getvalue(), {"columns": columns, "rows": rows, "panels": count, "cell": [cell_w, cell_h],
+                               "size": [width, height]}
+
+
+async def compose_sheet(service, asset_ids: list[str], columns: int = 0, cell_aspect: str = "", fit: str = "contain",
+                        border: int = 24, background: str = "black", title: str = "", collection: str | None = None) -> dict:
+    """Existing images merged into one sheet asset ($0, no model call): a contact sheet to share, or one reference
+    picture that carries several views in a single slot of a render's nine."""
+    assets = []
+    for asset_id in asset_ids or []:
+        asset = service.store.get_asset(asset_id)
+        if asset is None or asset.get("kind") != "image":
+            raise StoryboardError(f"No image asset {asset_id!r}.")
+        assets.append(asset)
+    if not assets:
+        raise StoryboardError("Pick the images to merge.")
+    images = [await service.asset_bytes(asset) for asset in assets]
+    try:
+        data, grid = await asyncio.to_thread(compose_grid, images, columns, cell_aspect, fit, border, background)
+    except StoryboardError:
+        raise
+    except Exception as exc:  # an unreadable file
+        raise StoryboardError(f"Could not read one of the images: {exc}") from None
+    slug = re.sub(r"[^a-z0-9]+", "_", (title or "sheet").lower()).strip("_")[:40] or "sheet"
+    stored = await service.add_asset(
+        f"{slug}_{len(assets)}.png", io.BytesIO(data), "image/png", len(data),
+        collection=collection or assets[0].get("collection") or "Generated", tags=["composed-sheet"],
+        source={"type": "composed", "images": [a["id"] for a in assets], "grid": [grid["columns"], grid["rows"]]},
+    )
+    return {"sheet": service.asset_view(stored), "grid": grid, "cost_usd": 0.0}

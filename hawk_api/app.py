@@ -22,7 +22,7 @@ from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
 from .story import StoryManager
-from .storyboard import StoryboardManager, identity_pack
+from .storyboard import StoryboardManager, compose_sheet, identity_pack
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -36,7 +36,7 @@ from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
-    IdentityPackIn, StoryPackIn
+    IdentityPackIn, StoryPackIn, ComposeSheetIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -598,7 +598,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         into panels. Poll GET /v1/storyboards/{id} until status is ready."""
         return boards.create(title=body.title, character=body.character, identity_asset_ids=body.identity_asset_ids,
                              shots=body.shots, aspect_ratio=body.aspect_ratio, style=body.style, motions=body.motions,
-                             draw=body.draw)
+                             draw=body.draw, panel_asset_ids=body.panel_asset_ids, sheet_asset_id=body.sheet_asset_id,
+                             sheet_columns=body.sheet_columns, sheet_rows=body.sheet_rows)
 
     @app.get("/v1/storyboards/{board_id}", tags=["storyboard"])
     async def board_get(board_id: str):
@@ -628,6 +629,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def board_render(board_id: str, body: StoryboardRenderIn):
         """Render the film: each shot opens on its panel, in parts of up to nine pictures, joined into one video."""
         return boards.start_render(board_id, body.settings, body.segment_seconds, body.mood, body.music)
+
+    @app.post("/v1/sheets/compose", tags=["storyboard"], status_code=201)
+    async def sheets_compose(body: ComposeSheetIn):
+        """Existing images merged into one sheet image -- no model call, $0."""
+        return await compose_sheet(service, body.asset_ids, body.columns, body.cell_aspect, body.fit, body.border,
+                                   body.background, body.title)
 
     @app.post("/v1/identity-packs", tags=["storyboard"], status_code=201)
     async def make_identity_pack(body: IdentityPackIn):

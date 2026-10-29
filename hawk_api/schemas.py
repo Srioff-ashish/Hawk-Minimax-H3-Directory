@@ -546,11 +546,19 @@ class StoryboardIn(BaseModel):
     character: str = Field(min_length=1, max_length=2000, description="Who is in every shot and how they look.")
     identity_asset_ids: list[str] = Field(min_length=1, max_length=3,
                                           description="The character's identity picture(s), ideally full body on a plain background.")
-    shots: list[str] = Field(min_length=1, max_length=40, description="One shot per line, in story order (pose, place, clothing).")
+    shots: list[str] = Field(default_factory=list, max_length=40, description="One shot per line, in story order (pose, place, clothing).")
     motions: list[str] | None = Field(None, description="Optional: what moves in each shot's video; default the shot text.")
     aspect_ratio: AspectRatio = "9:16"
     style: str = Field("", max_length=1000, description="Look of the whole sheet, e.g. 'luxury boudoir photography, warm light'.")
     draw: bool = Field(True, description="Draw the sheet(s) straight away ($0.018 per 8 shots on Seedream Flash).")
+    panel_asset_ids: list[str] | None = Field(None, max_length=40, description=(
+        "Your own images as the panels, in order: nothing is drawn (no model call) and the board is ready at once. "
+        "shots may then be left empty."))
+    sheet_asset_id: str | None = Field(None, description=(
+        "A ready-made sheet instead: one merged from your images gives them back as the panels; any other is cut "
+        "into its panels (grid from sheet_columns/sheet_rows, or found from its borders)."))
+    sheet_columns: int = Field(0, ge=0, le=40)
+    sheet_rows: int = Field(0, ge=0, le=40)
 
 
 class StoryboardPatch(BaseModel):
@@ -586,3 +594,13 @@ class IdentityPackIn(BaseModel):
 class StoryPackIn(BaseModel):
     name: str = Field(description="The character.")
     anatomy: bool = Field(False, description="Add a nude front view and a rear close-up (adult platforms only).")
+
+
+class ComposeSheetIn(BaseModel):
+    asset_ids: list[str] = Field(min_length=1, max_length=16, description="The images, in reading order.")
+    columns: int = Field(0, ge=0, le=16, description="0 picks the most square grid.")
+    cell_aspect: str = Field("", description="Cell shape, e.g. 9:16; blank uses the first image's.")
+    fit: Literal["contain", "cover"] = Field("contain", description="contain keeps each image whole; cover fills and crops.")
+    border: int = Field(24, ge=0, le=200)
+    background: Literal["black", "white", "grey"] = "black"
+    title: str = Field("", max_length=80)

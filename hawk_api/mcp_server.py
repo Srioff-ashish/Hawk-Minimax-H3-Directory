@@ -26,7 +26,7 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
    Images the user attaches in this chat do NOT reach the server: you can see them, but you cannot pass them to a tool (upload_image needs the file's bytes, which a chat attachment does not give you). So when the user attaches a picture to edit or to use as a reference, never call generate_image or render_film without it and never claim you used it: call upload_page_link, ask them to upload the same picture there, then call list_references(kind="image", limit=5) -- the newest is theirs -- confirm it by its filename or thumb_url, and pass its asset_id.
 2. Plan: plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it. Whenever the video uses reference pictures (any character or face to keep), always plan -- with plan_film, or render_film with story -- even for a dance or music video with no dialogue: the planner writes H3's six-section reference format (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music), which is what keeps each face tied to its picture. Put the people, their looks and outfits, the action, camera and music in the brief; the planner does the rest.
-   Several shots of one recurring character (a reel, a photoshoot, a chapter)? storyboard_film draws them all as one $0.018 Seedream Flash sheet, cuts it into panels and renders each panel as the first frame of its segment -- cheaper and more consistent than an image per shot. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere.
+   Several shots of one recurring character (a reel, a photoshoot, a chapter)? storyboard_film draws them all as one $0.018 Seedream Flash sheet, cuts it into panels and renders each panel as the first frame of its segment -- cheaper and more consistent than an image per shot. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere. The user's own images need no drawing: storyboard_film with panel_asset_ids, or compose_sheet then storyboard_film with sheet_asset_id ($0 for the images).
 3. Render: render_film with plan_job_id (or the approved, possibly edited script, or story to plan and render in one job). A hand-written script is for clips with no reference pictures, or one already in the six-section format; get_job warns when a script with pictures skips it. Start with settings.megapixels=0.4 for a cheap preview.
 4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
@@ -314,9 +314,10 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         return await boarded(storyboards.make_sheet(service, beats, character, reference_asset_ids, aspect_ratio, style))
 
     @mcp.tool(description=(
-        "Storyboard step 2: cut a sheet into its panels (columns x rows from step 1's grid). Each panel is stored as "
+        "Storyboard step 2: cut a sheet into its panels (columns x rows from step 1's grid; 0 and 0 find the grid from "
+        "a merged sheet's record or the sheet's borders, for any sheet). Each panel is stored as "
         "an image asset in reading order. Look at the panels before step 3 and redo any bad one with generate_image."))
-    async def split_storyboard_sheet(sheet_asset_id: str, columns: int, rows: int, panels: int | None = None) -> dict:
+    async def split_storyboard_sheet(sheet_asset_id: str, columns: int = 0, rows: int = 0, panels: int | None = None) -> dict:
         return await boarded(storyboards.split_sheet(service, sheet_asset_id, columns, rows, panels))
 
     @mcp.tool(description=(
@@ -336,25 +337,35 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "film renders with each segment opening on its panel; up to 40 shots (rendered in parts and joined). "
         "shots: one per line, in order (pose, place, clothing). identity_asset_ids: the character's identity "
         "picture(s), ideally full body on a plain background. Returns the board: poll get_storyboard "
-        "(drawing -> rendering -> joining -> done, with film)."))
+        "(drawing -> rendering -> joining -> done, with film). panel_asset_ids: the user's own images as the panels "
+        "instead (nothing drawn, no image cost; shots may be empty, motions say what moves). sheet_asset_id: a "
+        "ready-made sheet instead -- one from compose_sheet (its images become the panels), a sheet drawn here, or "
+        "one the user made elsewhere (cut into panels; grid from sheet_columns/sheet_rows or found from its borders)."))
     async def storyboard_film(shots: list[str], character: str, identity_asset_ids: list[str], title: str = "Storyboard",
                               aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None,
                               segment_seconds: float = 6.0, settings: RenderSettings | None = None,
-                              mood: str = "", music: str = "") -> dict:
+                              mood: str = "", music: str = "", panel_asset_ids: list[str] | None = None,
+                              sheet_asset_id: str | None = None, sheet_columns: int = 0, sheet_rows: int = 0) -> dict:
         follow = {"settings": settings.model_dump() if settings else None, "segment_seconds": segment_seconds,
                   "mood": mood, "music": music}
         return await boarded(_sync(boards.create, title=title, character=character, identity_asset_ids=identity_asset_ids,
                                    shots=shots, aspect_ratio=aspect_ratio, style=style, motions=motions,
-                                   then_render=follow))
+                                   then_render=follow, panel_asset_ids=panel_asset_ids, sheet_asset_id=sheet_asset_id,
+                                   sheet_columns=sheet_columns, sheet_rows=sheet_rows))
 
     @mcp.tool(description=(
         "Storyboard board without rendering: draws the shots (Seedream Flash, $0.018 per 8) and cuts the panels, then "
         "waits so they can be checked; fix any with redo_storyboard_panel, then render_storyboard_board. The board "
-        "also shows on the Studio Storyboard page."))
+        "also shows on the Studio Storyboard page. panel_asset_ids: the user's own images as the panels (nothing drawn); "
+        "sheet_asset_id: a ready-made sheet, cut into its panels."))
     async def create_storyboard(shots: list[str], character: str, identity_asset_ids: list[str], title: str = "Storyboard",
-                                aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None) -> dict:
+                                aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None,
+                                panel_asset_ids: list[str] | None = None, sheet_asset_id: str | None = None,
+                                sheet_columns: int = 0, sheet_rows: int = 0) -> dict:
         return await boarded(_sync(boards.create, title=title, character=character, identity_asset_ids=identity_asset_ids,
-                                   shots=shots, aspect_ratio=aspect_ratio, style=style, motions=motions))
+                                   shots=shots, aspect_ratio=aspect_ratio, style=style, motions=motions,
+                                   panel_asset_ids=panel_asset_ids, sheet_asset_id=sheet_asset_id,
+                                   sheet_columns=sheet_columns, sheet_rows=sheet_rows))
 
     @mcp.tool(description="A storyboard board: status, shots, sheets, panel images (panel_views), render jobs and the finished film.")
     async def get_storyboard(board_id: str) -> dict:
@@ -373,6 +384,14 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
     async def render_storyboard_board(board_id: str, segment_seconds: float = 6.0, settings: RenderSettings | None = None,
                                       mood: str = "", music: str = "") -> dict:
         return await boarded(_sync(boards.start_render, board_id, settings, segment_seconds, mood, music))
+
+    @mcp.tool(description=(
+        "Merge existing images into one sheet image -- no model call, $0. For a contact sheet to share, or to give a "
+        "render several views of a character as ONE reference picture (one slot of its nine). fit: contain keeps each "
+        "image whole, cover fills each cell and crops. columns 0 picks the most square grid."))
+    async def compose_sheet(asset_ids: list[str], columns: int = 0, cell_aspect: str = "", fit: str = "contain",
+                            border: int = 24, background: str = "black", title: str = "") -> dict:
+        return await boarded(storyboards.compose_sheet(service, asset_ids, columns, cell_aspect, fit, border, background, title))
 
     @mcp.tool(description=(
         "A character's identity pack: front, back, side and face views as one $0.018 Seedream Flash sheet, cut into "

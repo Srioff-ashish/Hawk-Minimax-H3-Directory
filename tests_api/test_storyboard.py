@@ -77,6 +77,14 @@ class Cut(unittest.TestCase):
         self.assertLess(boxes[0][1], 40)
         self.assertGreater(boxes[0][3], 360, "the top row is one panel, band and all")
 
+    def test_with_no_grid_given_the_panels_are_found_even_past_a_false_band(self):
+        image = Image.open(io.BytesIO(sheet_png(4, 2))).convert("RGB")
+        image.paste((0, 0, 0), (0, 250, 800, 262))
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        boxes, _ = sb.find_grid(buffer.getvalue(), 0, 0)
+        self.assertEqual(len(boxes), 8, "the band splits the top row unevenly, so it is merged back")
+
     def test_a_dark_sheet_is_cut_as_the_even_grid_it_was_asked_to_be(self):
         panels, found = sb.cut_grid(sheet_png(2, 2, dark=True), 2, 2)
         self.assertFalse(found)
@@ -178,7 +186,97 @@ class Steps(unittest.TestCase):
             asyncio.run(sb.render_film(service, ["a", "b"], "face", ["only one"], "Rebel."))
 
 
+def png(width: int, height: int, colour=(200, 60, 60)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", (width, height), colour).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+class Compose(unittest.TestCase):
+    def test_four_tall_images_make_a_squarish_sheet_with_every_image_whole(self):
+        data, grid = sb.compose_grid([png(450, 800)] * 4, border=20)
+        self.assertEqual((grid["columns"], grid["rows"]), (2, 2), "full rows beat a squarer grid with empty cells")
+        sheet = Image.open(io.BytesIO(data))
+        self.assertEqual(list(sheet.size), grid["size"])
+        self.assertEqual(sheet.getpixel((5, 5)), (0, 0, 0), "black border")
+        self.assertEqual(sheet.getpixel((20 + 10, 20 + 10)), (200, 60, 60), "the image starts inside the border")
+
+    def test_contain_keeps_a_wide_image_whole_and_cover_fills_the_cell(self):
+        images = [png(400, 700), png(1600, 400, (20, 200, 20))]
+        contain, grid = sb.compose_grid(images, columns=2, fit="contain", border=0)
+        cell_w, cell_h = grid["cell"]
+        sheet = Image.open(io.BytesIO(contain))
+        self.assertEqual(sheet.getpixel((cell_w + cell_w // 2, 5)), (0, 0, 0), "bars above the letterboxed wide image")
+        cover, _ = sb.compose_grid(images, columns=2, fit="cover", border=0)
+        self.assertEqual(Image.open(io.BytesIO(cover)).getpixel((cell_w + cell_w // 2, 5)), (20, 200, 20), "filled, cropped")
+
+    def test_the_sheet_stays_within_the_size_cap_and_the_limits(self):
+        _, grid = sb.compose_grid([png(3000, 3000)] * 9)
+        self.assertLessEqual(max(grid["size"]), sb.COMPOSE_LONG_SIDE)
+        with self.assertRaises(sb.StoryboardError):
+            sb.compose_grid([png(10, 10)] * 17)
+        with self.assertRaises(sb.StoryboardError):
+            sb.compose_grid([png(10, 10)], fit="stretch")
+
+
 class Boards(unittest.IsolatedAsyncioTestCase):
+    async def test_my_own_images_are_the_panels_and_nothing_is_drawn(self):
+        service = FakeService(sheet_png(2, 1))
+        for n in range(3):
+            service.store.assets[f"mine{n}"] = {"id": f"mine{n}", "kind": "image", "filename": f"m{n}.png"}
+        boards = sb.StoryboardManager(service)
+        boards.poll = 0.01
+        boards._join = lambda board_id: asyncio.sleep(0)
+        board = boards.create(title="Mine", character="Rebel.", identity_asset_ids=["face"], shots=[],
+                              motions=["turns", "", "laughs"], panel_asset_ids=["mine0", "mine1", "mine2"],
+                              then_render={"segment_seconds": 5})
+        self.assertEqual(service.image_calls, [], "no image model call")
+        self.assertEqual(board["panels"], ["mine0", "mine1", "mine2"])
+        await boards._tasks[board["id"]]
+        request = service.videos[0]
+        self.assertEqual([r.asset_id for r in request.references], ["mine0", "mine1", "mine2", "face"])
+        self.assertIn("Segment 1: <Picture 1> -- turns.", request.story.story)
+        self.assertIn("animate this frame", request.story.story, "a blank motion falls back to the shot")
+        with self.assertRaises(sb.StoryboardError):
+            boards.create(title="x", character="Rebel.", identity_asset_ids=["face"], shots=["one"],
+                          panel_asset_ids=["mine0", "mine1"])
+
+    async def test_a_merged_sheet_gives_back_its_images_and_any_other_sheet_is_cut(self):
+        service = FakeService(sheet_png(4, 2, 2048, 2048, border=40))
+        for n in range(3):
+            service.store.assets[f"m{n}"] = {"id": f"m{n}", "kind": "image", "filename": f"m{n}.png"}
+        merged = await sb.compose_sheet(service, ["m0", "m1", "m2"])
+        boards = sb.StoryboardManager(service)
+        board = boards.create(title="Merged", character="Rebel.", identity_asset_ids=["face"], shots=[],
+                              sheet_asset_id=merged["sheet"]["id"])
+        self.assertEqual((board["status"], board["panels"]), ("ready", ["m0", "m1", "m2"]), "the originals, not cut-outs")
+
+        service.store.assets["their_sheet"] = {"id": "their_sheet", "kind": "image", "filename": "made_elsewhere.jpg"}
+        board = boards.create(title="Theirs", character="Rebel.", identity_asset_ids=["face"], shots=[],
+                              sheet_asset_id="their_sheet", then_render={"segment_seconds": 5})
+        self.assertEqual(board["status"], "drawing", "cut in the background")
+        for _ in range(50):
+            task = boards._tasks.get(board["id"])
+            if task is None:
+                break
+            await task
+            await asyncio.sleep(0)
+        board = boards.board(board["id"])
+        self.assertEqual(len(board["panels"]), 8, "4 x 2 found from the borders")
+        self.assertEqual(len(board["shots"]), 8)
+        self.assertEqual(len(service.videos[-1].references), 9, "then rendered: 8 panels and the identity picture")
+
+    async def test_compose_sheet_stores_one_asset_and_costs_nothing(self):
+        service = FakeService(png(450, 800))
+        for n in range(2):
+            service.store.assets[f"m{n}"] = {"id": f"m{n}", "kind": "image", "filename": f"m{n}.png", "collection": "Rebel"}
+        out = await sb.compose_sheet(service, ["m0", "m1"], title="Rebel views")
+        self.assertEqual(out["cost_usd"], 0.0)
+        self.assertEqual(out["sheet"]["source"]["images"], ["m0", "m1"])
+        self.assertEqual(out["sheet"]["collection"], "Rebel")
+        self.assertIn("composed-sheet", out["sheet"]["tags"])
+        self.assertEqual(service.image_calls, [])
+
     async def test_ten_shots_are_two_sheets_two_renders_and_one_film(self):
         service = FakeService(sheet_png(4, 2, 2048, 2048, border=40))
         boards = sb.StoryboardManager(service)
