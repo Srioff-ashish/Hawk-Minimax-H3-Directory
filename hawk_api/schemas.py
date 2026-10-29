@@ -612,3 +612,4 @@ class StoryboardSuggestIn(BaseModel):
     count: int = Field(8, ge=1, le=40, description="How many shots.")
     aspect_ratio: AspectRatio = "9:16"
     models: str | None = Field(None, description="A comma-separated model chain; default Gemma 4 31B, DeepSeek, Kimi K2.6.")
+    character: str = Field("", max_length=2000, description="What you already know about the character (age, looks): kept as fixed facts.")

@@ -2824,7 +2824,7 @@
     $("sbWrite").disabled = true; $("sbWrite").textContent = "Writing…";
     try {
       const out = await post("/v1/storyboards/suggest", { idea, reference_asset_ids: board.ids, count: Number($("sbIdeaCount").value) || 8,
-                                                          aspect_ratio: $("sbAspect").value });
+                                                          aspect_ratio: $("sbAspect").value, character: $("sbCharacter").value.trim() });
       if (out.character) $("sbCharacter").value = out.character;
       if (out.style) $("sbStyle").value = out.style;
       $("sbShots").value = out.shots.join("\n");

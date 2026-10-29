@@ -605,7 +605,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def board_suggest(body: StoryboardSuggestIn):
         """The character, the look, and one shot and one motion line per shot, written by an LLM (Gemma 4 31B, then
         DeepSeek, then Kimi K2.6) from the idea and the reference images. Nothing is drawn: fill a board with them."""
-        return await suggest_shots(service, body.idea, body.reference_asset_ids, body.count, body.aspect_ratio, body.models)
+        return await suggest_shots(service, body.idea, body.reference_asset_ids, body.count, body.aspect_ratio, body.models,
+                                   body.character)
 
     @app.get("/v1/storyboards/{board_id}", tags=["storyboard"])
     async def board_get(board_id: str):

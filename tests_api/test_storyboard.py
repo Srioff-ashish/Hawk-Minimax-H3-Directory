@@ -382,6 +382,8 @@ class Writer(unittest.IsolatedAsyncioTestCase):
         self.assertIn(PLATFORM_RULES, system["content"])
         self.assertTrue(any(part.get("type") == "image_url" for part in user["content"]), "the reference picture is sent")
         self.assertIn("exactly 4", user["content"][0]["text"])
+        await sb.suggest_shots(service, "a villa morning", ["face"], 4, character="Rebel, fair-skinned Indian, 45, petite")
+        self.assertIn("Rebel, fair-skinned Indian, 45, petite", calls[-1][1][1]["content"][0]["text"], "the user's facts go in as fixed")
         with self.assertRaises(sb.StoryboardError):
             await sb.suggest_shots(service, "", ["face"], 4)
 

@@ -849,7 +849,7 @@ WRITER_IMAGES = 4
 
 
 async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | None = None, count: int = 8,
-                        aspect_ratio: str = "9:16", models: str | None = None) -> dict:
+                        aspect_ratio: str = "9:16", models: str | None = None, character: str = "") -> dict:
     """A storyboard written by an LLM from the idea and the reference images: the character as the images show
     them, the look, one shot line and one motion line per shot. The system prompt is the editable "storyboard"
     prompt (Prompts page), with the platform rules after it."""
@@ -876,6 +876,8 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
     if not chain:
         raise Unavailable("No model is set up to write the shots.")
     ask = (f"Idea: {idea}\nShots: exactly {count}\nVideo shape: {aspect_ratio}\n"
+           + (f"The character, as the user describes them -- these facts are fixed; keep them and add only what the "
+              f"pictures show beyond them: {character.strip()}\n" if character.strip() else "")
            + (f"The first {len(parts)} attached image{'s are' if len(parts) > 1 else ' is'} the character's reference."
               if parts else "No reference image: describe the character from the idea."))
     messages = [{"role": "system", "content": f"{service.prompts.get('storyboard').rstrip()}\n\n{PLATFORM_RULES}"},

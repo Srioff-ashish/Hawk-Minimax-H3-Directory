@@ -354,7 +354,8 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         if not shots and not panel_asset_ids and not sheet_asset_id:
             if not idea:
                 raise ToolError("Give shots, your own panel_asset_ids or a sheet_asset_id -- or an idea for the shots to be written.")
-            written = await boarded(storyboards.suggest_shots(service, idea, identity_asset_ids, shot_count, aspect_ratio))
+            written = await boarded(storyboards.suggest_shots(service, idea, identity_asset_ids, shot_count, aspect_ratio,
+                                                              character=character))
             shots, motions = written["shots"], motions or written["motions"]
             character, style = character or written["character"], style or written["style"]
         return await boarded(_sync(boards.create, title=title, character=character or title, identity_asset_ids=identity_asset_ids,
@@ -366,10 +367,12 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "Write a storyboard for the user to check: from a one-line idea and the character's reference image(s), an "
         "LLM (Gemma 4 31B, then DeepSeek, then Kimi K2.6; the editable 'storyboard' system prompt) writes the "
         "character as the images show them, the look, and count shot lines and motion lines. Nothing is drawn; pass "
-        "them to create_storyboard or storyboard_film."))
+        "them to create_storyboard or storyboard_film. character: what is already known about them (age, ethnicity, "
+        "figure) -- kept as fixed facts, so the writer does not guess them from the picture."))
     async def write_storyboard_shots(idea: str, reference_asset_ids: list[str] | None = None, count: int = 8,
-                                     aspect_ratio: str = "9:16") -> dict:
-        return await boarded(storyboards.suggest_shots(service, idea, reference_asset_ids or [], count, aspect_ratio))
+                                     aspect_ratio: str = "9:16", character: str = "") -> dict:
+        return await boarded(storyboards.suggest_shots(service, idea, reference_asset_ids or [], count, aspect_ratio,
+                                                       character=character))
 
     @mcp.tool(description=(
         "Storyboard board without rendering: draws the shots (Seedream Flash, $0.018 per 8) and cuts the panels, then "
