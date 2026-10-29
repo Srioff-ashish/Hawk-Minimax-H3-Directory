@@ -29,6 +29,37 @@ from .schemas import PlannerOptions, ReferenceIn, RenderSettings, VideoRequest
 log = logging.getLogger(__name__)
 
 SHEET_ENGINE = "seedream-flash"
+#: When Flash fails for a technical reason (a timeout, an outage, a rate limit), the sheet goes to Seedream Pro.
+SHEET_FALLBACK = "seedream"
+#: How a provider says it refused the request itself. Those are never retried or sent to another engine.
+POLICY_WORDS = ("content policy", "content_policy", "blocked", "sensitive", "safety", "moderation", "not allowed",
+                "inappropriate", "violat")
+
+
+def is_policy_block(error: Exception | str) -> bool:
+    text = str(error).lower()
+    return any(word in text for word in POLICY_WORDS)
+
+
+async def draw(service, prompt: str, reference_asset_ids: list[str], size: str, engine: str = SHEET_ENGINE) -> dict:
+    """One sheet or panel: Flash, once more on a technical failure, then Seedream Pro. A content-policy block stops
+    here with a plain message -- it is the provider's refusal, not a fault to work around."""
+    attempts = [engine, engine] + ([SHEET_FALLBACK] if engine == SHEET_ENGINE else [])
+    last: Exception | None = None
+    for number, name in enumerate(attempts):
+        try:
+            result = await service.generate_images(prompt, engine=name, reference_asset_ids=reference_asset_ids,
+                                                   size=size, n=1)
+            if number:
+                result["note"] = (f"{result.get('note', '')} Drawn on {'a second try' if name == engine else 'Seedream Pro'} "
+                                  f"after: {str(last)[:160]}").strip()
+            return result
+        except Exception as exc:
+            if is_policy_block(exc):
+                raise StoryboardError("The image provider refused this under its content policy, so it was not drawn "
+                                      "(and is not retried on another engine). Change what the shots ask for.") from None
+            last = exc
+    raise StoryboardError(f"Drawing failed on Flash and on Seedream Pro: {last}")
 MAX_PANELS = 8
 SPLIT_MAX = 40  # panels a sheet the user brings may have (a board's shot limit)
 RENDER_PICTURES = 9  # a render's picture limit
@@ -239,8 +270,7 @@ async def make_sheet(service, beats: list[str], character: str, identity_asset_i
         raise StoryboardError("Give the character's identity picture (reference_asset_ids) so every panel shows them.")
     columns, rows, (width, height) = grid_for(len(beats), aspect_ratio)
     prompt = sheet_prompt(beats, character, columns, rows, style)
-    result = await service.generate_images(prompt, engine=engine, reference_asset_ids=list(identity_asset_ids),
-                                           size=f"{width}x{height}", n=1)
+    result = await draw(service, prompt, list(identity_asset_ids), f"{width}x{height}", engine)
     sheet = result["assets"][0]
     grid = {"columns": columns, "rows": rows, "panels": len(beats), "aspect_ratio": aspect_ratio}
     service.update_asset(sheet["id"], add_tags=["storyboard-sheet"])
@@ -356,7 +386,7 @@ async def redo_panel(service, beat: str, character: str, identity_asset_ids: lis
     prompt = (f"A single photo, full frame, no borders, no text. The person from the first reference image -- keep "
               f"the face, hair, skin tone and exact body. {character.strip()} {(style.strip() + ' ') if style.strip() else ''}"
               f"{beat.strip().rstrip('.')}.{keep}")
-    result = await service.generate_images(prompt, engine=engine, reference_asset_ids=refs, size=panel_size(aspect_ratio), n=1)
+    result = await draw(service, prompt, refs, panel_size(aspect_ratio), engine)
     made = result["assets"][0]
     asset = service.store.get_asset(made["id"]) or made
     service.update_asset(made["id"], add_tags=["storyboard-panel"], collection=collection or asset.get("collection"))
@@ -1358,8 +1388,7 @@ async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: l
         width, height = min(SHEET_SIZES, key=lambda size: abs(math.log((size[0] / size[1]) / (grid["size"][0] / grid["size"][1]))))
         prompt = LIVE_ACTION_PROMPT.format(count=len(group), columns=grid["columns"], cs="s" if grid["columns"] > 1 else "",
                                            rows=grid["rows"], rs="s" if grid["rows"] > 1 else "", people=cast, style=look)
-        result = await service.generate_images(prompt, engine=SHEET_ENGINE, reference_asset_ids=[merged["id"], *identity_asset_ids[:9]],
-                                               size=f"{width}x{height}", n=1)
+        result = await draw(service, prompt, [merged["id"], *identity_asset_ids[:9]], f"{width}x{height}")
         sheet = result["assets"][0]
         service.update_asset(sheet["id"], add_tags=["storyboard-sheet", "live-action"])
         return {"asset_id": sheet["id"], "columns": grid["columns"], "rows": grid["rows"], "panels": len(group),

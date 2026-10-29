@@ -303,3 +303,31 @@ class ManhwaFilm(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(made["from_sheets"][0]["panels"], 1)
         self.assertEqual((made["review"], made["link"]), ("ask", {"manhwa_chapter_id": "ch1"}))
         self.assertEqual(self.manager.store.get_chapter("ch1")["films"][0]["board_id"], "film1")
+
+
+class Fallback(unittest.IsolatedAsyncioTestCase):
+    def service(self, errors):
+        calls = []
+
+        class Service:
+            async def generate_images(self, prompt, **kwargs):
+                calls.append(kwargs["engine"])
+                if errors:
+                    raise errors.pop(0)
+                return {"assets": [{"id": "img"}], "cost_usd": 0.018}
+
+        return Service(), calls
+
+    async def test_technical_failures_retry_then_go_to_seedream_pro(self):
+        service, calls = self.service([RuntimeError("Image generation 123 did not finish within 420 s."),
+                                       RuntimeError("Atlas returned 503")])
+        result = await sb.draw(service, "a sheet", ["face"], "2048x2048")
+        self.assertEqual(calls, ["seedream-flash", "seedream-flash", "seedream"])
+        self.assertIn("Seedream Pro", result["note"])
+
+    async def test_a_content_policy_block_is_never_rerouted(self):
+        service, calls = self.service([RuntimeError("Image generation failed: Input was blocked by the provider content policy.")])
+        with self.assertRaises(sb.StoryboardError) as caught:
+            await sb.draw(service, "a sheet", ["face"], "2048x2048")
+        self.assertEqual(calls, ["seedream-flash"], "no second try, no other engine")
+        self.assertIn("content policy", str(caught.exception))
