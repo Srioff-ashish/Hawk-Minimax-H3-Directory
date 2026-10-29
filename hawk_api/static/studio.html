@@ -1263,6 +1263,10 @@
                   <option value="moonshotai/kimi-k2.6, google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash">Kimi K2.6 → Gemma 4 → DeepSeek</option>
                 </select></label>
                 <label class="field"><span class="label">Base model</span><select class="select" id="stUnet"></select></label>
+                <label class="field"><span class="label">Video made by</span><select class="select" id="stEngine">
+                  <option value="film">Film engine: storyboard, checked panels, joined film (cast need pictures)</option>
+                  <option value="classic">Classic planner: one render per chapter</option>
+                </select></label>
               </div>
               <div class="grid grid-2">
                 <label class="field"><span class="label">Aspect ratio</span><select class="select" id="stAspect"></select></label>
@@ -2386,6 +2390,7 @@
     if (mp != null && ![...$("stMp").options].some((o) => o.value === String(mp))) $("stMp").add(new Option(`${mp}`, String(mp)));
     $("stMp").value = mp != null ? String(mp) : "";
     $("stSubs").value = set.subtitles || "file";
+    $("stEngine").value = set.video_engine || "film";
     const o = state.options || {};
     const unet = (set.render || {}).unet_name || "";
     $("stUnet").innerHTML = `<option value="">Server default</option>` + (o.diffusion_models || []).concat(unet && !(o.diffusion_models || []).includes(unet) ? [unet] : [])
@@ -2510,7 +2515,7 @@
     if (stNeedStory()) return;
     const steps = $("stSteps").value.trim();
     await putJson(stPath(), { settings: { models: $("stModels").value, plan_models: $("stPlanModels").value, aspect_ratio: $("stAspect").value,
-      segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value,
+      segment_seconds: Number($("stSeconds").value || 10), subtitles: $("stSubs").value, video_engine: $("stEngine").value,
       render: { unet_name: $("stUnet").value || null, steps: steps ? Number(steps) : null,
                 megapixels: $("stMp").value ? Number($("stMp").value) : null } } }, "PATCH");
     toast("Settings saved"); document.activeElement.blur(); await stShow(true);

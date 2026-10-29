@@ -231,6 +231,53 @@ class Story(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(film["chapters"], [first["id"], second["id"]], "the redone chapter keeps its place")
         self.assertEqual(self.service.assets[film["asset_id"]]["source"]["jobs"][0], redone["render_job_id"])
 
+    async def test_make_video_goes_through_the_film_engine_when_the_cast_has_pictures(self):
+        from test_manhwa import clip
+
+        sid = self.story["id"]
+        chapter = await self.drafted()
+        face = (await self.service.add_asset("mina.png", io.BytesIO(b"mina"), source={"type": "generated"}))["id"]
+        await self.manager.set_character_image(sid, "Mina", face)
+        path = clip(os.path.join(self.tmp, "film.mp4"))
+        with open(path, "rb") as handle:
+            film = (await self.service.add_asset("chapter_film.mp4", handle))["id"]
+
+        class Boards:
+            made, status = {}, "rendering"
+
+            def create(self, **kwargs):
+                self.made = kwargs
+                return {"id": "film1", "status": "drawing"}
+
+            def board(self, board_id):
+                return {"id": board_id, "status": self.status, "error": "", "render": {"film_asset_id": film}}
+
+        boards = Boards()
+        self.manager.boards = boards
+        self.manager.make_video(sid, chapter["id"])
+        for _ in range(100):
+            if boards.made:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(boards.made["identity_asset_ids"], [face], "the cast keeps their faces")
+        self.assertEqual(len(boards.made["shots"]), 2, "a shot per scene")
+        self.assertIn('Jun: "Sorry, the trains."', boards.made["dialogue"][1], "lines go through word for word")
+        self.assertEqual((boards.made["review"], boards.made["link"]["chapter_id"]), ("auto", chapter["id"]))
+        self.assertEqual(self.manager.store.get_chapter(chapter["id"])["board_id"], "film1")
+        boards.status = "done"
+        done = await self.finish(chapter["id"])
+        self.assertEqual((done["status"], done["film_asset_id"]), ("done", film), done)
+        self.assertEqual(self.service.plans, [], "no classic plan was made")
+        view = self.manager.view(sid)
+        self.assertEqual(view["film"]["chapters"], [chapter["id"]], "the chapter's film joins the main film")
+        self.assertEqual(next(c for c in view["chapters"] if c["id"] == chapter["id"])["video_url"], f"/file/{film}")
+
+        self.manager.update_story(sid, settings={"video_engine": "classic"})
+        self.manager.make_video(sid, chapter["id"], redo=True)
+        redone = await self.finish(chapter["id"])
+        self.assertTrue(redone["render_job_id"], "classic still works when asked for")
+        self.assertEqual(redone["history"][0]["board_id"], "film1")
+
     async def test_the_story_resolution_reaches_the_render(self):
         sid = self.story["id"]
         with self.assertRaises(RequestError):

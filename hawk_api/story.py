@@ -54,7 +54,10 @@ PLAN_WAIT = 30 * 60
 RENDER_WAIT = 12 * 3600
 ACTIVE = ("planning", "rendering", "appending")
 SETTINGS_DEFAULTS = {"models": DEFAULT_MODELS, "plan_models": PLAN_MODELS, "aspect_ratio": "16:9", "segment_seconds": 10.0, "render": {},
-                     "subtitles": "file"}
+                     "subtitles": "file",
+                     # film: chapters are made by the film engine (storyboard, check, joined film) whenever the cast
+                     # have pictures; classic: the story planner's single render, as before the engine
+                     "video_engine": "film"}
 
 CHAT_PROMPT = """\
 You are the co-writer of a story that will become a film, one chapter at a time. The user gives you ideas; you
@@ -321,6 +324,8 @@ class StoryManager:
             for key, value in settings.items():
                 if key in SETTINGS_DEFAULTS and value is not None:
                     merged[key] = value
+            if merged.get("video_engine") not in ("film", "classic"):
+                raise RequestError("video_engine is film or classic.")
             if merged.get("render"):
                 merged["render"] = {k: v for k, v in merged["render"].items()
                                     if k not in ("aspect_ratio", "default_seconds") and v not in (None, "")}
@@ -365,6 +370,10 @@ class StoryManager:
         viewer = getattr(self.service, "job_view", None)
         return (viewer(job) or {}).get("video_url") if viewer else None
 
+    def _asset_video(self, asset_id: str | None) -> str | None:
+        asset = self.service.store.get_asset(asset_id) if asset_id else None
+        return self.service.asset_view(asset).get("file_url") if asset else None
+
     def view(self, story_id: str) -> dict:
         self._renumber(story_id)
         story = self._story(story_id)
@@ -374,7 +383,7 @@ class StoryManager:
                                    images=[v for v in (self._image_view(i) for i in c.get("image_asset_ids") or []) if v]))
         chapters = []
         for c in self.store.chapters(story_id):
-            chapters.append(dict(c, video_url=self._job_video(c.get("render_job_id")),
+            chapters.append(dict(c, video_url=self._job_video(c.get("render_job_id")) or self._asset_video(c.get("film_asset_id")),
                                  image_views=[dict(i, **(self._image_view(i["asset_id"]) or {}))
                                               for i in c.get("images") or []]))
         film = dict(story["film"]) if story.get("film") else None
@@ -827,14 +836,17 @@ class StoryManager:
             raise RequestError("This chapter's video is already being made.")
         if not chapter.get("scenes"):
             raise RequestError("This chapter has no scenes.")
-        if chapter.get("render_job_id") and not redo:
+        has_video = chapter.get("render_job_id") or chapter.get("film_asset_id")
+        if has_video and not redo:
             raise RequestError("This chapter already has a video: use Redo video to make a new one.")
-        if chapter.get("render_job_id"):
+        if has_video:
             chapter.setdefault("history", []).append({"plan_job_id": chapter.get("plan_job_id"),
                                                       "render_job_id": chapter.get("render_job_id"),
+                                                      "board_id": chapter.get("board_id"),
+                                                      "film_asset_id": chapter.get("film_asset_id"),
                                                       "replaced_at": time.time()})
-        chapter.update(status="planning", plan_job_id=None, render_job_id=None, error="", started_at=time.time(),
-                       plan_retried=False)
+        chapter.update(status="planning", plan_job_id=None, render_job_id=None, board_id=None, film_asset_id=None,
+                       error="", started_at=time.time(), plan_retried=False)
         self.store.save_chapter(chapter)
         self._launch(chapter)
         return chapter
@@ -926,7 +938,7 @@ class StoryManager:
                     pilot = self._pilot(story_id, outline=pilot["outline"])
                 if pilot.get("videos"):
                     chapter = self.store.get_chapter(chapter["id"])
-                    if not chapter.get("render_job_id") and chapter.get("status") not in ACTIVE:
+                    if not (chapter.get("render_job_id") or chapter.get("film_asset_id")) and chapter.get("status") not in ACTIVE:
                         self._pilot(story_id, stage=f"video for chapter {n + 1} of {len(pilot['outline'])}")
                         self.make_video(story_id, chapter["id"])
                     while (self.store.get_chapter(chapter["id"]) or {}).get("status") in ACTIVE:
@@ -1053,10 +1065,69 @@ class StoryManager:
             await asyncio.sleep(self.poll)
         return {"status": "timeout"}
 
+    def _uses_engine(self, story: dict, chapter: dict) -> bool:
+        """The film engine makes the chapter's video when it is here, the story hasn't asked for the classic
+        planner, and the chapter's cast have pictures for it to keep (it needs identity pictures)."""
+        if self.boards is None or (story.get("settings") or {}).get("video_engine") == "classic":
+            return False
+        return bool(chapter.get("board_id")) or bool(self._chapter_cast(story, chapter))
+
+    def _chapter_film_board(self, story: dict, chapter: dict, settings: dict) -> dict:
+        """The chapter as a film: a shot per scene (dialogue word for word), the cast as the identity, and the
+        storyboard's panels when the chapter has a finished one (else Flash draws them)."""
+        cast = self._chapter_cast(story, chapter)[:3]
+        identity = [next(i for i in c["image_asset_ids"] if self.service.store.get_asset(i)) for c in cast]
+        people = "; ".join(f"{c['name']}" + (f" -- {c['description']}" if c.get("description") else "") for c in cast)
+        character = (f"The people, in the order of the reference images: {people}. All are adults."
+                     if len(cast) > 1 else f"{people}. An adult.")
+        shots, motions, dialogue = [], [], []
+        for scene in chapter["scenes"]:
+            who = ", ".join(scene.get("characters") or [])
+            shot = (f"{scene['setting']}: " if scene.get("setting") else "") + (scene.get("description") or "")
+            shots.append((shot + (f" ({who})" if who else "")).strip()[:600] or "a scene")
+            motions.append((scene.get("description") or shot)[:600])
+            dialogue.append([f'{"Narration (voice-over)" if d["speaker"].lower() == "narration" else d["speaker"]}: "{d["text"]}"'
+                             for d in scene.get("dialogue") or []])
+        panels = self._storyboard_panels(chapter)
+        render = RenderSettings(**{**(settings.get("render") or {}), "aspect_ratio": settings["aspect_ratio"],
+                                   "default_seconds": float(settings["segment_seconds"]), "continuity": "off"})
+        return self.boards.create(
+            title=f"{story['title']} - ch {chapter['idx'] + 1}"[:120], character=character, identity_asset_ids=identity,
+            shots=shots, motions=motions, dialogue=dialogue, aspect_ratio=settings["aspect_ratio"],
+            style=story.get("style") or "", review="auto", check=not panels,
+            panel_asset_ids=panels if len(panels) == len(shots) else None,
+            link={"story_id": story["id"], "chapter_id": chapter["id"]},
+            then_render={"settings": render.model_dump(), "segment_seconds": float(settings["segment_seconds"]),
+                         "mood": "", "music": ""})
+
+    async def _convert_film(self, story_id: str, chapter_id: str) -> None:
+        story = self._story(story_id)
+        chapter = self._chapter(story_id, chapter_id)
+        settings = {**SETTINGS_DEFAULTS, **(story.get("settings") or {})}
+        if not chapter.get("board_id"):  # a resume keeps the board it had
+            board = self._chapter_film_board(story, chapter, settings)
+            chapter = self._set(chapter_id, board_id=board["id"], status="rendering")
+        deadline = time.monotonic() + RENDER_WAIT
+        while True:
+            board = self.boards.board(chapter["board_id"])
+            if board["status"] in ("done", "failed"):
+                break
+            if time.monotonic() > deadline:
+                raise RequestError("The chapter's film did not finish in time.")
+            await asyncio.sleep(self.poll)
+        if board["status"] != "done":
+            raise RequestError(f"The chapter's film did not finish: {board.get('error') or 'failed'}")
+        self._set(chapter_id, film_asset_id=board["render"]["film_asset_id"], status="appending")
+        await self.rebuild_film(story_id)
+        self._set(chapter_id, status="done", error="", finished_at=time.time())
+
     async def _convert(self, story_id: str, chapter_id: str) -> None:
         try:
             story = self._story(story_id)
             chapter = self._chapter(story_id, chapter_id)
+            if self._uses_engine(story, chapter) and not chapter.get("render_job_id"):
+                await self._convert_film(story_id, chapter_id)
+                return
             settings = {**SETTINGS_DEFAULTS, **(story.get("settings") or {})}
             # 1. the plan (reused on a resume)
             if not chapter.get("render_job_id"):
@@ -1110,15 +1181,16 @@ class StoryManager:
         async with lock:
             story = self._story(story_id)
             chapters = [c for c in self.store.chapters(story_id)
-                        if c.get("render_job_id")
-                        and (self.service.store.get_job(c["render_job_id"]) or {}).get("status") == "done"]
+                        if (c.get("film_asset_id") and self.service.store.get_asset(c["film_asset_id"]))
+                        or (c.get("render_job_id")
+                            and (self.service.store.get_job(c["render_job_id"]) or {}).get("status") == "done")]
             if not chapters:
                 return None
             if not shutil.which("ffmpeg"):
                 raise Unavailable("ffmpeg is not installed on the server; run the notebook's ffmpeg cell.")
             work = tempfile.mkdtemp(prefix="hawk_story_")
             try:
-                files = [await rendered_file(self.service, c["render_job_id"], os.path.join(work, f"ch_{n:03d}.mp4"))
+                files = [await self._chapter_file(c, os.path.join(work, f"ch_{n:03d}.mp4"))
                          for n, c in enumerate(chapters, 1)]
                 out = os.path.join(work, "story.mp4")
                 if len(files) == 1:
@@ -1133,7 +1205,7 @@ class StoryManager:
                         name, handle, "video/mp4", os.path.getsize(out), collection=f"story/{story['title']}",
                         tags=["story", "film"], local_path=out, dedupe=False,
                         source={"type": "generated", "engine": "ffmpeg", "generator": "story film", "story_id": story_id,
-                                "jobs": [c["render_job_id"] for c in chapters]})
+                                "jobs": [c.get("render_job_id") or c.get("film_asset_id") for c in chapters]})
                 drive = await film_to_drive(self.service, out, name)
                 srt = ""
                 if (story.get("settings") or {}).get("subtitles", "file") != "off":
@@ -1153,10 +1225,23 @@ class StoryManager:
             self.store.save_story(story)
             return story["film"]
 
+    async def _chapter_file(self, chapter: dict, target: str) -> str:
+        """A chapter's finished video on disk: its film from the engine, or its render."""
+        if chapter.get("film_asset_id"):
+            asset = self.service.store.get_asset(chapter["film_asset_id"])
+            finder = getattr(self.service, "local_asset_path", None)
+            local = finder(asset) if asset and finder else None
+            if local:
+                return local
+            with open(target, "wb") as handle:
+                handle.write(await self.service.asset_bytes(asset))
+            return target
+        return await rendered_file(self.service, chapter["render_job_id"], target)
+
     async def _srt(self, chapters: list[dict], files: list[str]) -> str:
         parts = []
         for chapter, path in zip(chapters, files):
-            job = self.service.store.get_job(chapter["render_job_id"]) or {}
+            job = self.service.store.get_job(chapter.get("render_job_id") or "") or {}
             plan = self.service.store.get_job(chapter.get("plan_job_id") or "") or {}
             lines = [scene["dialogue"] for scene in chapter["scenes"]]
             seconds: list[float] = []
