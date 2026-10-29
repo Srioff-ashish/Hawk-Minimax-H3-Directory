@@ -15,6 +15,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from hawk_h3.script import max_segment_seconds
 
 from . import pose_guide as pose_guides
+from . import storyboard as storyboards
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
 from .schemas import ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
@@ -25,6 +26,7 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
    Images the user attaches in this chat do NOT reach the server: you can see them, but you cannot pass them to a tool (upload_image needs the file's bytes, which a chat attachment does not give you). So when the user attaches a picture to edit or to use as a reference, never call generate_image or render_film without it and never claim you used it: call upload_page_link, ask them to upload the same picture there, then call list_references(kind="image", limit=5) -- the newest is theirs -- confirm it by its filename or thumb_url, and pass its asset_id.
 2. Plan: plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it. Whenever the video uses reference pictures (any character or face to keep), always plan -- with plan_film, or render_film with story -- even for a dance or music video with no dialogue: the planner writes H3's six-section reference format (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music), which is what keeps each face tied to its picture. Put the people, their looks and outfits, the action, camera and music in the brief; the planner does the rest.
+   Several shots of one recurring character (a reel, a photoshoot, a chapter)? storyboard_film draws them all as one $0.018 Seedream Flash sheet, cuts it into panels and renders each panel as the first frame of its segment -- cheaper and more consistent than an image per shot.
 3. Render: render_film with plan_job_id (or the approved, possibly edited script, or story to plan and render in one job). A hand-written script is for clips with no reference pictures, or one already in the six-section format; get_job warns when a script with pictures skips it. Start with settings.megapixels=0.4 for a cheap preview.
 4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
@@ -292,7 +294,57 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
             raise ToolError(str(exc)) from None
         return service.job_view(await run(service.create_video(request)))
 
-    @mcp.tool(description="Status of a plan or render job: status (queued with queue_position, planning, rendering, done, failed, cancelled), progress (segments_done / segments_total), script, models and LoRAs applied, warnings, errors, and the signed video_url when done.")
+    async def boarded(coro):
+        try:
+            return await run(coro)
+        except storyboards.StoryboardError as exc:
+            raise ToolError(str(exc)) from None
+
+    @mcp.tool(description=(
+        "Storyboard step 1: draw up to 8 shots of one character as a single Seedream Flash sheet ($0.018 for the "
+        "whole sheet instead of one image per shot; the same face, body and light in every shot). beats: one short "
+        "shot description per panel, in story order. character: who they are and how they look. "
+        "reference_asset_ids: the character's identity picture(s), ideally full body on a plain background. "
+        "aspect_ratio: the video's, so the panels come out that shape. Returns the sheet and its grid for step 2."))
+    async def make_storyboard_sheet(beats: list[str], character: str, reference_asset_ids: list[str],
+                                    aspect_ratio: str = "9:16", style: str = "") -> dict:
+        return await boarded(storyboards.make_sheet(service, beats, character, reference_asset_ids, aspect_ratio, style))
+
+    @mcp.tool(description=(
+        "Storyboard step 2: cut a sheet into its panels (columns x rows from step 1's grid). Each panel is stored as "
+        "an image asset in reading order. Look at the panels before step 3 and redo any bad one with generate_image."))
+    async def split_storyboard_sheet(sheet_asset_id: str, columns: int, rows: int, panels: int | None = None) -> dict:
+        return await boarded(storyboards.split_sheet(service, sheet_asset_id, columns, rows, panels))
+
+    @mcp.tool(description=(
+        "Storyboard step 3: render a film of the panels in order -- each segment opens on its panel (keyframe "
+        "completion) with the identity picture beside it, planned in the H3 reference format. beats: one motion per "
+        "panel (what happens from that frame). Returns a render job; poll get_job."))
+    async def render_storyboard(panel_asset_ids: list[str], identity_asset_id: str, beats: list[str], character: str,
+                                segment_seconds: float = 6.0, settings: RenderSettings | None = None,
+                                mood: str = "", music: str = "") -> dict:
+        job = await boarded(storyboards.render_film(service, panel_asset_ids, identity_asset_id, beats, character,
+                                                    settings, segment_seconds, mood, music))
+        return service.job_view(job)
+
+    @mcp.tool(description=(
+        "Storyboard film in one call: sheet (step 1) -> panels (step 2) -> render (step 3). The cheapest way to a "
+        "multi-shot video of one recurring character: one $0.018 sheet for up to 8 shots, then the GPU render. "
+        "beats describe each shot and its motion, in order. Returns the sheet, the panels and the render job."))
+    async def storyboard_film(beats: list[str], character: str, identity_asset_id: str, aspect_ratio: str = "9:16",
+                              style: str = "", segment_seconds: float = 6.0, settings: RenderSettings | None = None,
+                              mood: str = "", music: str = "") -> dict:
+        sheet = await boarded(storyboards.make_sheet(service, beats, character, [identity_asset_id], aspect_ratio, style))
+        grid = sheet["grid"]
+        cut = await boarded(storyboards.split_sheet(service, sheet["sheet"]["id"], grid["columns"], grid["rows"],
+                                                    grid["panels"]))
+        settings = (settings or RenderSettings(continuity="off")).model_copy(update={"aspect_ratio": aspect_ratio})
+        job = await boarded(storyboards.render_film(service, [p["id"] for p in cut["panels"]], identity_asset_id,
+                                                    sheet["beats"], character, settings, segment_seconds, mood, music))
+        return {"sheet": sheet["sheet"], "grid": grid, "sheet_cost_usd": sheet["cost_usd"], "panels": cut["panels"],
+                "borders_found": cut["borders_found"], "note": cut["note"], "job": service.job_view(job)}
+
+    @mcp.tool(description="Status of a plan or render job:status (queued with queue_position, planning, rendering, done, failed, cancelled), progress (segments_done / segments_total), script, models and LoRAs applied, warnings, errors, and the signed video_url when done.")
     async def get_job(job_id: str) -> dict:
         try:
             return service.job_view(service.get_job(job_id))
