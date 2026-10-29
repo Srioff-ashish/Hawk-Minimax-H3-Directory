@@ -669,6 +669,54 @@ SNAPSHOT_FOLDER = "Hawk H3/Backups"
 SNAPSHOT_NAME = "jobs.sqlite3"
 
 
+DRIVE_MOUNT_TIMEOUT_MS = 300_000  # Colab's default (120 s) is too short for a large Drive on a busy runtime
+DRIVE_MOUNT_ATTEMPTS = 3
+
+
+def mount_drive(drive_root: str = DRIVE_ROOT, *, attempts: int = DRIVE_MOUNT_ATTEMPTS,
+                timeout_ms: int = DRIVE_MOUNT_TIMEOUT_MS, _mount=None) -> str:
+    """Mount Google Drive before the API starts, retrying the timeouts Colab often gives on the first try.
+
+    The first mount of a runtime regularly times out; a second one with force_remount usually succeeds.
+    Done here, the chats are restored from Drive and imports work from the start, with no manual
+    force-mount and Studio restart. Returns a line to print; never raises: a runtime without Drive
+    still renders.
+    """
+    if os.path.isdir(drive_root) and _drive_responds(drive_root):
+        return "Google Drive is already mounted."
+    if _mount is None:
+        try:
+            from google.colab import drive  # type: ignore
+        except ImportError:
+            return "Not on Colab, so Google Drive is not mounted."
+        _mount = drive.mount
+    mountpoint = os.path.dirname(drive_root.rstrip("/")) or drive_root
+    error = ""
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            _mount(mountpoint, force_remount=attempt > 1, timeout_ms=timeout_ms)
+        except Exception as exc:  # a timeout, or the auth prompt not answered in time
+            error = f"{type(exc).__name__}: {exc}"
+            print(f"Google Drive mount attempt {attempt} of {attempts} failed ({error}); retrying.")
+            time.sleep(5)
+            continue
+        for _ in range(30):  # the mount point appears before Drive answers listings
+            if os.path.isdir(drive_root) and _drive_responds(drive_root):
+                return f"Google Drive mounted (attempt {attempt})."
+            time.sleep(2)
+        error = f"{drive_root} did not respond after mounting"
+    return (f"Google Drive could not be mounted ({error}). Rendering works; Drive imports and saving to Drive "
+            "need it -- re-run this cell to try again.")
+
+
+def _drive_responds(drive_root: str) -> bool:
+    try:
+        os.listdir(drive_root)
+        return True
+    except OSError:
+        return False
+
+
 def restore_snapshot(data_dir: str, drive_root: str = DRIVE_ROOT, folder: str = SNAPSHOT_FOLDER) -> str:
     """Bring back the chats and jobs from the last run, when this runtime has none of its own.
 
@@ -731,6 +779,7 @@ def start(
     llm_routing: str = "balanced",
     comfy_args: list[str] | None = None,
     log_dir: str = "/content/hawk_logs",
+    mount_drive_first: bool = True,
 ) -> Session:
     """Start ComfyUI (or reuse it), the tunnel and the API. Model names left out are
     detected from ComfyUI/models."""
@@ -753,6 +802,8 @@ def start(
     _write_lora_config(pack_dir, data_dir, models["turbo_lora"])
     # Before the API starts, and never inside _start_api: watch() and restart_api() call that again
     # mid-session, and a restore there would drop an older database on top of a live one.
+    if mount_drive_first:
+        print(mount_drive())
     print(restore_snapshot(data_dir))
 
     env = dict(os.environ)

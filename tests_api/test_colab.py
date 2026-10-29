@@ -467,5 +467,44 @@ class Snapshots(unittest.TestCase):
         self.assertIn("starting fresh", hawk_colab.restore_snapshot(self.data, self.drive))
 
 
+class DriveMount(unittest.TestCase):
+    """Colab's first Drive mount often times out: the start cell retries with force_remount."""
+
+    def setUp(self):
+        self.base = tempfile.mkdtemp(prefix="hawk_mount_")
+        self.addCleanup(shutil.rmtree, self.base, True)
+        self.root = os.path.join(self.base, "drive", "MyDrive")
+        self.calls = []
+        sleep = unittest.mock.patch.object(hawk_colab.time, "sleep", lambda *_: None)
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def mount(self, fail_times):
+        def fake(mountpoint, force_remount=False, timeout_ms=None):
+            self.calls.append((mountpoint, force_remount, timeout_ms))
+            if len(self.calls) <= fail_times:
+                raise TimeoutError("mount failed: timeout during initial read of root folder")
+            os.makedirs(self.root, exist_ok=True)
+        return fake
+
+    def test_a_timeout_is_retried_with_force_remount(self):
+        said = hawk_colab.mount_drive(self.root, _mount=self.mount(fail_times=1))
+        self.assertEqual(said, "Google Drive mounted (attempt 2).")
+        self.assertEqual([c[1] for c in self.calls], [False, True])
+        self.assertEqual(self.calls[0][0], os.path.join(self.base, "drive"))
+        self.assertEqual(self.calls[0][2], hawk_colab.DRIVE_MOUNT_TIMEOUT_MS)
+
+    def test_an_existing_mount_is_left_alone(self):
+        os.makedirs(self.root)
+        self.assertEqual(hawk_colab.mount_drive(self.root, _mount=self.mount(fail_times=0)), "Google Drive is already mounted.")
+        self.assertEqual(self.calls, [])
+
+    def test_giving_up_is_not_an_error(self):
+        said = hawk_colab.mount_drive(self.root, attempts=3, _mount=self.mount(fail_times=9))
+        self.assertEqual(len(self.calls), 3)
+        self.assertIn("could not be mounted", said)
+        self.assertIn("Rendering works", said)
+
+
 if __name__ == "__main__":
     unittest.main()
