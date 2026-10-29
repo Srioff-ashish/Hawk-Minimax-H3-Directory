@@ -983,6 +983,7 @@ class ManhwaManager:
                                           "manhwa_settings.json")
         self.conversions: dict[str, dict] = {}
         self.pipelines: dict[str, dict] = {}
+        self.boards = None  # the film engine (StoryboardManager); create_app sets it
         self.cast_runs: dict[str, dict] = {}
         self._pipeline_inputs: dict[str, dict] = {}
         self._cast_tasks: dict[str, asyncio.Task] = {}
@@ -2078,6 +2079,90 @@ class ManhwaManager:
         return draft
 
     # ----------------------------------------------------------------- cast sheet
+
+    # ----------------------------------------------------------------- the chapter as a live-action film
+
+    async def make_film(self, chapter_id: str, *, platform: str = "general", quality: str = "final", review: str = "ask",
+                        style: str = "", aspect_ratio: str = "9:16", max_panels: int = 40, music_prompt: str = "",
+                        segment_seconds: float = 5.0) -> dict:
+        """The chapter through the film engine: its panels cut from the pages (blank and repeated ones dropped, any
+        showing someone who reads as under 18 left out), turned into live-action stills eight at a time on Seedream
+        Flash with the cast's portraits for their faces, then checked and filmed -- each panel's scene as its shot
+        and its lines word for word. Review ask (the default) stops for approval on the Storyboard page."""
+        from .storyboard import live_action_sheets
+
+        if self.boards is None:
+            raise Unavailable("The film engine isn't available on this server.")
+        chapter = self.store.get_chapter(chapter_id)
+        if chapter is None:
+            raise NotFound(f"No manhwa chapter {chapter_id!r}.")
+        series = chapter["series"]
+        pages = self.store.pages(chapter_id)
+        tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
+        roster = self.store.characters(series)
+        portraits = self._portraits(series)
+        work: list[tuple[bytes, dict]] = []
+        skipped = {"blank or repeated": 0, "shows a minor": 0}
+        previous = None
+        for asset_id in dict.fromkeys(p.get("asset_id") for p in pages if p.get("asset_id")):
+            asset = self.service.store.get_asset(asset_id)
+            if asset is None:
+                continue
+            for part, jpeg in await asyncio.to_thread(cut_panels, await self.service.asset_bytes(asset)):
+                tile = tiles.get((asset_id, part)) or {}
+                names = [p.get("name") for p in tile.get("characters") or [] if p.get("name")]
+                if any(is_minor(n, roster.get(n) or {"appearance": next((p.get("appearance", "") for p in tile["characters"]
+                                                                          if p.get("name") == n), "")}) for n in names):
+                    skipped["shows a minor"] += 1
+                    continue
+                fingerprint, spread = await asyncio.to_thread(panel_fingerprint, jpeg)
+                if spread < 6 or (previous is not None and near_duplicate(previous, fingerprint)):
+                    skipped["blank or repeated"] += 1
+                    continue
+                previous = fingerprint
+                work.append((jpeg, tile))
+        work = work[:max(1, min(40, max_panels))]
+        if not work:
+            raise RequestError("This chapter has no panels to film (none left after dropping blank, repeated and "
+                               "under-18 panels).")
+        counts: dict[str, int] = {}
+        for _, tile in work:
+            for person in tile.get("characters") or []:
+                if person.get("name") in portraits:
+                    counts[person["name"]] = counts.get(person["name"], 0) + 1
+        cast = sorted(counts, key=lambda n: -counts[n])[:3]
+        if not cast:
+            raise RequestError("Give the chapter's cast their portraits first (Make cast): the live-action film keeps "
+                               "their faces from them.")
+        identity = list(dict.fromkeys(portraits[n] for n in cast))
+        people = "; ".join(f"{n} -- {(roster.get(n) or {}).get('appearance', '')}".strip(" -") for n in cast)
+        title = f"{series} ch {chapter['chapter']}"[:120]
+        made = await live_action_sheets(self.service, [jpeg for jpeg, _ in work], identity, aspect_ratio, style, people,
+                                        title, collection=f"manhwa/{series}/live")
+        shots, motions, dialogue, spoken = [], [], [], set()
+        for _, tile in work:
+            acting = "; ".join(f"{p.get('name')}: {p.get('action')}" for p in tile.get("characters") or [] if p.get("action"))
+            scene = " ".join(x for x in (tile.get("setting", ""), tile.get("scene", "")) if x).strip() or "the panel's moment"
+            shots.append(scene[:600])
+            motions.append(f"{scene}. {acting}".strip()[:600])
+            lines = []
+            if tile.get("id") not in spoken:
+                spoken.add(tile.get("id"))
+                lines = [f'{d.get("speaker") or "Narration"}: "{d.get("text_en") or d.get("text")}"'
+                         for d in tile.get("dialogue") or [] if (d.get("text_en") or d.get("text"))]
+            dialogue.append(lines)
+        board = self.boards.create(
+            title=title, character=f"The people: {people}. All are adults.", identity_asset_ids=identity, shots=shots,
+            motions=motions, dialogue=dialogue, aspect_ratio=aspect_ratio, style=style, platform=platform,
+            quality=quality, review=review, music_prompt=music_prompt, from_sheets=made["sheets"],
+            link={"manhwa_chapter_id": chapter_id},
+            then_render={"settings": None, "segment_seconds": segment_seconds, "mood": "", "music": ""})
+        self.boards._set(board["id"], cost_usd=made["cost_usd"])
+        chapter = self.store.get_chapter(chapter_id)
+        chapter.setdefault("films", []).append({"board_id": board["id"], "made_at": time.time()})
+        self.store.save_chapter(chapter)
+        return {"board": self.boards.view(board["id"]), "panels": len(work), "skipped": skipped,
+                "sheets": len(made["sheets"]), "cost_usd": made["cost_usd"], "cast": cast}
 
     def _portraits(self, series: str) -> dict[str, str]:
         """Character name (and alias) -> portrait asset id, for the cast whose portrait is still in the library."""

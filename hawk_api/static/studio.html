@@ -2117,7 +2117,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm btn-primary" type="button" data-film-chapter="${esc(chapter.id)}" title="The chapter as a live-action film: panels to live-action Seedream Flash sheets ($0.018 per 8) with the cast's portraits, checked, then filmed after you approve the panels on the Storyboard page">Live-action film</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -2290,6 +2290,18 @@
     if (render) mhRender(render.dataset.renderChapter);
     const plan = event.target.closest("[data-plan-chapter]");
     if (plan) mhPlan(plan.dataset.planChapter);
+    const film = event.target.closest("[data-film-chapter]");
+    if (film) {
+      film.disabled = true; film.textContent = "Drawing live action…";
+      post(`/v1/manhwa/chapters/${encodeURIComponent(film.dataset.filmChapter)}/film`, {})
+        .then((out) => {
+          board.id = out.board.id; storage.set("hawkH3Board", board.id);
+          toast("Live-action panels on the way", `${out.panels} panels, ${out.sheets} sheet${out.sheets === 1 ? "" : "s"} ($${out.cost_usd}). Check them on the Storyboard page, then Make film.`, "ok", 9000);
+          location.hash = "#storyboard";
+        })
+        .catch((e) => toast("Could not make the film", readableError(e.message).short, "bad", 9000))
+        .finally(() => { film.disabled = false; film.textContent = "Live-action film"; });
+    }
     const convert = event.target.closest("[data-convert-chapter]");
     if (convert) mhConvert(convert.dataset.convertChapter);
     const stop = event.target.closest("[data-cancel-conversion]");

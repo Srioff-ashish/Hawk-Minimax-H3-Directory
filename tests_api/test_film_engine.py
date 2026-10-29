@@ -217,3 +217,74 @@ class MusicMix(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ManhwaFilm(unittest.IsolatedAsyncioTestCase):
+    """A manhwa chapter through the engine: panels cut, minors left out, live-action sheets drawn with the cast."""
+
+    async def asyncSetUp(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_manhwa import ConvertService, strip_with_panels
+
+        from hawk_api.manhwa import ManhwaManager
+
+        self.tmp = tempfile.mkdtemp(prefix="hawk_manhwa_film_")
+        self.service = ConvertService(self.tmp)
+        self.manager = ManhwaManager(self.service, delay=(0, 0))
+        page = await self.service.add_asset("p001.png", io.BytesIO(strip_with_panels()), collection="manhwa/S/1",
+                                            source={"type": "manhwa"})
+        self.portrait = (await self.service.add_asset("mina.png", io.BytesIO(png(40, 60)), source={"type": "generated"}))["id"]
+        self.manager.store.save_chapter({"id": "ch1", "series": "S", "chapter": "1", "url": "https://x/1",
+                                         "status": "done", "created_at": 1.0})
+        self.manager.store.save_pages("ch1", "S", [
+            {"id": "ch1-0000", "idx": 0, "asset_id": page["id"], "part": 0, "status": "ok", "setting": "a rooftop",
+             "scene": "Mina waits on the rooftop.", "characters": [{"name": "Mina", "appearance": "short black hair",
+                                                                     "action": "leans on the railing"}],
+             "dialogue": [{"speaker": "Mina", "text": "늦었네", "text_en": "You're late."}]},
+            {"id": "ch1-0001", "idx": 1, "asset_id": page["id"], "part": 1, "status": "ok",
+             "scene": "A child runs up.", "characters": [{"name": "Sora", "appearance": "a child of eight"}]},
+        ])
+
+        class Boards:
+            made = None
+
+            def create(self, **kwargs):
+                self.made = kwargs
+                return {"id": "film1"}
+
+            def _set(self, board_id, **fields):
+                self.cost = fields.get("cost_usd")
+
+            def view(self, board_id):
+                return {"id": board_id}
+
+        self.boards = Boards()
+        self.manager.boards = self.boards
+
+    async def asyncTearDown(self):
+        await self.manager.stop()
+
+    async def test_no_portraits_no_film(self):
+        with self.assertRaises(RequestError):
+            await self.manager.make_film("ch1")
+
+    async def test_panels_become_live_action_sheets_with_the_cast_and_minors_left_out(self):
+        self.manager.store.save_characters("S", {"Mina": {"appearance": "short black hair, early 30s", "role": "cast",
+                                                          "portrait_asset_id": self.portrait}})
+        out = await self.manager.make_film("ch1", style="moody cinematic film")
+        self.assertEqual((out["panels"], out["skipped"]["shows a minor"], out["cast"]), (1, 1, ["Mina"]))
+        call = self.service.calls[-1]
+        self.assertEqual(call["engine"], "seedream-flash")
+        self.assertEqual(call["refs"][1:], [self.portrait], "the drawn sheet first, then the cast's faces")
+        self.assertIn("photorealistic live-action film stills", call["prompt"])
+        self.assertIn("Remove every speech bubble", call["prompt"])
+        drawn = self.service.assets[call["refs"][0]]
+        self.assertEqual(drawn["source"]["type"], "composed")
+        made = self.boards.made
+        self.assertEqual(made["identity_asset_ids"], [self.portrait])
+        self.assertEqual(made["shots"], ["a rooftop Mina waits on the rooftop."])
+        self.assertEqual(made["dialogue"], [["Mina: \"You're late.\""]], "the English line, word for word")
+        self.assertEqual(len(made["from_sheets"]), 1)
+        self.assertEqual(made["from_sheets"][0]["panels"], 1)
+        self.assertEqual((made["review"], made["link"]), ("ask", {"manhwa_chapter_id": "ch1"}))
+        self.assertEqual(self.manager.store.get_chapter("ch1")["films"][0]["board_id"], "film1")

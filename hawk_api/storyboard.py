@@ -1313,3 +1313,50 @@ async def make_film(boards: "StoryboardManager", *, characters: list[str] | None
     if written:
         board["written_by"] = written.get("model")
     return board
+
+
+# --------------------------------------------------------------------------- drawings to live action
+
+LIVE_ACTION_PROMPT = (
+    "Redraw this storyboard sheet as photorealistic live-action film stills, shot on a cinema camera: exactly the same "
+    "{count} panels in the same grid of {columns} column{cs} and {rows} row{rs}, in the same order, separated by the "
+    "same thin black borders. In every panel keep the composition, camera angle, framing, action, people and "
+    "lighting of the drawing in that position -- only turn the drawing into a real photograph: real people with "
+    "natural skin, real materials, real light. Each panel fills its whole cell: where a drawing has empty bars, "
+    "extend the scene to the cell's edges. Remove every speech bubble, caption, sound effect, piece of text and "
+    "number. No drawing, comic or anime style anywhere. {people}{style}")
+
+
+async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: list[str], aspect_ratio: str = "9:16",
+                             style: str = "", people: str = "", title: str = "panels",
+                             collection: str | None = None) -> dict:
+    """Drawn panels (a manhwa's, a comic's) turned into live-action ones: eight at a time merged into one sheet
+    ($0), then one Seedream Flash edit per sheet redraws it panel for panel as film stills, with the cast's
+    pictures as references for their faces ($0.018 a sheet). Returns the sheets as a board's from_sheets."""
+    if not panels:
+        raise StoryboardError("No panels to turn into live action.")
+    if aspect_ratio not in ASPECTS:
+        raise StoryboardError(f"aspect_ratio should be one of: {', '.join(ASPECTS)}.")
+    cast = (f"The people, matched by look to the reference images after the first: {people.strip()}. All are adults. "
+            if people.strip() else "")
+    look = f"Look: {style.strip()}." if style.strip() else ""
+
+    async def one(number: int, group: list[bytes]) -> dict:
+        data, grid = await asyncio.to_thread(compose_grid, group, 0, aspect_ratio, "contain", 24, "black")
+        merged = await service.add_asset(
+            f"{re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')[:40] or 'panels'}_drawn_{number}.png", io.BytesIO(data),
+            "image/png", len(data), collection=collection or "Generated", tags=["composed-sheet", "drawn"],
+            source={"type": "composed", "grid": [grid["columns"], grid["rows"]]})
+        width, height = min(SHEET_SIZES, key=lambda size: abs(math.log((size[0] / size[1]) / (grid["size"][0] / grid["size"][1]))))
+        prompt = LIVE_ACTION_PROMPT.format(count=len(group), columns=grid["columns"], cs="s" if grid["columns"] > 1 else "",
+                                           rows=grid["rows"], rs="s" if grid["rows"] > 1 else "", people=cast, style=look)
+        result = await service.generate_images(prompt, engine=SHEET_ENGINE, reference_asset_ids=[merged["id"], *identity_asset_ids[:9]],
+                                               size=f"{width}x{height}", n=1)
+        sheet = result["assets"][0]
+        service.update_asset(sheet["id"], add_tags=["storyboard-sheet", "live-action"])
+        return {"asset_id": sheet["id"], "columns": grid["columns"], "rows": grid["rows"], "panels": len(group),
+                "drawn_asset_id": merged["id"], "cost_usd": result.get("cost_usd") or 0.0}
+
+    groups = [panels[i:i + MAX_PANELS] for i in range(0, len(panels), MAX_PANELS)]
+    sheets = await asyncio.gather(*(one(n, g) for n, g in enumerate(groups, 1)))
+    return {"sheets": list(sheets), "cost_usd": round(sum(s["cost_usd"] for s in sheets), 4)}

@@ -678,3 +678,14 @@ class FilmIn(BaseModel):
     segment_seconds: float = Field(6.0, ge=1, le=15)
     mood: str = Field("", max_length=1000)
     settings: RenderSettings | None = None
+
+
+class ManhwaFilmIn(BaseModel):
+    platform: Literal["general", "instagram", "fanvue"] = "general"
+    quality: Literal["draft", "final"] = "final"
+    review: Literal["auto", "ask"] = "ask"
+    style: str = Field("", max_length=1000, description="The live-action look, e.g. 'moody cinematic film, rainy neon city'.")
+    aspect_ratio: AspectRatio = "9:16"
+    max_panels: int = Field(40, ge=1, le=40)
+    music_prompt: str = Field("", max_length=2000, description="One instrumental track over the whole film (about $0.15).")
+    segment_seconds: float = Field(5.0, ge=1, le=15)

@@ -38,7 +38,7 @@ from .schemas import (
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
-    CharacterPackIn, FilmIn
+    CharacterPackIn, FilmIn, ManhwaFilmIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -109,6 +109,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     boards = StoryboardManager(service)
     characters = CharacterManager(service)
     boards.characters = characters
+    manhwa.boards = boards  # a chapter's live-action film goes through the engine
     stories.boards = boards  # a chapter's storyboard is a board
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
@@ -347,6 +348,13 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         pages, cut panels and the photographs made from them. Rendered videos are kept. Runs and conversions
         working on it are cancelled first."""
         return await manhwa.delete(name, chapter_id, images=images)
+
+    @app.post("/v1/manhwa/chapters/{chapter_id}/film", tags=["manhwa"], status_code=202)
+    async def manhwa_film(chapter_id: str, body: ManhwaFilmIn):
+        """The chapter as a live-action film through the film engine: panels to live-action Seedream Flash sheets
+        ($0.018 per 8, with the cast's portraits), checked, then filmed -- after approval on the Storyboard page
+        (review ask, the default) or straight away (auto)."""
+        return await manhwa.make_film(chapter_id, **body.model_dump())
 
     @app.post("/v1/manhwa/chapters/{chapter_id}/convert", tags=["manhwa"], status_code=202)
     async def manhwa_convert(chapter_id: str, body: ManhwaConvertIn):
