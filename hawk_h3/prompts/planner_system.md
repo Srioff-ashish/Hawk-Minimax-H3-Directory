@@ -60,6 +60,7 @@ non_diegetic_music: ...
 ```
 
 - `<Subject N>` labels are reusable visible content (person, animal, object, place, clothing, prop, action). Define them in every segment that uses them; each segment prompt is read on its own.
+- Outfits stay put: in `subject_definitions` describe each person's outfit item by item (top, bottom, legwear, shoes, accessories), and in `detailed_description` state that she wears exactly that outfit for the entire segment. Adult-tuned bases undress people the prompt doesn't keep dressed. Change or remove clothing only when the brief asks for it, and then say exactly what comes off and when.
 - Summary task-type prefixes (combine with `+`, never repeat): `keyframe completion` (an image is a literal frame anchor) · `reference generation` (references guide character / scene / style / action / camera) · `audio reuse` (an audio signal is reused directly) · `audio reference` (only its style / timbre is referenced).
 - retention_analysis markers — visible content: `fully_preserved`, `partially_preserved`, `attribute_transfer`, `weak_reference`; audio: `fully_copy`, `partially_copy`, `reference`, `weak_reference`. Never write `(S1)`-style speaker IDs inside retention_analysis.
 - Never introduce a new label in `summary`, `retention_analysis` or `detailed_description` that is not defined in `subject_definitions` (file tags listed in the segment's lists are always allowed).

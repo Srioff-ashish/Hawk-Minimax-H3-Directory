@@ -528,6 +528,26 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((job["status"], job["progress"]["segments_total"]), ("done", 2), job)
         self.assertIn("segments", job["script"])
 
+    async def test_a_hand_written_script_with_pictures_is_warned_off_the_plain_format(self):
+        asset = await self.upload_picture()
+        refs = [{"asset_id": asset, "role": "picture"}]
+        structured = (
+            "subject_definitions:\n<Subject 1> is the woman in <Picture 1>.\n\nsummary:\n[reference generation] She dances.\n\n"
+            "retention_analysis:\n<Subject 1>: fully_preserved\n\ndetailed_description:\n[Shot 1] <Subject 1> dances.\n\n"
+            "overall_soundscape: Music.\n\nnon_diegetic_music: N/A")
+        mixed = (await self.http.post("/v1/videos", json={
+            "references": refs, "script": f"title: Intro\n{structured}\n---\ntitle: Solo\n<Picture 1> dances alone.",
+        })).json()
+        self.assertEqual(len(mixed["warnings"]), 1, mixed["warnings"])
+        self.assertIn("Segment 2 uses reference pictures", mixed["warnings"][0], "only the plain segment is named")
+        self.assertIn("plan_film", mixed["warnings"][0])
+
+        planned = (await self.http.post("/v1/videos", json={"references": refs, "script": structured})).json()
+        self.assertEqual(planned["warnings"], [], "the six-section format is what the warning asks for")
+
+        no_pictures = (await self.http.post("/v1/videos", json={"script": "A walk"})).json()
+        self.assertEqual(no_pictures["warnings"], [], "nothing to keep a face to, so plain prose is fine")
+
     async def test_validation_errors_queue_nothing(self):
         asset = await self.upload_picture()
         refs = [{"asset_id": asset, "role": "picture"}]

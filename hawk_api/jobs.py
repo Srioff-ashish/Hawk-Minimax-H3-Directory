@@ -253,6 +253,24 @@ def script_warnings(text: str) -> list[str]:
     return [str(item) for item in warnings] if isinstance(warnings, list) else []
 
 
+def unstructured_reference_warning(segment_jobs: list) -> list[str]:
+    """A hand-written script whose picture segments skip the six-section reference format.
+
+    Reference-heavy bases (10Eros-Max beta5 above all) keep a face from its picture only when the prompt says
+    who is in it -- subject_definitions, retention_analysis -- and a plain director's brief reads to them as
+    a loose description, so identity drifts. The planner always writes the full format; this catches a script
+    that bypassed it."""
+    plain = [job.index + 1 for job in segment_jobs
+             if job.pictures and not re.search(r"^\s*subject_definitions\s*:", job.prompt, re.MULTILINE)]
+    if not plain:
+        return []
+    which = ", ".join(str(n) for n in plain)
+    return [f"Segment{'s' if len(plain) > 1 else ''} {which} use{'' if len(plain) > 1 else 's'} reference pictures "
+            "without the H3 reference format (subject_definitions, summary, retention_analysis, "
+            "detailed_description, overall_soundscape, non_diegetic_music), so faces may drift from their "
+            "pictures. Plan the film (plan_film, or render_film with story) to have it written in that format."]
+
+
 class RequestError(ValueError):
     """Bad input -> HTTP 422."""
 
@@ -2261,9 +2279,9 @@ class HawkService:
         raise Unavailable("Every planner model failed: " + " | ".join(f[:300] for f in failures))
 
     @staticmethod
-    def _validate_script(text: str, available: dict, video_has_audio: list, settings: RenderSettings) -> int:
+    def _validate_script(text: str, available: dict, video_has_audio: list, settings: RenderSettings) -> list:
         try:
-            jobs = build_jobs(
+            return build_jobs(
                 parse_script(text),
                 available=available,
                 video_has_audio=video_has_audio,
@@ -2273,7 +2291,6 @@ class HawkService:
             )
         except ScriptError as exc:
             raise RequestError(f"Script problem: {exc}") from None
-        return len(jobs)
 
     @staticmethod
     def _new_job(kind: str, job_id: str | None = None, **fields) -> dict:
@@ -2452,7 +2469,10 @@ class HawkService:
 
         segments_total = None
         if script_text is not None:
-            segments_total = self._validate_script(script_text, wiring.available, wiring.video_has_audio, settings)
+            segment_jobs = self._validate_script(script_text, wiring.available, wiring.video_has_audio, settings)
+            segments_total = len(segment_jobs)
+            if request.script is not None:
+                warnings += unstructured_reference_warning(segment_jobs)
 
         job = self._new_job(
             "render",
