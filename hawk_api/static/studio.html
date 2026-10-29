@@ -1019,6 +1019,7 @@
             <div class="segmented" role="radiogroup" aria-label="Which prompt">
               <label><input type="radio" name="promptName" value="agent" checked>Agent</label>
               <label><input type="radio" name="promptName" value="planner">Story planner</label>
+              <label><input type="radio" name="promptName" value="storyboard">Storyboard writer</label>
             </div>
             <span class="badge plain" id="promptState"></span>
             <span class="dirty-dot" id="promptDirty" title="Unsaved changes" hidden></span>
@@ -1301,6 +1302,10 @@
                 <label class="field"><span class="label">Video shape</span><select class="select" id="sbAspect"><option>9:16</option><option>16:9</option><option>1:1</option><option>3:4</option><option>4:3</option><option>21:9</option></select></label>
                 <label class="field"><span class="label">Look <span class="hint">optional</span></span><input class="input" id="sbStyle" maxlength="1000" placeholder="e.g. luxury boudoir photography, warm window light"></label>
               </div>
+              <div class="field"><span class="label">Idea <span class="hint">AI writes the character, look, shots and motions from this and the identity picture · edit them after</span></span>
+                <div class="row"><input class="input" id="sbIdea" maxlength="2000" placeholder="e.g. a lazy, sexy morning at a private beach villa" style="flex:1">
+                  <input class="input" id="sbIdeaCount" type="number" min="1" max="40" value="8" style="width:64px" title="How many shots">
+                  <button class="btn btn-sm btn-primary" type="button" id="sbWrite">Write shots for me</button></div></div>
               <div class="field"><span class="label">Your images as panels <span class="hint">optional · nothing is drawn, $0 · one shot per image, in order</span></span>
                 <div class="sb-ids" id="sbOwn"><span class="hint">None: the shots are drawn on Seedream Flash.</span></div>
                 <div class="row"><button class="btn btn-sm" type="button" id="sbOwnPick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="sbOwnUpload" multiple hidden></label></div>
@@ -2809,6 +2814,25 @@
     if (board.id) { toast("Identity is fixed", "Start a New board to use other identity pictures.", "warn"); return; }
     board.ids = board.ids.filter((i) => i !== x.dataset.sbUnid); sbIdsPaint();
   };
+
+  // the shot writer: Gemma 4 31B (then DeepSeek, Kimi) reads the idea and the identity pictures
+  $("sbWrite").onclick = sbWrap(async () => {
+    const idea = $("sbIdea").value.trim();
+    if (!idea) throw new Error("Write the idea first, in a line.");
+    const filled = $("sbShots").value.trim();
+    if (filled && !await confirmAction("Replace the shots?", "The AI writes new character, look, shot and motion lines over what is in the form now.", "Write new")) return;
+    $("sbWrite").disabled = true; $("sbWrite").textContent = "Writing…";
+    try {
+      const out = await post("/v1/storyboards/suggest", { idea, reference_asset_ids: board.ids, count: Number($("sbIdeaCount").value) || 8,
+                                                          aspect_ratio: $("sbAspect").value });
+      if (out.character) $("sbCharacter").value = out.character;
+      if (out.style) $("sbStyle").value = out.style;
+      $("sbShots").value = out.shots.join("\n");
+      $("sbMotions").value = out.motions.join("\n");
+      if (!$("sbTitle").value.trim()) $("sbTitle").value = idea.slice(0, 80);
+      toast("Shots written", `${out.shots.length} shots by ${String(out.model || "").split("/").pop()}. Edit them, then Draw sheets.`);
+    } finally { $("sbWrite").disabled = false; $("sbWrite").textContent = "Write shots for me"; }
+  }, "Could not write the shots");
 
   // the user's own images as panels (a new board only) and the merge picker
   $("sbOwnPick").onclick = () => {
@@ -6629,6 +6653,7 @@
   const PROMPT_HELP = {
     agent: "The agent's instructions for every chat. {{PERSONA}}, {{PIPELINE}} and {{TOOLS}} are filled in on each step.",
     planner: "The story planner's guide: how briefs become segment scripts in H3's prompt format.",
+    storyboard: "The storyboard writer: how an idea and the reference pictures become the character, the look, and one shot and one motion line per panel (Storyboard page: Write shots for me; MCP: write_storyboard_shots).",
     sfw_gate: "What counts as SFW for the Nano Banana (Google) image engines. Your vision model (the one inspect_image uses, on your chat provider -- never Google) reads this, the prompt and any reference images, and answers sfw or nsfw. Only sfw reaches Google; everything else goes to the next engine.",
   };
   const PROMPT_RULES_LABEL = {
@@ -6644,6 +6669,8 @@
       if (!text.includes('"actions"') || !text.includes('"say"')) warnings.push('The reply format looks incomplete: the agent must answer with JSON {"say", "actions", "done"}.');
     } else if (name === "sfw_gate") {
       if (!text.toLowerCase().includes("sfw")) warnings.push("The check never mentions SFW or NSFW: say what each means, or every verdict is a guess.");
+    } else if (name === "storyboard") {
+      if (!text.includes('"shots"')) warnings.push('No "shots" JSON output format found: the writer\'s reply must be JSON with a shots list.');
     } else if (!text.includes('"segments"')) {
       warnings.push('No "segments" JSON output format found: the planner\'s reply must be JSON with a segments list.');
     }

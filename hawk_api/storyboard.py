@@ -839,3 +839,61 @@ async def compose_sheet(service, asset_ids: list[str], columns: int = 0, cell_as
         source={"type": "composed", "images": [a["id"] for a in assets], "grid": [grid["columns"], grid["rows"]]},
     )
     return {"sheet": service.asset_view(stored), "grid": grid, "cost_usd": 0.0}
+
+
+# --------------------------------------------------------------------------- the shot writer
+
+#: Who writes the shots: vision models first, so the reference images are actually looked at.
+WRITER_MODELS = "google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash, moonshotai/kimi-k2.6"
+WRITER_IMAGES = 4
+
+
+async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | None = None, count: int = 8,
+                        aspect_ratio: str = "9:16", models: str | None = None) -> dict:
+    """A storyboard written by an LLM from the idea and the reference images: the character as the images show
+    them, the look, one shot line and one motion line per shot. The system prompt is the editable "storyboard"
+    prompt (Prompts page), with the platform rules after it."""
+    import base64
+
+    from . import models_llm
+    from .atlas import AtlasError
+    from .manhwa import parse_json
+    from .prompts import PLATFORM_RULES
+
+    idea = (idea or "").strip()
+    if not idea:
+        raise StoryboardError("Say in a line what the storyboard is about.")
+    if not 1 <= count <= 40:
+        raise StoryboardError("Ask for 1 to 40 shots.")
+    parts = []
+    for asset_id in (reference_asset_ids or [])[:WRITER_IMAGES]:
+        asset = service.store.get_asset(asset_id)
+        if asset is None or asset.get("kind") != "image":
+            raise StoryboardError(f"No image asset {asset_id!r}.")
+        data, mime = await service.asset_file(asset_id, 768)
+        parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
+    chain = models_llm.resolve_many("planner", models or WRITER_MODELS, await service.model_catalogue(), vision=bool(parts))
+    if not chain:
+        raise Unavailable("No model is set up to write the shots.")
+    ask = (f"Idea: {idea}\nShots: exactly {count}\nVideo shape: {aspect_ratio}\n"
+           + (f"The first {len(parts)} attached image{'s are' if len(parts) > 1 else ' is'} the character's reference."
+              if parts else "No reference image: describe the character from the idea."))
+    messages = [{"role": "system", "content": f"{service.prompts.get('storyboard').rstrip()}\n\n{PLATFORM_RULES}"},
+                {"role": "user", "content": [{"type": "text", "text": ask}, *parts] if parts else ask}]
+    failures = []
+    for model in chain:
+        try:
+            reply, _usage = await service.atlas.chat(model, messages, json_mode=True, max_tokens=4000, temperature=0.8,
+                                                     max_retries=1, purpose="storyboard shots")
+        except AtlasError as exc:
+            failures.append(f"{model}: {exc}"[:240])
+            continue
+        data = parse_json(reply or "")
+        shots = [str(s).strip() for s in (data or {}).get("shots") or [] if str(s).strip()] if isinstance(data, dict) else []
+        if len(shots) < count:
+            failures.append(f"{model}: wrote {len(shots)} of {count} shots")
+            continue
+        motions = [str(m).strip() for m in data.get("motions") or []][:count]
+        return {"character": str(data.get("character") or "").strip(), "style": str(data.get("style") or "").strip(),
+                "shots": shots[:count], "motions": motions + [""] * (count - len(motions)), "model": model}
+    raise Unavailable("No model wrote the shots: " + (" | ".join(failures) or "none answered."))

@@ -604,3 +604,11 @@ class ComposeSheetIn(BaseModel):
     border: int = Field(24, ge=0, le=200)
     background: Literal["black", "white", "grey"] = "black"
     title: str = Field("", max_length=80)
+
+
+class StoryboardSuggestIn(BaseModel):
+    idea: str = Field(min_length=1, max_length=2000, description="What the storyboard is about, in a line or two.")
+    reference_asset_ids: list[str] = Field(default_factory=list, max_length=4, description="The character's picture(s), looked at.")
+    count: int = Field(8, ge=1, le=40, description="How many shots.")
+    aspect_ratio: AspectRatio = "9:16"
+    models: str | None = Field(None, description="A comma-separated model chain; default Gemma 4 31B, DeepSeek, Kimi K2.6.")

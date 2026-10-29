@@ -342,5 +342,61 @@ class Boards(unittest.IsolatedAsyncioTestCase):
             boards.start_render(board["id"])
 
 
+class Writer(unittest.IsolatedAsyncioTestCase):
+    async def test_the_writer_reads_the_picture_and_falls_back_when_a_model_writes_too_few(self):
+        import json
+        import tempfile
+        import types
+
+        from hawk_api.prompts import PLATFORM_RULES, PromptStore
+
+        service = FakeService(png(10, 10))
+        service.prompts = PromptStore(tempfile.mkdtemp())
+        calls = []
+
+        class Chat:
+            async def chat(self, model, messages, **kwargs):
+                calls.append((model, messages))
+                if len(calls) == 1:
+                    return json.dumps({"shots": ["only one"]}), {}
+                return json.dumps({"character": "Rebel, in her forties", "style": "warm boudoir light",
+                                   "shots": [f"shot {n}" for n in range(1, 5)], "motions": ["turns", "smiles"]}), {}
+
+        service.atlas = Chat()
+
+        async def catalogue():
+            return []
+
+        async def asset_file(asset_id, width=0):
+            return b"jpegbytes", "image/jpeg"
+
+        service.model_catalogue, service.asset_file = catalogue, asset_file
+        out = await sb.suggest_shots(service, "a lazy villa morning", ["face"], 4, "9:16",
+                                     models="google/gemma-4-31b-it, deepseek-ai/deepseek-v4.1-flash")
+        self.assertEqual(out["shots"], ["shot 1", "shot 2", "shot 3", "shot 4"])
+        self.assertEqual(out["motions"], ["turns", "smiles", "", ""], "short motion lists are padded, never invented")
+        self.assertEqual((out["character"], out["style"]), ("Rebel, in her forties", "warm boudoir light"))
+        self.assertEqual(len(calls), 2, "the first model wrote 1 of 4, so the next one was asked")
+        system, user = calls[0][1]
+        self.assertIn('"shots"', system["content"])
+        self.assertIn(PLATFORM_RULES, system["content"])
+        self.assertTrue(any(part.get("type") == "image_url" for part in user["content"]), "the reference picture is sent")
+        self.assertIn("exactly 4", user["content"][0]["text"])
+        with self.assertRaises(sb.StoryboardError):
+            await sb.suggest_shots(service, "", ["face"], 4)
+
+    def test_the_writer_prompt_is_editable_like_the_others(self):
+        import tempfile
+
+        from hawk_api.prompts import PROMPT_NAMES, PromptStore
+
+        store = PromptStore(tempfile.mkdtemp())
+        self.assertIn("storyboard", PROMPT_NAMES)
+        self.assertEqual(store.view("storyboard")["warnings"], [])
+        self.assertTrue(store.view("storyboard")["is_default"])
+        saved = store.save("storyboard", "Write shots. Reply as JSON.")
+        self.assertIn('No "shots"', " ".join(saved["warnings"]))
+
+
 if __name__ == "__main__":
     unittest.main()

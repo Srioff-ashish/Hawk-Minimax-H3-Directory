@@ -22,7 +22,7 @@ from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
 from .story import StoryManager
-from .storyboard import StoryboardManager, compose_sheet, identity_pack
+from .storyboard import StoryboardManager, compose_sheet, identity_pack, suggest_shots
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -36,7 +36,7 @@ from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
-    IdentityPackIn, StoryPackIn, ComposeSheetIn
+    IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -600,6 +600,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                              shots=body.shots, aspect_ratio=body.aspect_ratio, style=body.style, motions=body.motions,
                              draw=body.draw, panel_asset_ids=body.panel_asset_ids, sheet_asset_id=body.sheet_asset_id,
                              sheet_columns=body.sheet_columns, sheet_rows=body.sheet_rows)
+
+    @app.post("/v1/storyboards/suggest", tags=["storyboard"])
+    async def board_suggest(body: StoryboardSuggestIn):
+        """The character, the look, and one shot and one motion line per shot, written by an LLM (Gemma 4 31B, then
+        DeepSeek, then Kimi K2.6) from the idea and the reference images. Nothing is drawn: fill a board with them."""
+        return await suggest_shots(service, body.idea, body.reference_asset_ids, body.count, body.aspect_ratio, body.models)
 
     @app.get("/v1/storyboards/{board_id}", tags=["storyboard"])
     async def board_get(board_id: str):

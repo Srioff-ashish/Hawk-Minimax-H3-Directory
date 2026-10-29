@@ -15,7 +15,7 @@ import time
 
 from .google_images import DEFAULT_GATE_PROMPT, GATE_OUTPUT_RULES
 
-PROMPT_NAMES = ("agent", "planner")
+PROMPT_NAMES = ("agent", "planner", "storyboard")
 HISTORY_LIMIT = 30
 
 #: Appended to every agent and custom planner prompt. Not editable.
@@ -30,6 +30,30 @@ AGENT_PLACEHOLDERS = {
     "{{PIPELINE}}": "The Hawk H3 pipeline guide shared with the MCP server (reference roles, script rules, LoRAs, models, music bed).",
     "{{TOOLS}}": "The tool catalogue: every MCP tool with its argument schema, plus wait_for_job, inspect_image, describe_tool, set_persona, set_avatar, remove_character and rename_chat. Tools with large argument schemas are listed without them until describe_tool is called. Appended at the end if you remove it.",
 }
+
+DEFAULT_STORYBOARD_PROMPT = """You write storyboards for Hawk H3 Studio. The user gives an idea, how many shots they want, the video's shape, and usually one or more reference images of the character. Each shot you write becomes one panel of a picture sheet drawn by an image model, and then the first frame of one short video segment, so every shot must be a single, drawable moment.
+
+LOOK AT THE REFERENCE IMAGES FIRST
+Describe the person exactly as they appear, so every panel can keep them: apparent ethnicity and skin tone, face, eyes, hair (colour, length, style), build and proportions, and age as a life stage or a decade ("in her forties"), never a number of years. If the user's idea names or describes the character, that wins over your reading. Do not invent tattoos, scars or accessories you cannot see.
+
+WRITE THE SHOTS
+- Exactly the number of shots asked for, in story order: a clear beginning, a build, and a closing shot that feels like an ending.
+- One line per shot, 15 to 30 words, in this order: what they are doing and their pose, where they are, what they wear (or that they are nude when the idea calls for it), then the camera ("close-up", "low angle", "wide shot from the doorway").
+- Vary it: mix wide, medium and close shots; change the pose and the camera from shot to shot; keep the places consistent with the idea instead of jumping at random.
+- Each shot is something one still picture can show. No time jumps inside a shot, no "then", no sequences.
+- Write what is visible, not feelings or backstory. No text, signs, captions or logos in the scene.
+- Keep the same person in every shot unless the idea brings in others; then say who is in each shot.
+
+WRITE THE MOTIONS
+One line per shot: what moves in that shot's 5 to 8 second video, starting from the shot's frame -- a slow body roll, turning to the camera, hair moving in the wind, water running, a slow push-in. Natural, physically real movement. Nobody speaks unless the idea asks for dialogue.
+
+WRITE THE LOOK
+One line for the whole sheet: the photographic style, light and palette, e.g. "luxury boudoir photography, warm window light, soft shadows, photorealistic".
+
+REPLY
+Only JSON, nothing else:
+{"character": "...", "style": "...", "shots": ["...", "..."], "motions": ["...", "..."]}
+shots and motions have exactly the number of entries asked for."""
 
 DEFAULT_PERSONA = "A decisive, friendly film director who explains choices briefly and keeps the user informed."
 
@@ -115,6 +139,8 @@ def warnings_for(name: str, text: str) -> list[str]:
             warnings.append("{{PERSONA}} is missing: chat personas will have no effect.")
         if '"actions"' not in text or '"say"' not in text:
             warnings.append('The reply format looks incomplete: the agent must answer with JSON {"say", "actions", "done"} or its replies cannot be read.')
+    if name == "storyboard" and '"shots"' not in text:
+        warnings.append('No "shots" JSON output format found: the writer\'s reply must be JSON with a shots list.')
     if name == "planner" and '"segments"' not in text:
         warnings.append('No "segments" JSON output format found: the planner\'s reply must be JSON with a segments list.')
     if name == "sfw_gate" and "sfw" not in text.lower():
@@ -152,6 +178,8 @@ class PromptStore:
             return default_planner_prompt()
         if name == "sfw_gate":
             return DEFAULT_GATE_PROMPT
+        if name == "storyboard":
+            return DEFAULT_STORYBOARD_PROMPT
         raise KeyError(name)
 
     def custom(self, name: str) -> str | None:

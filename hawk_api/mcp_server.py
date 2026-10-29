@@ -340,18 +340,36 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "(drawing -> rendering -> joining -> done, with film). panel_asset_ids: the user's own images as the panels "
         "instead (nothing drawn, no image cost; shots may be empty, motions say what moves). sheet_asset_id: a "
         "ready-made sheet instead -- one from compose_sheet (its images become the panels), a sheet drawn here, or "
-        "one the user made elsewhere (cut into panels; grid from sheet_columns/sheet_rows or found from its borders)."))
-    async def storyboard_film(shots: list[str], character: str, identity_asset_ids: list[str], title: str = "Storyboard",
+        "one the user made elsewhere (cut into panels; grid from sheet_columns/sheet_rows or found from its borders). "
+        "No shots at all: give an idea (and shot_count) and the shots, motions, character and look are written for "
+        "you first from the idea and the identity pictures (write_storyboard_shots does only that step)."))
+    async def storyboard_film(identity_asset_ids: list[str], shots: list[str] | None = None, character: str = "",
+                              title: str = "Storyboard", idea: str = "", shot_count: int = 8,
                               aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None,
                               segment_seconds: float = 6.0, settings: RenderSettings | None = None,
                               mood: str = "", music: str = "", panel_asset_ids: list[str] | None = None,
                               sheet_asset_id: str | None = None, sheet_columns: int = 0, sheet_rows: int = 0) -> dict:
         follow = {"settings": settings.model_dump() if settings else None, "segment_seconds": segment_seconds,
                   "mood": mood, "music": music}
-        return await boarded(_sync(boards.create, title=title, character=character, identity_asset_ids=identity_asset_ids,
-                                   shots=shots, aspect_ratio=aspect_ratio, style=style, motions=motions,
+        if not shots and not panel_asset_ids and not sheet_asset_id:
+            if not idea:
+                raise ToolError("Give shots, your own panel_asset_ids or a sheet_asset_id -- or an idea for the shots to be written.")
+            written = await boarded(storyboards.suggest_shots(service, idea, identity_asset_ids, shot_count, aspect_ratio))
+            shots, motions = written["shots"], motions or written["motions"]
+            character, style = character or written["character"], style or written["style"]
+        return await boarded(_sync(boards.create, title=title, character=character or title, identity_asset_ids=identity_asset_ids,
+                                   shots=shots or [], aspect_ratio=aspect_ratio, style=style, motions=motions,
                                    then_render=follow, panel_asset_ids=panel_asset_ids, sheet_asset_id=sheet_asset_id,
                                    sheet_columns=sheet_columns, sheet_rows=sheet_rows))
+
+    @mcp.tool(description=(
+        "Write a storyboard for the user to check: from a one-line idea and the character's reference image(s), an "
+        "LLM (Gemma 4 31B, then DeepSeek, then Kimi K2.6; the editable 'storyboard' system prompt) writes the "
+        "character as the images show them, the look, and count shot lines and motion lines. Nothing is drawn; pass "
+        "them to create_storyboard or storyboard_film."))
+    async def write_storyboard_shots(idea: str, reference_asset_ids: list[str] | None = None, count: int = 8,
+                                     aspect_ratio: str = "9:16") -> dict:
+        return await boarded(storyboards.suggest_shots(service, idea, reference_asset_ids or [], count, aspect_ratio))
 
     @mcp.tool(description=(
         "Storyboard board without rendering: draws the shots (Seedream Flash, $0.018 per 8) and cuts the panels, then "
