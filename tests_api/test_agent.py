@@ -747,6 +747,14 @@ class AgentApi(AgentHarness):
         self.assertIn("can't use reference images", switched["note"])
         lite_edit = (await self.http.post("/v1/images", json={"prompt": "Same stall in rain", "model": "seedream-lite", "reference_asset_ids": [base]})).json()
         self.assertEqual(lite_edit["model"], "bytedance/seedream-v5.0-lite/edit")
+        # Flash is one flat price at every size, so a sheet can take its biggest preset for the same $0.018
+        flash = (await self.http.post("/v1/images", json={"prompt": "A chai stall", "engine": "seedream-flash", "size": "1584x2816"})).json()
+        self.assertEqual((flash["model"], self.atlas.image_requests[-1]["size"], flash["cost_usd"]),
+                         ("bytedance/seedream-v5.0-flash/text-to-image", "1584*2816", 0.018))
+        wide_flash = (await self.http.post("/v1/images", json={"prompt": "A chai stall", "model": "flash", "size": "3136x1344"})).json()
+        self.assertEqual((self.atlas.image_requests[-1]["size"], wide_flash["cost_usd"]), ("3136*1344", 0.018), "3K costs no more")
+        flash_edit = (await self.http.post("/v1/images", json={"prompt": "Same stall in rain", "engine": "seedream-flash", "reference_asset_ids": [base]})).json()
+        self.assertEqual(flash_edit["model"], "bytedance/seedream-v5.0-flash/edit")
         seeded = (await self.http.post("/v1/images", json={"prompt": "Lamp", "n": 2, "seed": 7})).json()
         self.assertEqual(sorted(r["seed"] for r in self.atlas.image_requests[-2:]), [7, 8])
         self.assertEqual((seeded["model"], self.atlas.image_requests[-1]["size"]), ("z-image/turbo", "1024*1536"))

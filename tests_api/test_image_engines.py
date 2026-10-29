@@ -86,6 +86,7 @@ class Resolve(unittest.TestCase):
         for name in ("seedream", "quality", "best"):
             self.assertEqual(ie.resolve(name), "seedream", name)
         self.assertEqual(ie.resolve("lite"), "seedream-lite")
+        self.assertEqual(ie.resolve("flash"), "seedream-flash")
 
     def test_z_image_now_means_the_local_engine(self):
         # the one deliberate break: it used to resolve to the Atlas engine

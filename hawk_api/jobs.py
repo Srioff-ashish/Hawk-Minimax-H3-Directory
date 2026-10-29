@@ -68,6 +68,7 @@ IMAGE_MODEL = image_engines.IMAGE_MODEL
 IMAGE_EDIT_MODEL = image_engines.IMAGE_EDIT_MODEL
 IMAGE_LITE_MODEL = image_engines.IMAGE_LITE_MODEL
 IMAGE_LITE_EDIT_MODEL = image_engines.IMAGE_LITE_EDIT_MODEL
+IMAGE_FLASH_MODEL = image_engines.IMAGE_FLASH_MODEL
 IMAGE_FAST_MODEL = image_engines.IMAGE_FAST_MODEL
 #: Aliases for the ``model`` field (an Atlas model id), which is not the same vocabulary as ``engine``:
 #: model "z-image" still means the Atlas one, while engine "z-image" now means the local engine.
@@ -76,6 +77,7 @@ IMAGE_ALIASES = {
     "fast": IMAGE_FAST_MODEL, "cheap": IMAGE_FAST_MODEL,
     "seedream": IMAGE_MODEL, "quality": IMAGE_MODEL, "best": IMAGE_MODEL,
     "seedream-lite": IMAGE_LITE_MODEL, "lite": IMAGE_LITE_MODEL,
+    "seedream-flash": IMAGE_FLASH_MODEL, "flash": IMAGE_FLASH_MODEL,
 }
 # Seedream 5 sizes (Atlas presets). Pro bills by output pixels: up to 2.36 MP is the 1.5K tier, above it the 2K tier at
 # twice the price, so Pro stays at 1.5K unless a bigger size is asked for. Lite starts at 2K.
@@ -83,8 +85,12 @@ SEEDREAM_15K_PIXELS = 2_359_296
 SEEDREAM_PRO_15K = ((1536, 1536), (1776, 1328), (1328, 1776), (2048, 1152), (1152, 2048), (1024, 1024))
 SEEDREAM_PRO_2K = ((2048, 2048), (2304, 1728), (1728, 2304), (2720, 1530), (1530, 2720), (2496, 1664), (1664, 2496))
 SEEDREAM_LITE = ((2048, 2048), (2304, 1728), (1728, 2304), (2848, 1600), (1600, 2848), (2496, 1664), (1664, 2496))
+# Flash is one flat price at every preset, so the biggest one in the asked-for aspect ratio is the one to take.
+SEEDREAM_FLASH = ((2048, 2048), (2368, 1776), (1776, 2368), (2816, 1584), (1584, 2816), (2496, 1664), (1664, 2496),
+                  (3136, 1344), (1536, 1536), (1792, 1344), (1344, 1792), (2048, 1152), (1152, 2048), (1872, 1248),
+                  (1248, 1872), (2352, 1008))
 # Estimated USD per image on Atlas (discounted list prices, Sept 2026); reported as cost_usd so the agent can budget.
-IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032,
+IMAGE_PRICES = {"z-image": 0.01, "pro-1.5k": 0.036, "pro-2k": 0.072, "lite": 0.032, "flash": 0.018,
                 # Google's 1K prices; bigger outputs bill higher, see google_images.PRICES
                 "nano-banana": google_images.price("nano-banana"),
                 "nano-banana-pro": google_images.price("nano-banana-pro"),
@@ -115,6 +121,8 @@ def seedream_size(model: str, size: str | None) -> tuple[str, str]:
     width, height = parsed or (1024, 1536)
     if "lite" in model:
         presets, tier = SEEDREAM_LITE, "lite"
+    elif "flash" in model:
+        presets, tier = SEEDREAM_FLASH, "flash"
     elif width * height > SEEDREAM_15K_PIXELS:
         presets, tier = SEEDREAM_PRO_2K, "pro-2k"
     else:
@@ -1749,9 +1757,10 @@ class HawkService:
             "system": await self.comfy.system_stats(),
             "local": local,
             "atlas": {"configured": self.image_atlas.configured, "text_to_image": self.settings.image_model,
-                      "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL,
+                      "quality": IMAGE_MODEL, "edit": IMAGE_EDIT_MODEL, "lite": IMAGE_LITE_MODEL, "flash": IMAGE_FLASH_MODEL,
                       "prices_usd": {"z-image/turbo": IMAGE_PRICES["z-image"], "seedream 1.5K (up to 2.36 MP)": IMAGE_PRICES["pro-1.5k"],
-                                     "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"]}},
+                                     "seedream 2K": IMAGE_PRICES["pro-2k"], "seedream-lite (2K+)": IMAGE_PRICES["lite"],
+                                     "seedream-flash (any size, up to 3K)": IMAGE_PRICES["flash"]}},
             "google": {"configured": self.google.configured, "sfw_only": True,
                        "models": {e.id: e.google_model for e in image_engines.ENGINES.values() if e.google},
                        # the vision role, on the chat provider: the check never goes to Google

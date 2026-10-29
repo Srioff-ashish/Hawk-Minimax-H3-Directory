@@ -23,6 +23,8 @@ IMAGE_MODEL = "bytedance/seedream-v5.0-pro/text-to-image"
 IMAGE_EDIT_MODEL = "bytedance/seedream-v5.0-pro/edit"
 IMAGE_LITE_MODEL = "bytedance/seedream-v5.0-lite"  # 2K-4K only, a little cheaper than Pro 2K, a little below Pro in quality
 IMAGE_LITE_EDIT_MODEL = "bytedance/seedream-v5.0-lite/edit"
+IMAGE_FLASH_MODEL = "bytedance/seedream-v5.0-flash/text-to-image"  # one flat price at every size, up to 3K
+IMAGE_FLASH_EDIT_MODEL = "bytedance/seedream-v5.0-flash/edit"
 IMAGE_FAST_MODEL = "z-image/turbo"  # ~$0.01 an image, text only (no edits)
 
 # Google Gemini image models ("Nano Banana"). One model both generates and edits: reference images are just
@@ -105,6 +107,11 @@ ENGINES: dict[str, ImageEngine] = {
         lora_family="", checks=False, atlas_model=IMAGE_LITE_MODEL, atlas_edit_model=IMAGE_LITE_EDIT_MODEL,
         price_key="lite", tag="seedream",
     ),
+    "seedream-flash": ImageEngine(
+        id="seedream-flash", label="Seedream v5.0 Flash (Atlas)", where="atlas", generate=True, edit=True, max_refs=10,
+        lora_family="", checks=False, atlas_model=IMAGE_FLASH_MODEL, atlas_edit_model=IMAGE_FLASH_EDIT_MODEL,
+        price_key="flash", tag="seedream",
+    ),
     # Google's Nano Banana models, for SFW work only: a request the SFW gate does not pass is never sent to
     # them, and the ladder moves on to the next engine instead. Both take up to 14 reference images.
     "nano-banana": ImageEngine(
@@ -139,6 +146,7 @@ ALIASES = {
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
+    "seedream-flash": "seedream-flash", "flash": "seedream-flash", "seedream-v5-flash": "seedream-flash",
     "nano-banana": "nano-banana", "nanobanana": "nano-banana", "nano-banana-2": "nano-banana", "nano": "nano-banana",
     "gemini": "nano-banana", "google": "nano-banana", "gemini-image": "nano-banana",
     "nano-banana-pro": "nano-banana-pro", "nanobanana-pro": "nano-banana-pro", "gemini-pro": "nano-banana-pro",
@@ -318,6 +326,7 @@ DEFAULTS = {
         {"engine": "turbo", "enabled": True},
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
+        {"engine": "seedream-flash", "enabled": False},
         # Off until switched on in Studio: they need a Google API key, and they cost money.
         {"engine": "nano-banana", "enabled": False},
         {"engine": "nano-banana-pro", "enabled": False},
@@ -328,6 +337,7 @@ DEFAULTS = {
         {"engine": "krea2", "enabled": True},
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
+        {"engine": "seedream-flash", "enabled": False},
         {"engine": "nano-banana", "enabled": False},
         {"engine": "nano-banana-pro", "enabled": False},
         {"engine": "nano-banana-lite", "enabled": False},
