@@ -214,14 +214,22 @@ class AtlasClient:
     async def generate_image(self, payload: dict, *, timeout: float = 420.0, poll_seconds: float = 2.0, max_retries: int = 3) -> list[bytes]:
         """Submit to ``/api/v1/model/generateImage``, poll the prediction, return image bytes.
         Edit models take ``images``: a list of data URIs."""
+        return await self.generate_media(payload, endpoint="generateImage", what="Image", timeout=timeout,
+                                         poll_seconds=poll_seconds, max_retries=max_retries)
+
+    async def generate_media(self, payload: dict, *, endpoint: str = "generateImage", what: str = "Image",
+                             timeout: float = 420.0, poll_seconds: float = 2.0, max_retries: int = 3) -> list[bytes]:
+        """Submit to ``/api/v1/model/<endpoint>`` (generateImage, generateAudio...), poll the prediction, and return
+        the bytes of each output."""
         if not self.configured:
             raise AtlasError("No Atlas API key on this pod, and the paid image engines run on Atlas Cloud "
                              "whichever service answers chat. Add one under Settings -> Connect, or use an "
                              "engine on this GPU.")
         base = self.image_base
         deadline = time.monotonic() + timeout
+        noun = what.lower()
         async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=30.0), follow_redirects=True) as http:
-            submitted = await self._json(http, "POST", f"{base}/api/v1/model/generateImage", payload, max_retries)
+            submitted = await self._json(http, "POST", f"{base}/api/v1/model/{endpoint}", payload, max_retries)
             data = submitted.get("data") if isinstance(submitted, dict) else None
             prediction = data.get("id") if isinstance(data, dict) else None
             if not prediction:
@@ -233,24 +241,24 @@ class AtlasClient:
                 if status in IMAGE_OK:
                     outputs = data.get("outputs") or []
                     if not outputs:
-                        raise AtlasError(f"Image generation {prediction} finished without images.")
+                        raise AtlasError(f"{what} generation {prediction} finished without {noun}s.")
                     break
                 if status in IMAGE_FAILED:
-                    raise AtlasError(f"Image generation failed: {data.get('error') or 'no reason given'}")
+                    raise AtlasError(f"{what} generation failed: {data.get('error') or 'no reason given'}")
                 if time.monotonic() > deadline:
-                    raise AtlasError(f"Image generation {prediction} did not finish within {int(timeout)} s.")
+                    raise AtlasError(f"{what} generation {prediction} did not finish within {int(timeout)} s.")
                 await asyncio.sleep(poll_seconds)
-            images = []
+            files = []
             for item in outputs:
                 item = str(item)
                 if item.startswith(("http://", "https://")):
                     response = await http.get(item)
                     if response.status_code != 200:
-                        raise AtlasError(f"Could not download the generated image ({response.status_code}).")
-                    images.append(response.content)
+                        raise AtlasError(f"Could not download the generated {noun} ({response.status_code}).")
+                    files.append(response.content)
                 else:
-                    images.append(base64.b64decode(item.split(",", 1)[-1]))
-            return images
+                    files.append(base64.b64decode(item.split(",", 1)[-1]))
+            return files
 
     async def _json(self, http: httpx.AsyncClient, method: str, url: str, payload: dict | None, max_retries: int):
         attempt, last_error = 0, ""

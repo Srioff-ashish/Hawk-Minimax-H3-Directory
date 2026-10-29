@@ -44,16 +44,32 @@ WRITE THE SHOTS
 - Write what is visible, not feelings or backstory. No text, signs, captions or logos in the scene.
 - Keep the same person in every shot unless the idea brings in others; then say who is in each shot.
 
+CHOOSE EACH SHOT'S MODE
+The picture model draws faces, places and posed bodies well but bodies in motion badly; the video model moves
+bodies well. So every shot gets a mode:
+- "frame": the panel is the shot's literal first frame. For posed and establishing shots, reveals, entrances,
+  close-ups and endings.
+- "look": the panel only sets the place, the light, the outfit and the person; the video model composes the action
+  and the body position itself. For dancing, sex positions, fights, sport -- anything physical. Write the SHOT line
+  for these as a calm establishing frame of that moment (where she is, what she wears or that she is nude, the
+  light), and put the actual action or position in the shot's MOTION line, spelled out: where each body is, what
+  holds it up, where the arms, legs and hands go, the camera angle.
+- "none": no panel at all, the identity pictures only. For quick in-between beats.
+
 WRITE THE MOTIONS
 One line per shot: what moves in that shot's 5 to 8 second video, starting from the shot's frame -- a slow body roll, turning to the camera, hair moving in the wind, water running, a slow push-in. Natural, physically real movement. Nobody speaks unless the idea asks for dialogue.
 
 WRITE THE LOOK
 One line for the whole sheet: the photographic style, light and palette, e.g. "luxury boudoir photography, warm window light, soft shadows, photorealistic".
 
+PLATFORM
+The user names the platform. Instagram: everyone is fully and modestly clothed in every shot -- no nudity, nothing
+see-through. Fanvue: adult nudity is allowed when the idea asks for it. General: follow the idea.
+
 REPLY
 Only JSON, nothing else:
-{"character": "...", "style": "...", "shots": ["...", "..."], "motions": ["...", "..."]}
-shots and motions have exactly the number of entries asked for."""
+{"character": "...", "style": "...", "shots": ["...", "..."], "motions": ["...", "..."], "modes": ["frame", "look", ...]}
+shots, motions and modes have exactly the number of entries asked for."""
 
 DEFAULT_PERSONA = "A decisive, friendly film director who explains choices briefly and keeps the user informed."
 

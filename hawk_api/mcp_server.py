@@ -17,7 +17,7 @@ from hawk_h3.script import max_segment_seconds
 from . import pose_guide as pose_guides
 from . import storyboard as storyboards
 from .jobs import Conflict, HawkService, NotFound, RequestError, Unavailable
-from .schemas import ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
+from .schemas import FilmIn, ImageLoraIn, LoraIn, ManhwaContextIn, ManhwaConvertIn, ManhwaPipelineIn, ManhwaSettingsIn, PlannerOptions, PlanRequest, ReferenceIn, RenderSettings, VideoRequest
 
 INSTRUCTIONS = """\
 Hawk H3 Director renders MiniMax H3 videos with native audio on the user's GPU pod, one clip or a long film of joined segments.
@@ -26,7 +26,7 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
    Images the user attaches in this chat do NOT reach the server: you can see them, but you cannot pass them to a tool (upload_image needs the file's bytes, which a chat attachment does not give you). So when the user attaches a picture to edit or to use as a reference, never call generate_image or render_film without it and never claim you used it: call upload_page_link, ask them to upload the same picture there, then call list_references(kind="image", limit=5) -- the newest is theirs -- confirm it by its filename or thumb_url, and pass its asset_id.
 2. Plan: plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it. Whenever the video uses reference pictures (any character or face to keep), always plan -- with plan_film, or render_film with story -- even for a dance or music video with no dialogue: the planner writes H3's six-section reference format (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music), which is what keeps each face tied to its picture. Put the people, their looks and outfits, the action, camera and music in the brief; the planner does the rest.
-   Several shots of one recurring character (a reel, a photoshoot, a chapter)? storyboard_film draws them all as one $0.018 Seedream Flash sheet, cuts it into panels and renders each panel as the first frame of its segment -- cheaper and more consistent than an image per shot. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere. The user's own images need no drawing: storyboard_film with panel_asset_ids, or compose_sheet then storyboard_film with sheet_asset_id ($0 for the images).
+   Several shots of one recurring character (a reel, a photoshoot, a dance, an adult scene)? make_film is the one call: name the characters from the library (list_characters; save_character once), give an idea, the platform and the quality -- the shots are written, drawn as $0.018 Seedream Flash sheets, checked, and filmed after the user approves (approve_film). The storyboard_* tools below are its parts, for step-by-step control. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere. The user's own images need no drawing: storyboard_film with panel_asset_ids, or compose_sheet then storyboard_film with sheet_asset_id ($0 for the images).
 3. Render: render_film with plan_job_id (or the approved, possibly edited script, or story to plan and render in one job). A hand-written script is for clips with no reference pictures, or one already in the six-section format; get_job warns when a script with pictures skips it. Start with settings.megapixels=0.4 for a cheap preview.
 4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
@@ -62,7 +62,8 @@ def _error(exc: Exception) -> ToolError:
     return ToolError(message)
 
 
-def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stories=None, boards=None) -> MCPServer:
+def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stories=None, boards=None,
+              characters=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
@@ -330,6 +331,54 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         job = await boarded(storyboards.render_film(service, panel_asset_ids, identity_asset_id, beats, character,
                                                     settings, segment_seconds, mood, music))
         return service.job_view(job)
+
+    @mcp.tool(description=(
+        "THE way to make a multi-shot video (a reel, a photoshoot, a dance, an adult scene, anything with a recurring "
+        "character): who (characters, names from the character library -- or identity_asset_ids), what (an idea, and "
+        "the shots, motions and a mode per shot are written for you; or your own shots, panel_asset_ids or a "
+        "sheet_asset_id), where it goes (platform: instagram keeps everyone clothed and checks it; fanvue allows "
+        "adult nudity), quality (draft fast, final to post). The engine draws Seedream Flash sheets ($0.018 per 8 "
+        "shots), checks every panel with a vision model and redraws rejects, then films: frame shots on the "
+        "face-faithful base model, look shots (dancing, positions -- the video model composes them) on the "
+        "action one, joined into one video with one music track (music_prompt composes one, about $0.15). "
+        "review ask (default): it stops at status review -- show the user the panels (get_storyboard: panel_views, "
+        "checks) and call approve_film; review auto films straight away. Returns the board; poll get_storyboard."))
+    async def make_film(film: FilmIn) -> dict:
+        if boards is None:
+            raise ToolError("Films aren't available on this server.")
+        return await boarded(storyboards.make_film(boards, settings=film.settings, **film.model_dump(exclude={"settings"})))
+
+    @mcp.tool(description="Approve a film stopped at status review (after showing the user its panels): it renders now. Poll get_storyboard.")
+    async def approve_film(board_id: str, segment_seconds: float | None = None, mood: str | None = None) -> dict:
+        return await boarded(_sync(boards.approve, board_id, None, segment_seconds, mood))
+
+    @mcp.tool(description="The character library: every saved person with their facts, identity pictures, pack views and default platform. Use their names in make_film.")
+    async def list_characters() -> dict:
+        if characters is None:
+            raise ToolError("The character library isn't available on this server.")
+        return {"characters": characters.list()}
+
+    @mcp.tool(description=(
+        "Save a person to the character library once, so every film can just name them: facts (what every prompt "
+        "keeps -- age, ethnicity, figure, hair; adults only), identity_asset_ids (up to 3, full body on a plain "
+        "background is best), notes (wording that fixes a model's habit), platform (their usual destination). An "
+        "existing name is updated with whatever is given."))
+    async def save_character(name: str, facts: str = "", identity_asset_ids: list[str] | None = None, notes: str | None = None,
+                             platform: str | None = None) -> dict:
+        if characters is None:
+            raise ToolError("The character library isn't available on this server.")
+        try:
+            characters.find(name)
+        except NotFound:
+            return await run(_sync(characters.create, name, facts, identity_asset_ids or [], notes or "", platform or "general"))
+        return await run(_sync(characters.update, name, facts=facts or None, identity_asset_ids=identity_asset_ids,
+                               notes=notes, platform=platform))
+
+    @mcp.tool(description="Draw a library character's identity pack ($0.018): front, back, side and face views, kept on the character. anatomy=true adds nude views (adult platforms only).")
+    async def make_character_pack(name: str, anatomy: bool = False) -> dict:
+        if characters is None:
+            raise ToolError("The character library isn't available on this server.")
+        return await run(characters.make_pack(name, anatomy=anatomy))
 
     @mcp.tool(description=(
         "Storyboard film in one call -- the cheapest way to a multi-shot video of one recurring character: the shots "

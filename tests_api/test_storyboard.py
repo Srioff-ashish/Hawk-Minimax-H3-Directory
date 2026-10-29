@@ -94,8 +94,9 @@ class Cut(unittest.TestCase):
         brief = sb.film_brief(["wakes up", "stretches"], "Rebel.", music="slow R&B")
         self.assertIn("<Picture 3> is the identity reference", brief)
         self.assertIn("keyframe completion", brief)
-        self.assertIn("Segment 2: <Picture 2> -- stretches.", brief)
-        self.assertIn("Music: slow R&B", brief)
+        self.assertIn("Segment 2: <Picture 2> is this segment's first frame", brief)
+        self.assertIn("stretches.", brief)
+        self.assertIn("Music: slow R&B.", brief)
 
 
 class FakeStore:
@@ -235,7 +236,8 @@ class Boards(unittest.IsolatedAsyncioTestCase):
         await boards._tasks[board["id"]]
         request = service.videos[0]
         self.assertEqual([r.asset_id for r in request.references], ["mine0", "mine1", "mine2", "face"])
-        self.assertIn("Segment 1: <Picture 1> -- turns.", request.story.story)
+        self.assertIn("Segment 1: <Picture 1> is this segment's first frame", request.story.story)
+        self.assertIn("and animate from there. turns.", request.story.story)
         self.assertIn("animate this frame", request.story.story, "a blank motion falls back to the shot")
         with self.assertRaises(sb.StoryboardError):
             boards.create(title="x", character="Rebel.", identity_asset_ids=["face"], shots=["one"],
@@ -248,7 +250,7 @@ class Boards(unittest.IsolatedAsyncioTestCase):
         merged = await sb.compose_sheet(service, ["m0", "m1", "m2"])
         boards = sb.StoryboardManager(service)
         board = boards.create(title="Merged", character="Rebel.", identity_asset_ids=["face"], shots=[],
-                              sheet_asset_id=merged["sheet"]["id"])
+                              sheet_asset_id=merged["sheet"]["id"], check=False)
         self.assertEqual((board["status"], board["panels"]), ("ready", ["m0", "m1", "m2"]), "the originals, not cut-outs")
 
         service.store.assets["their_sheet"] = {"id": "their_sheet", "kind": "image", "filename": "made_elsewhere.jpg"}

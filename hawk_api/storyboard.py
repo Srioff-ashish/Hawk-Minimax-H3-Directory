@@ -176,21 +176,56 @@ def cut_grid(data: bytes, columns: int, rows: int) -> tuple[list[bytes], bool]:
     return panels, found
 
 
-def film_brief(beats: list[str], character: str, mood: str = "", music: str = "", identities: int = 1) -> str:
-    """The planner's brief: every segment opens on its panel and keeps the identity picture(s) beside it."""
-    panels = len(beats)
+MODES = ("frame", "look", "none")
+#: What a panel is to its segment. frame: the literal first frame. look: the place, light, outfit and person --
+#: the video model composes the action, the position and the framing itself (what H3 does better than an image
+#: model for anything physical). none: no panel of its own, only the identity pictures.
+MODE_WORDING = {
+    "frame": "{tag} is this segment's first frame (keyframe completion): start exactly on it -- its pose, framing, "
+             "setting and clothing (or nudity) -- and animate from there",
+    "look": "{tag} is only a look reference for this segment -- its place, light, outfit (or nudity) and the person -- "
+            "NOT its first frame: compose the action, the body position and the camera framing freely from the "
+            "description below, with natural, physically real movement",
+    "none": "this segment has no picture of its own: build it from the description, keeping the person from the "
+            "identity pictures",
+}
+
+
+def segment_pictures(modes: list[str]) -> list[int | None]:
+    """The picture number each segment's panel gets in one render (None for a segment without a panel)."""
+    numbers, count = [], 0
+    for mode in modes:
+        if mode == "none":
+            numbers.append(None)
+        else:
+            count += 1
+            numbers.append(count)
+    return numbers
+
+
+def film_brief(beats: list[str], character: str, mood: str = "", music: str = "", identities: int = 1,
+               modes: list[str] | None = None, dialogue: list[list[str]] | None = None,
+               music_over: bool = False) -> str:
+    """The planner's brief for one render: what each segment's picture is to it (by mode), the motion, any lines."""
+    modes = [m if m in MODES else "frame" for m in (modes or [])] + ["frame"] * max(0, len(beats) - len(modes or []))
+    numbers = segment_pictures(modes[: len(beats)])
+    panels = sum(1 for n in numbers if n)
     tags = [f"<Picture {panels + n}>" for n in range(1, identities + 1)]
     who = (f"{tags[0]} is the identity reference" if identities == 1
            else f"{', '.join(tags[:-1])} and {tags[-1]} are the identity references (one per person)")
+    sound = ("No music in any segment: only the sounds of the scene (one music track is laid over the whole film "
+             "afterwards). " if music_over else (f"Music: {music.strip().rstrip('.')}. " if music.strip() else ""))
+    lines = []
+    for index, (beat, mode, number) in enumerate(zip(beats, modes, numbers), 1):
+        wording = MODE_WORDING[mode].format(tag=f"<Picture {number}>" if number else "")
+        said = [line.strip() for line in (dialogue[index - 1] if dialogue and index - 1 < len(dialogue) else []) if line.strip()]
+        spoken = (" Lines, spoken word for word in this order: " + " / ".join(said) + ".") if said else ""
+        lines.append(f"Segment {index}: {wording}. {beat.strip().rstrip('.')}.{spoken}")
     return (
         f"{character.strip()} {who} (face and body) for every segment. "
         f"{(mood.strip() + ' ') if mood.strip() else ''}"
-        f"{panels} segments in story order. Each segment N starts exactly on its storyboard frame <Picture N> -- that "
-        "picture is the segment's first frame (keyframe completion) -- and animates it: keep the pose, framing, "
-        "lighting, setting and clothing (or nudity) of that frame, and add only the motion described, natural and "
-        "realistic, with real weight. Nobody speaks unless a segment says so. "
-        f"{('Music: ' + music.strip() + ' ') if music.strip() else ''}"
-        + " ".join(f"Segment {number}: <Picture {number}> -- {beat.strip().rstrip('.')}." for number, beat in enumerate(beats, 1))
+        f"{len(beats)} segments in story order. Natural, realistic motion with real weight. Nobody speaks unless a "
+        f"segment gives lines. {sound}" + " ".join(lines)
     )
 
 
@@ -257,30 +292,41 @@ async def split_sheet(service, sheet_asset_id: str, columns: int = 0, rows: int 
     return {"panels": out, "borders_found": found, "note": note}
 
 
-async def render_film(service, panel_asset_ids: list[str], identity_asset_ids, beats: list[str], character: str,
+async def render_film(service, panel_asset_ids: list, identity_asset_ids, beats: list[str], character: str,
                       settings: RenderSettings | None = None, segment_seconds: float = 6.0, mood: str = "",
-                      music: str = "") -> dict:
-    """One render of the panels in order, planned in the H3 reference format, each segment opening on its panel."""
+                      music: str = "", modes: list[str] | None = None, dialogue: list[list[str]] | None = None,
+                      music_over: bool = False) -> dict:
+    """One render of the shots in order, planned in the H3 reference format; each panel is to its segment what its
+    mode says (first frame, look reference, or none)."""
     identity_asset_ids = [identity_asset_ids] if isinstance(identity_asset_ids, str) else list(identity_asset_ids)
-    if not panel_asset_ids:
-        raise StoryboardError("No panels to animate.")
+    if not beats:
+        raise StoryboardError("No shots to animate.")
     if not identity_asset_ids:
         raise StoryboardError("Give the identity picture the panels keep the face and body of.")
-    if len(panel_asset_ids) + len(identity_asset_ids) > RENDER_PICTURES:
-        raise StoryboardError(f"{len(panel_asset_ids)} panels and {len(identity_asset_ids)} identity pictures are more "
+    modes = [m if m in MODES else "frame" for m in (modes or ["frame"] * len(beats))][: len(beats)]
+    modes += ["frame"] * (len(beats) - len(modes))
+    if len(panel_asset_ids) != len(beats):
+        raise StoryboardError(f"{len(beats)} shots need {len(beats)} panel slots (None where a shot has no panel).")
+    panels = [p for p, mode in zip(panel_asset_ids, modes) if mode != "none"]
+    if any(not p for p in panels):
+        raise StoryboardError("A shot with a panel mode of frame or look has no panel.")
+    if len(panels) + len(identity_asset_ids) > RENDER_PICTURES:
+        raise StoryboardError(f"{len(panels)} panels and {len(identity_asset_ids)} identity pictures are more "
                               f"than a render's {RENDER_PICTURES}; use a board, which splits the film into parts.")
-    if len(beats) != len(panel_asset_ids):
-        raise StoryboardError(f"{len(panel_asset_ids)} panels need {len(panel_asset_ids)} beats, one each; got {len(beats)}.")
     settings = settings or RenderSettings(aspect_ratio="9:16", continuity="off")
-    references = [ReferenceIn(asset_id=asset_id, role="picture", label=f"storyboard frame {number}")
-                  for number, asset_id in enumerate(panel_asset_ids, 1)]
+    numbers = segment_pictures(modes)
+    references = [ReferenceIn(asset_id=p, role="picture",
+                              label=f"{'first frame' if m == 'frame' else 'look reference'} for segment {i}")
+                  for i, (p, m) in enumerate(zip(panel_asset_ids, modes), 1) if m != "none"]
     references += [ReferenceIn(asset_id=asset_id, role="picture", label="identity (face and body)")
                    for asset_id in identity_asset_ids]
+    del numbers
     request = VideoRequest(
         references=references,
-        story=PlannerOptions(story=film_brief(beats, character, mood, music, len(identity_asset_ids)),
-                             segment_count=len(beats),
-                             segment_seconds=segment_seconds, aspect_ratio=settings.aspect_ratio),
+        story=PlannerOptions(story=film_brief(beats, character, mood, music, len(identity_asset_ids), modes, dialogue,
+                                              music_over),
+                             segment_count=len(beats), segment_seconds=segment_seconds,
+                             aspect_ratio=settings.aspect_ratio),
         settings=settings,
     )
     return await service.create_video(request)
@@ -349,10 +395,153 @@ async def identity_pack(service, name: str, description: str, identity_asset_ids
             "borders_found": cut["borders_found"], "note": cut["note"]}
 
 
+# --------------------------------------------------------------------------- engine rules
+
+PLATFORMS = ("general", "instagram", "fanvue")
+#: Added to every sheet and panel prompt, and checked on every panel, for a platform with rules.
+PLATFORM_RULE = {
+    "instagram": "Everyone is fully and modestly clothed in every panel: no nudity, no see-through or wet "
+                 "transparent fabric, no exposed nipples, no underwear-only looks.",
+}
+#: Draft renders fast to check the film; final is the one to post.
+QUALITY = {"draft": 0.6, "final": 0.98}
+REVIEWS = ("auto", "ask")
+CHECK_ROUNDS = 2
+CHECK_BATCH = 3
+MUSIC_MODEL = "minimax/music-3.0"
+MUSIC_COST = 0.15
+
+
+def platform_style(style: str, platform: str) -> str:
+    rule = PLATFORM_RULE.get(platform or "general", "")
+    return f"{style.strip()} {rule}".strip() if rule else style.strip()
+
+
+def pick_models(files: list[str]) -> dict:
+    """Which base model renders which kind of shot. Faces held to a first frame go to a reference-faithful hybrid
+    (10Eros beta5), physical action and positions to the newer one (beta7); either falls back to the server's
+    default ("") when it isn't installed."""
+    names = [f for f in files or []]
+    frame = next((f for f in names if "beta5" in f.lower()), "")
+    action = next((f for f in names if "beta7" in f.lower()), "")
+    return {"frame": frame or action, "action": action or frame}
+
+
+def plan_parts(modes: list[str], identities: int, models: dict) -> list[dict]:
+    """The renders a film is cut into, in order: a new part when the picture limit is reached or when the next
+    shot's kind needs another base model. [{"shots": [indices], "kind": "frame" | "action", "unet": file}]."""
+    room = RENDER_PICTURES - identities
+    parts: list[dict] = []
+    for index, mode in enumerate(modes):
+        kind = "frame" if mode == "frame" else "action"
+        unet = models.get(kind, "")
+        needs = 0 if mode == "none" else 1
+        part = parts[-1] if parts else None
+        used = sum(1 for i in part["shots"] if modes[i] != "none") if part else 0
+        if part is None or part["unet"] != unet or used + needs > room or len(part["shots"]) >= 12:
+            parts.append({"shots": [index], "kind": kind, "unet": unet})
+        else:
+            part["shots"].append(index)
+    return parts
+
+
+CHECK_PROMPT = """You check storyboard panels before they are animated. The FIRST image is the identity reference:
+the person every panel must show. The images after it are panels, in the order listed. For each panel decide
+whether it is usable, and say briefly what is wrong if it is not. A panel fails when:
+- it does not show the same person as the identity reference (a different face, hair, skin tone or a clearly
+  different body and proportions);
+- anatomy is broken: extra or missing fingers, limbs or nipples, twisted joints, a melted or doubled face;
+- there are artifacts: garbled text, a watermark, a duplicated person, a cut-off head where a face matters;
+- it breaks the platform rule given below, when one is given.
+Do not fail a panel for its style, its nudity (unless the platform rule forbids it) or the shot it chose.
+Reply with JSON only: {"panels": [{"shot": <number>, "ok": true or false, "issues": "<short, empty when ok>"}]}"""
+
+
+async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]:
+    """{shot index: what is wrong} for the panels a vision model rejects; {} when every panel passes or no vision
+    model answers (the check is a safety net, never a reason the film can't go ahead)."""
+    import base64
+
+    from . import models_llm
+    from .atlas import AtlasError
+    from .manhwa import parse_json
+
+    try:
+        identity, mime = await service.asset_file(board["identity_asset_ids"][0], 640)
+    except Exception:
+        return {}
+    chain = models_llm.resolve_many("vision", None, await service.model_catalogue(), vision=True)
+    rule = PLATFORM_RULE.get(board.get("platform") or "general", "")
+    failed: dict[int, str] = {}
+    for start in range(0, len(shots), CHECK_BATCH):
+        batch = [i for i in shots[start:start + CHECK_BATCH] if board["panels"][i]]
+        if not batch:
+            continue
+        parts = [{"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(identity).decode()}}]
+        for index in batch:
+            try:
+                data, kind = await service.asset_file(board["panels"][index], 640)
+            except Exception:
+                continue
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
+        ask = ("Panels, in order: " + ", ".join(f"shot {i + 1} ({board['shots'][i][:120]})" for i in batch) + "."
+               + (f"\nPlatform rule: {rule}" if rule else "\nNo platform rule."))
+        messages = [{"role": "system", "content": CHECK_PROMPT},
+                    {"role": "user", "content": [{"type": "text", "text": ask}, *parts]}]
+        for model in chain:
+            try:
+                reply, _ = await service.atlas.chat(model, messages, json_mode=True, max_tokens=1200, temperature=0,
+                                                    max_retries=1, purpose="storyboard check")
+            except AtlasError:
+                continue
+            verdicts = (parse_json(reply or "") or {}).get("panels")
+            if not isinstance(verdicts, list):
+                continue
+            for verdict in verdicts:
+                try:
+                    shot = int(verdict.get("shot")) - 1
+                except (TypeError, ValueError, AttributeError):
+                    continue
+                if shot in batch and verdict.get("ok") is False:
+                    failed[shot] = str(verdict.get("issues") or "rejected").strip()[:300]
+            break
+    return failed
+
+
+async def make_music(service, prompt: str) -> dict:
+    """One instrumental track for a whole film from MiniMax Music 3.0 on Atlas (about $0.15), stored as an audio asset."""
+    data = await service.image_atlas.generate_media(
+        {"model": MUSIC_MODEL, "prompt": prompt.strip()[:2000], "is_instrumental": True, "format": "mp3"},
+        endpoint="generateAudio", what="Music")
+    asset = await service.add_asset("film_music.mp3", io.BytesIO(data[0]), "audio/mpeg", len(data[0]),
+                                    collection="Music", tags=["music", "generated"],
+                                    source={"type": "generated", "engine": "atlas", "generator": MUSIC_MODEL,
+                                            "prompt": prompt.strip()[:500], "cost_usd": MUSIC_COST})
+    return asset
+
+
+def lay_music(film: str, music: str, out: str, seconds: float) -> bool:
+    """The track under the whole film: looped if short, faded out at the end, the scene's own sound kept low."""
+    import subprocess
+
+    fade = max(0.0, seconds - 2.5)
+    graph = (f"[1:a]volume=0.9,afade=t=out:st={fade:.2f}:d=2.5[m];"
+             "[0:a]volume=0.35[s];[s][m]amix=inputs=2:duration=first:dropout_transition=0[a]")
+    command = ["ffmpeg", "-y", "-loglevel", "error", "-i", film, "-stream_loop", "-1", "-i", music,
+               "-filter_complex", graph, "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", out]
+    if subprocess.run(command).returncode == 0:
+        return True
+    # a film without an audio stream: the track alone
+    command = ["ffmpeg", "-y", "-loglevel", "error", "-i", film, "-stream_loop", "-1", "-i", music,
+               "-filter_complex", f"[1:a]afade=t=out:st={fade:.2f}:d=2.5[a]", "-map", "0:v", "-map", "[a]",
+               "-c:v", "copy", "-c:a", "aac", "-shortest", out]
+    return subprocess.run(command).returncode == 0
+
+
 # --------------------------------------------------------------------------- boards
 
 #: A board while it is being worked on; anything else can be edited.
-BUSY = ("drawing", "rendering", "joining")
+BUSY = ("drawing", "checking", "rendering", "joining")
 
 
 class StoryboardStore:
@@ -399,10 +588,13 @@ class StoryboardStore:
 
 
 class StoryboardManager:
-    """Boards: a character, an ordered shot list, its sheet(s) and panels, and the film made from them.
+    """The film engine. A board is one film: its people, an ordered shot list (each with a mode, a motion and any
+    lines), the panels (drawn on Seedream Flash sheets, the user's own images, or cut from ready-made sheets), an
+    automatic check, an optional review stop, and the film -- rendered in parts (by base model and the nine-picture
+    limit), joined, with one music track over the whole of it.
 
-    More than eight shots are drawn as several sheets at once. The film is rendered in parts small enough for a
-    render's nine pictures (the panels plus the identity pictures) and joined into one video."""
+    Story, Manhwa, MCP, the agent and the Storyboard page all make films through this, so every one of them gets the
+    same steps and the same rules."""
 
     poll = 5.0
     RENDER_WAIT = 6 * 3600.0
@@ -411,6 +603,9 @@ class StoryboardManager:
         self.service = service
         self.store = StoryboardStore(service.settings.data_dir)
         self._tasks: dict[str, asyncio.Task] = {}
+        self.characters = None  # the CharacterManager; create_app sets it
+        #: called with the board when its film is done -- Story uses it to take a chapter's film
+        self.done_hooks: list = []
 
     # ---- reading
     def list(self) -> list[dict]:
@@ -422,10 +617,16 @@ class StoryboardManager:
             raise NotFound(f"No storyboard {board_id!r}.")
         return board
 
+    @staticmethod
+    def modes(board: dict) -> list[str]:
+        modes = [m if m in MODES else "frame" for m in board.get("modes") or []]
+        return (modes + ["frame"] * len(board["shots"]))[: len(board["shots"])]
+
     def view(self, board: dict | str) -> dict:
         board = self.board(board) if isinstance(board, str) else board
         assets = self.service.store.get_asset
         out = dict(board)
+        out["modes"] = self.modes(board)
         out["panel_views"] = [self.service.asset_view(assets(a)) if a and assets(a) else None for a in board["panels"]]
         out["identity_views"] = [self.service.asset_view(assets(a)) for a in board["identity_asset_ids"] if assets(a)]
         out["sheet_views"] = [dict(s, asset=self.service.asset_view(assets(s["asset_id"])) if assets(s["asset_id"]) else None)
@@ -438,18 +639,41 @@ class StoryboardManager:
         return out
 
     # ---- writing
-    def create(self, *, title: str, character: str, identity_asset_ids: list[str], shots: list[str],
-               aspect_ratio: str = "9:16", style: str = "", motions: list[str] | None = None, draw: bool = True,
-               link: dict | None = None, then_render: dict | None = None,
-               panel_asset_ids: list[str] | None = None, sheet_asset_id: str | None = None,
-               sheet_columns: int = 0, sheet_rows: int = 0) -> dict:
-        """panel_asset_ids: the user's own images as the panels, in shot order -- nothing is drawn (no model call),
-        the board is ready at once, and shots default to "shot N" (say what moves in motions).
+    def create(self, *, title: str, character: str = "", identity_asset_ids: list[str] | None = None,
+               shots: list[str] | None = None, aspect_ratio: str = "9:16", style: str = "",
+               motions: list[str] | None = None, draw: bool = True, link: dict | None = None,
+               then_render: dict | None = None, panel_asset_ids: list[str] | None = None,
+               sheet_asset_id: str | None = None, sheet_columns: int = 0, sheet_rows: int = 0,
+               characters: list[str] | None = None, modes: list[str] | None = None,
+               dialogue: list[list[str]] | None = None, platform: str = "", quality: str = "final",
+               review: str = "auto", check: bool = True, music_asset_id: str | None = None, music_prompt: str = "",
+               from_sheets: list[dict] | None = None) -> dict:
+        """A board, drawn (and, with then_render, filmed) in the background.
 
-        sheet_asset_id: a ready-made sheet instead. One merged from the user's images gives back those images
-        (sharper than cut-outs); any other sheet is cut into its panels (grid from columns/rows or its borders)."""
+        characters: names from the library -- their facts become the character text (character adds to it) and
+        their identity pictures the identity; their platform is the default. panel_asset_ids: the user's own
+        images as the panels (nothing drawn). sheet_asset_id / from_sheets: ready-made sheets cut into panels (a
+        sheet merged from the user's images gives those images back). modes: frame, look or none per shot.
+        review: auto films as soon as the panels pass the check; ask stops at status review for approve()."""
         shots = [s.strip() for s in shots or [] if s and s.strip()]
-        from_sheet = None
+        identity_asset_ids = list(identity_asset_ids or [])
+        names: list[str] = []
+        if characters:
+            if self.characters is None:
+                raise StoryboardError("The character library isn't available on this server.")
+            people = self.characters.resolve(characters)
+            names = people["names"]
+            character = f"{people['character']} {character.strip()}".strip()
+            identity_asset_ids = identity_asset_ids or people["identity_asset_ids"]
+            platform = platform or people["platform"]
+        platform = platform or "general"
+        if platform not in PLATFORMS:
+            raise StoryboardError(f"platform should be one of: {', '.join(PLATFORMS)}.")
+        if quality not in QUALITY:
+            raise StoryboardError(f"quality should be one of: {', '.join(QUALITY)}.")
+        if review not in REVIEWS:
+            raise StoryboardError(f"review should be one of: {', '.join(REVIEWS)}.")
+        sheets_to_cut = list(from_sheets or [])
         if sheet_asset_id:
             sheet = self.service.store.get_asset(sheet_asset_id)
             if sheet is None or sheet.get("kind") != "image":
@@ -458,7 +682,11 @@ class StoryboardManager:
             if source.get("type") == "composed" and source.get("images"):
                 panel_asset_ids = [i for i in source["images"] if self.service.store.get_asset(i)]
             else:
-                from_sheet = {"asset_id": sheet_asset_id, "columns": sheet_columns, "rows": sheet_rows}
+                sheets_to_cut.append({"asset_id": sheet_asset_id, "columns": sheet_columns, "rows": sheet_rows})
+        for sheet in sheets_to_cut:
+            asset = self.service.store.get_asset(sheet.get("asset_id"))
+            if asset is None or asset.get("kind") != "image":
+                raise StoryboardError(f"No image asset {sheet.get('asset_id')!r}.")
         if panel_asset_ids:
             for asset_id in panel_asset_ids:
                 asset = self.service.store.get_asset(asset_id)
@@ -468,37 +696,42 @@ class StoryboardManager:
                 raise StoryboardError(f"{len(panel_asset_ids)} images need {len(panel_asset_ids)} shots, one each (or none).")
             shots = shots or [f"shot {n}: animate this frame with natural, realistic motion"
                               for n in range(1, len(panel_asset_ids) + 1)]
-        if not shots and not from_sheet:
+        if not shots and not sheets_to_cut:
             raise StoryboardError("Give at least one shot.")
         if len(shots) > 40:
             raise StoryboardError("At most 40 shots on one board.")
         if not identity_asset_ids:
-            raise StoryboardError("Give the character's identity picture.")
+            raise StoryboardError("Give the character's identity picture, or a character from the library.")
         if len(identity_asset_ids) > 3:
             raise StoryboardError("At most 3 identity pictures (each one is a picture every render part carries).")
         for asset_id in identity_asset_ids:
             asset = self.service.store.get_asset(asset_id)
             if asset is None or asset.get("kind") != "image":
                 raise StoryboardError(f"No image asset {asset_id!r}.")
+        if music_asset_id:
+            music = self.service.store.get_asset(music_asset_id)
+            if music is None or music.get("kind") != "audio":
+                raise StoryboardError(f"music_asset_id must be an audio file in the library; {music_asset_id!r} isn't.")
         grid_for(max(1, min(len(shots), MAX_PANELS)), aspect_ratio)  # validates the aspect ratio
+        modes = [m if m in MODES else "frame" for m in (modes or [])]
         board = {"id": uuid.uuid4().hex[:12], "title": (title or "Storyboard").strip()[:120],
-                 "character": character.strip(), "identity_asset_ids": list(identity_asset_ids),
+                 "character": character.strip(), "characters": names, "identity_asset_ids": identity_asset_ids,
                  "aspect_ratio": aspect_ratio, "style": style.strip(), "shots": shots,
-                 "motions": [m.strip() for m in motions] if motions else [], "sheets": [], "panels": [None] * len(shots),
+                 "motions": [m.strip() for m in motions] if motions else [], "modes": modes,
+                 "dialogue": [list(d or []) for d in dialogue] if dialogue else [],
+                 "sheets": [], "panels": [None] * len(shots), "platform": platform, "quality": quality,
+                 "review": review, "check": bool(check), "checks": {},
+                 "music": {"asset_id": music_asset_id or None, "prompt": music_prompt.strip()},
                  "status": "draft", "error": "", "cost_usd": 0.0, "render": {}, "link": link or {},
-                 # {settings, segment_seconds, mood, music}: render as soon as the drawing is done (one-call films)
-                 "then_render": then_render, "from_sheet": from_sheet, "created_at": time.time()}
-        if from_sheet:  # cut in the background, like a drawing; the shots come from the panel count
+                 # {settings, segment_seconds, mood, music}: film as soon as the panels are ready (one-call films)
+                 "then_render": then_render, "from_sheets": sheets_to_cut or None, "created_at": time.time()}
+        if sheets_to_cut:  # cut in the background, like a drawing; the shots come from the panel count
             self.store.save(board)
             return self.start_draw(board["id"])
         if panel_asset_ids:
-            board.update(panels=list(panel_asset_ids), status="ready", then_render=None, own_images=True)
+            board.update(panels=list(panel_asset_ids), own_images=True)
             self.store.save(board)
-            if then_render:
-                return self.start_render(board["id"], RenderSettings(**then_render["settings"]) if then_render.get("settings") else None,
-                                         then_render.get("segment_seconds", 6.0), then_render.get("mood", ""),
-                                         then_render.get("music", ""))
-            return self.view(board)
+            return self.start_draw(board["id"]) if (check or then_render) else self._ready(board["id"])
         self.store.save(board)
         if draw:
             return self.start_draw(board["id"])
@@ -511,6 +744,11 @@ class StoryboardManager:
         for key in ("title", "character", "style", "aspect_ratio"):
             if fields.get(key) is not None:
                 board[key] = str(fields[key]).strip()
+        for key, allowed in (("platform", PLATFORMS), ("quality", tuple(QUALITY)), ("review", REVIEWS)):
+            if fields.get(key) is not None:
+                if fields[key] not in allowed:
+                    raise StoryboardError(f"{key} should be one of: {', '.join(allowed)}.")
+                board[key] = fields[key]
         if fields.get("shots") is not None:
             shots = [s.strip() for s in fields["shots"] if s and s.strip()]
             if not shots:
@@ -519,7 +757,19 @@ class StoryboardManager:
             board["shots"], board["panels"] = shots, panels[: len(shots)]
         if fields.get("motions") is not None:
             board["motions"] = [m.strip() for m in fields["motions"]]
-        grid_for(min(len(board["shots"]), MAX_PANELS), board["aspect_ratio"])
+        if fields.get("modes") is not None:
+            bad = [m for m in fields["modes"] if m not in MODES]
+            if bad:
+                raise StoryboardError(f"modes are frame, look or none, not {bad[0]!r}.")
+            board["modes"] = list(fields["modes"])
+        if fields.get("music_asset_id") is not None or fields.get("music_prompt") is not None:
+            music = board.get("music") or {}
+            if fields.get("music_asset_id") is not None:
+                music["asset_id"] = fields["music_asset_id"] or None
+            if fields.get("music_prompt") is not None:
+                music["prompt"] = fields["music_prompt"].strip()
+            board["music"] = music
+        grid_for(max(1, min(len(board["shots"]), MAX_PANELS)), board["aspect_ratio"])
         return self.view(self.store.save(board))
 
     def delete(self, board_id: str) -> dict:
@@ -540,7 +790,7 @@ class StoryboardManager:
         self._tasks[board_id] = task
         task.add_done_callback(lambda _t: self._tasks.pop(board_id, None) if self._tasks.get(board_id) is _t else None)
 
-    # ---- drawing
+    # ---- drawing, checking, review
     def start_draw(self, board_id: str, only_missing: bool = False) -> dict:
         board = self.board(board_id)
         if board["status"] in BUSY:
@@ -549,70 +799,131 @@ class StoryboardManager:
         self._launch(board_id, self._draw(board_id, only_missing))
         return self.view(board)
 
+    def _platform_style(self, board: dict) -> str:
+        return platform_style(board.get("style") or "", board.get("platform") or "general")
+
     async def _cut(self, board_id: str) -> None:
-        """A board made from a ready-made sheet: its panels become the shots."""
+        """Panels from ready-made sheets, in order: they become the shots."""
         board = self.board(board_id)
-        sheet = board["from_sheet"]
-        cut = await split_sheet(self.service, sheet["asset_id"], sheet.get("columns", 0), sheet.get("rows", 0),
-                                collection=f"storyboard/{board['title']}", tags=[f"board:{board_id}"])
-        panels = [p["id"] for p in cut["panels"]]
+        panels, sheets, notes = [], [], []
+        for sheet in board.get("from_sheets") or []:
+            cut = await split_sheet(self.service, sheet["asset_id"], sheet.get("columns", 0), sheet.get("rows", 0),
+                                    sheet.get("panels"), collection=f"storyboard/{board['title']}", tags=[f"board:{board_id}"])
+            first = len(panels)
+            panels += [p["id"] for p in cut["panels"]]
+            sheets.append({"asset_id": sheet["asset_id"], "grid": None, "shots": list(range(first, len(panels))),
+                           "borders_found": cut["borders_found"]})
+            if cut["note"]:
+                notes.append(cut["note"])
         board = self.board(board_id)
         if board["shots"] and len(board["shots"]) != len(panels):
-            raise StoryboardError(f"The sheet has {len(panels)} panels but {len(board['shots'])} shots were given: "
+            raise StoryboardError(f"The sheets have {len(panels)} panels but {len(board['shots'])} shots were given: "
                                   "give one shot per panel, or none.")
         shots = board["shots"] or [f"shot {n}: animate this frame with natural, realistic motion" for n in range(1, len(panels) + 1)]
-        board.update(shots=shots, panels=panels, from_sheet=None, status="ready", error="", note=cut["note"],
-                     sheets=[{"asset_id": sheet["asset_id"], "grid": None, "shots": list(range(len(panels))),
-                              "borders_found": cut["borders_found"]}])
+        board.update(shots=shots, panels=panels, from_sheets=None, sheets=sheets, note=" ".join(dict.fromkeys(notes)))
         self.store.save(board)
 
     async def _draw(self, board_id: str, only_missing: bool) -> None:
         try:
             board = self.board(board_id)
-            if board.get("from_sheet"):
-                await self._cut(board_id)
-                board = self.board(board_id)
-                follow = board.pop("then_render", None)
-                if follow:
+            if board.get("from_sheets") or board.get("from_sheet"):
+                if board.get("from_sheet"):  # a board saved by an earlier version
+                    board["from_sheets"] = [board.pop("from_sheet")]
                     self.store.save(board)
-                    self.start_render(board_id, RenderSettings(**follow["settings"]) if follow.get("settings") else None,
-                                      follow.get("segment_seconds", 6.0), follow.get("mood", ""), follow.get("music", ""))
-                return
-            todo = [i for i, panel in enumerate(board["panels"]) if not (only_missing and panel)]
-            chunks = [todo[i:i + MAX_PANELS] for i in range(0, len(todo), MAX_PANELS)]
-            collection = f"storyboard/{board['title']}"
-
-            async def one(indices: list[int]) -> tuple[list[int], dict, dict]:
-                made = await make_sheet(self.service, [board["shots"][i] for i in indices], board["character"],
-                                        board["identity_asset_ids"], board["aspect_ratio"], board["style"])
-                grid = made["grid"]
-                cut = await split_sheet(self.service, made["sheet"]["id"], grid["columns"], grid["rows"], grid["panels"],
-                                        collection=collection, tags=[f"board:{board_id}"])
-                return indices, made, cut
-
-            results = await asyncio.gather(*(one(c) for c in chunks))
+                await self._cut(board_id)
+            elif not board.get("own_images"):
+                await self._draw_sheets(board_id, only_missing)
             board = self.board(board_id)
-            notes = []
-            for indices, made, cut in results:
-                board["sheets"].append({"asset_id": made["sheet"]["id"], "grid": made["grid"], "shots": indices,
-                                        "borders_found": cut["borders_found"]})
-                for index, panel in zip(indices, cut["panels"]):
-                    board["panels"][index] = panel["id"]
-                board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
-                if cut["note"]:
-                    notes.append(cut["note"])
-            board.update(status="ready", error="", note=" ".join(dict.fromkeys(notes)))
-            self.store.save(board)
-            follow = board.pop("then_render", None)
-            if follow:
-                self.store.save(board)
-                self.start_render(board_id, RenderSettings(**follow["settings"]) if follow.get("settings") else None,
-                                  follow.get("segment_seconds", 6.0), follow.get("mood", ""), follow.get("music", ""))
+            if board.get("check"):  # boards from before the check have none
+                await self._check(board_id)
+            self._ready(board_id)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # the board says what went wrong; nothing else is waiting on it
             log.warning("storyboard %s: drawing failed: %s", board_id, exc)
             self._set(board_id, status="failed", error=f"Drawing failed: {exc}")
+
+    async def _draw_sheets(self, board_id: str, only_missing: bool) -> None:
+        board = self.board(board_id)
+        modes = self.modes(board)
+        todo = [i for i, panel in enumerate(board["panels"]) if modes[i] != "none" and not (only_missing and panel)]
+        chunks = [todo[i:i + MAX_PANELS] for i in range(0, len(todo), MAX_PANELS)]
+        collection = f"storyboard/{board['title']}"
+        style = self._platform_style(board)
+
+        async def one(indices: list[int]) -> tuple[list[int], dict, dict]:
+            made = await make_sheet(self.service, [board["shots"][i] for i in indices], board["character"],
+                                    board["identity_asset_ids"], board["aspect_ratio"], style)
+            grid = made["grid"]
+            cut = await split_sheet(self.service, made["sheet"]["id"], grid["columns"], grid["rows"], grid["panels"],
+                                    collection=collection, tags=[f"board:{board_id}"])
+            return indices, made, cut
+
+        results = await asyncio.gather(*(one(c) for c in chunks))
+        board = self.board(board_id)
+        notes = []
+        for indices, made, cut in results:
+            board["sheets"].append({"asset_id": made["sheet"]["id"], "grid": made["grid"], "shots": indices,
+                                    "borders_found": cut["borders_found"]})
+            for index, panel in zip(indices, cut["panels"]):
+                board["panels"][index] = panel["id"]
+            board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
+            if cut["note"]:
+                notes.append(cut["note"])
+        board["note"] = " ".join(dict.fromkeys(notes))
+        self.store.save(board)
+
+    async def _check(self, board_id: str) -> None:
+        """A vision model looks at every panel; rejected drawn panels are drawn again (at most CHECK_ROUNDS times).
+        The user's own images are only reported on, never replaced."""
+        board = self._set(board_id, status="checking")
+        modes = self.modes(board)
+        todo = [i for i, panel in enumerate(board["panels"]) if panel and modes[i] != "none"]
+        checks: dict = {}
+        for round_number in range(CHECK_ROUNDS + 1):
+            board = self.board(board_id)
+            failed = await check_panels(self.service, board, todo)
+            for index in todo:
+                checks[str(index)] = {"ok": index not in failed, "issues": failed.get(index, ""), "round": round_number}
+            self._set(board_id, checks=dict(checks))
+            if not failed or board.get("own_images") or round_number == CHECK_ROUNDS:
+                break
+            for index, issues in failed.items():
+                board = self.board(board_id)
+                made = await redo_panel(self.service, f"{board['shots'][index]} Fix: {issues}", board["character"],
+                                        board["identity_asset_ids"], board["aspect_ratio"], self._platform_style(board),
+                                        board["panels"][index], number=index + 1,
+                                        collection=f"storyboard/{board['title']}")
+                board = self.board(board_id)
+                board["panels"][index] = made["panel"]["id"]
+                board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
+                self.store.save(board)
+            todo = list(failed)
+
+    def _ready(self, board_id: str) -> dict:
+        """After drawing and checking: film straight away (review auto with a film asked for), stop for review
+        (review ask), or wait (ready)."""
+        board = self.board(board_id)
+        follow = board.get("then_render")
+        if follow and board.get("review", "auto") == "auto":
+            board = self._set(board_id, then_render=None, status="ready")
+            return self.start_render(board_id, RenderSettings(**follow["settings"]) if follow.get("settings") else None,
+                                     follow.get("segment_seconds", 6.0), follow.get("mood", ""), follow.get("music", ""))
+        return self.view(self._set(board_id, status="review" if follow else "ready", error=""))
+
+    def approve(self, board_id: str, settings: RenderSettings | None = None, segment_seconds: float | None = None,
+                mood: str | None = None, music: str | None = None) -> dict:
+        """The user has looked at the panels: make the film (with what the one-call request asked for, unless
+        overridden here)."""
+        board = self.board(board_id)
+        if board["status"] not in ("review", "ready"):
+            raise StoryboardError(f"The board is {board['status']}: there is nothing to approve yet.")
+        follow = board.get("then_render") or {}
+        self._set(board_id, then_render=None, status="ready")
+        base = settings or (RenderSettings(**follow["settings"]) if follow.get("settings") else None)
+        return self.start_render(board_id, base, segment_seconds if segment_seconds is not None else follow.get("segment_seconds", 6.0),
+                                 mood if mood is not None else follow.get("mood", ""),
+                                 music if music is not None else follow.get("music", ""))
 
     async def redo_panel(self, board_id: str, number: int, shot: str | None = None, keep_setting: bool = True) -> dict:
         """Shot `number` (1-based) drawn again on its own; the new panel takes its place."""
@@ -625,14 +936,15 @@ class StoryboardManager:
             board["shots"][number - 1] = shot.strip()
         previous = board["panels"][number - 1] if keep_setting else None
         made = await redo_panel(self.service, board["shots"][number - 1], board["character"], board["identity_asset_ids"],
-                                board["aspect_ratio"], board["style"], previous, number=number,
+                                board["aspect_ratio"], self._platform_style(board), previous, number=number,
                                 collection=f"storyboard/{board['title']}")
         text = board["shots"][number - 1]
         board = self.board(board_id)  # fresh: the drawing took a while
         board["shots"][number - 1] = text
         board["panels"][number - 1] = made["panel"]["id"]
         board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
-        if board["status"] in ("draft", "failed") and all(board["panels"]):
+        (board.get("checks") or {}).pop(str(number - 1), None)
+        if board["status"] in ("draft", "failed") and self._missing(board) == []:
             board["status"] = "ready"
         return self.view(self.store.save(board))
 
@@ -645,32 +957,46 @@ class StoryboardManager:
         if not 1 <= number <= len(board["shots"]):
             raise StoryboardError(f"Shot {number} is not on this board (1 to {len(board['shots'])}).")
         board["panels"][number - 1] = asset_id
-        if all(board["panels"]) and board["status"] in ("draft", "failed"):
+        (board.get("checks") or {}).pop(str(number - 1), None)
+        if self._missing(board) == [] and board["status"] in ("draft", "failed"):
             board["status"] = "ready"
         return self.view(self.store.save(board))
 
     # ---- the film
+    def _missing(self, board: dict) -> list[str]:
+        modes = self.modes(board)
+        return [str(i + 1) for i, panel in enumerate(board["panels"])
+                if modes[i] != "none" and (not panel or not self.service.store.get_asset(panel))]
+
     def start_render(self, board_id: str, settings: RenderSettings | None = None, segment_seconds: float = 6.0,
                      mood: str = "", music: str = "") -> dict:
         board = self.board(board_id)
         if board["status"] in BUSY:
             raise StoryboardError(f"The board is {board['status']}; wait for it to finish.")
-        missing = [str(i + 1) for i, panel in enumerate(board["panels"]) if not panel or not self.service.store.get_asset(panel)]
+        missing = self._missing(board)
         if missing:
             raise StoryboardError(f"Shot{'s' if len(missing) > 1 else ''} {', '.join(missing)} ha{'ve' if len(missing) > 1 else 's'} "
                                   "no panel yet: draw the board, or redo those panels.")
-        settings = (settings or RenderSettings(continuity="off")).model_copy(update={"aspect_ratio": board["aspect_ratio"]})
+        quality = board.get("quality") or "final"
+        settings = settings or RenderSettings(continuity="off")
+        update = {"aspect_ratio": board["aspect_ratio"]}
+        if "megapixels" not in settings.model_fields_set:  # the quality preset decides unless a size was asked for
+            update["megapixels"] = QUALITY.get(quality, 0.98)
+        settings = settings.model_copy(update=update)
         board["render"] = {"jobs": [], "settings": settings.model_dump(), "segment_seconds": segment_seconds,
-                           "mood": mood, "music": music, "film_asset_id": None, "drive": ""}
+                           "mood": mood, "music": music, "film_asset_id": None, "drive": "",
+                           "explicit_unet": bool(settings.unet_name)}
         board.update(status="rendering", error="")
         self.store.save(board)
         self._launch(board_id, self._render(board_id))
         return self.view(board)
 
-    def _parts(self, board: dict) -> list[list[int]]:
-        size = RENDER_PICTURES - len(board["identity_asset_ids"])
-        indices = list(range(len(board["shots"])))
-        return [indices[i:i + size] for i in range(0, len(indices), size)]
+    async def _models(self, board: dict) -> dict:
+        try:
+            files = await self.service.available_models("diffusion_models")
+        except Exception:
+            files = []
+        return pick_models(files)
 
     async def _wait(self, job_id: str) -> dict:
         deadline = time.monotonic() + self.RENDER_WAIT
@@ -685,17 +1011,35 @@ class StoryboardManager:
         try:
             board = self.board(board_id)
             render = board["render"]
-            settings = RenderSettings(**render["settings"])
-            parts = self._parts(board)
+            base = RenderSettings(**render["settings"])
+            music = board.get("music") or {}
+            if music.get("prompt") and not music.get("asset_id"):  # one track for the whole film, made once
+                track = await make_music(self.service, music["prompt"])
+                board = self.board(board_id)
+                board["music"]["asset_id"] = track["id"]
+                board["cost_usd"] = round(board.get("cost_usd", 0) + MUSIC_COST, 4)
+                self.store.save(board)
+            music_over = bool((board.get("music") or {}).get("asset_id"))
+            modes = self.modes(board)
+            if "parts" not in render:
+                models = {"frame": "", "action": ""} if render.get("explicit_unet") else await self._models(board)
+                render["parts"] = plan_parts(modes, len(board["identity_asset_ids"]), models)
+                board = self.board(board_id)
+                board["render"]["parts"] = render["parts"]
+                self.store.save(board)
             # resumable: parts already submitted keep their jobs
-            for number, indices in enumerate(parts):
-                if number < len(render["jobs"]):
+            for number, part in enumerate(render["parts"]):
+                board = self.board(board_id)
+                if number < len(board["render"]["jobs"]):
                     continue
+                indices = part["shots"]
                 motions = [(board["motions"][i] if i < len(board["motions"]) and board["motions"][i] else board["shots"][i])
                            for i in indices]
+                lines = [(board.get("dialogue") or [])[i] if i < len(board.get("dialogue") or []) else [] for i in indices]
+                settings = base.model_copy(update={"unet_name": part["unet"]}) if part.get("unet") else base
                 job = await render_film(self.service, [board["panels"][i] for i in indices], board["identity_asset_ids"],
                                         motions, board["character"], settings, render["segment_seconds"],
-                                        render["mood"], render["music"])
+                                        render["mood"], render["music"], [modes[i] for i in indices], lines, music_over)
                 board = self.board(board_id)
                 board["render"]["jobs"].append(job["id"])
                 self.store.save(board)
@@ -713,11 +1057,12 @@ class StoryboardManager:
             self._set(board_id, status="failed", error=str(exc))
 
     async def _join(self, board_id: str) -> None:
-        from .manhwa import concat_videos, film_to_drive, rendered_file
+        from .manhwa import concat_videos, film_to_drive, media_seconds, rendered_file
 
         board = self.board(board_id)
         jobs = board["render"]["jobs"]
         work = tempfile.mkdtemp(prefix="hawk_board_")
+        note = ""
         try:
             files = [await rendered_file(self.service, job_id, os.path.join(work, f"part_{n:02d}.mp4"))
                      for n, job_id in enumerate(jobs, 1)]
@@ -728,6 +1073,18 @@ class StoryboardManager:
                 if not shutil.which("ffmpeg"):
                     raise Unavailable("ffmpeg is not installed on the server; run the notebook's ffmpeg cell.")
                 await asyncio.to_thread(concat_videos, files, out)
+            track_id = (board.get("music") or {}).get("asset_id")
+            track = self.service.store.get_asset(track_id) if track_id else None
+            if track and shutil.which("ffmpeg"):
+                music_path = os.path.join(work, "music" + (os.path.splitext(track.get("filename") or "")[1] or ".mp3"))
+                with open(music_path, "wb") as handle:
+                    handle.write(await self.service.asset_bytes(track))
+                mixed = os.path.join(work, "film_music.mp4")
+                seconds = await asyncio.to_thread(media_seconds, out) or 0.0
+                if await asyncio.to_thread(lay_music, out, music_path, mixed, seconds):
+                    out = mixed
+                else:
+                    note = "The music track could not be laid over the film; it has each part's own sound."
             slug = re.sub(r"[^0-9A-Za-z]+", "-", board["title"]).strip("-").lower() or "storyboard"
             name = f"{slug}_{len(board['shots'])}-shots.mp4"
             with open(out, "rb") as handle:
@@ -735,20 +1092,27 @@ class StoryboardManager:
                     name, handle, "video/mp4", os.path.getsize(out), collection=f"storyboard/{board['title']}",
                     tags=["storyboard", "film"], local_path=out, dedupe=False,
                     source={"type": "generated", "engine": "ffmpeg", "generator": "storyboard film",
-                            "board": board_id, "jobs": jobs})
+                            "board": board_id, "jobs": jobs, "music": track_id})
             drive = await film_to_drive(self.service, out, name)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         board = self.board(board_id)
         board["render"].update(film_asset_id=asset["id"], drive=drive)
-        board.update(status="done", error="")
+        board.update(status="done", error="", note=note or board.get("note", ""))
         self.store.save(board)
+        for hook in self.done_hooks:
+            try:
+                result = hook(board)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:  # a hook failing (a story chapter gone) never undoes the film
+                log.warning("storyboard %s: done hook failed: %s", board_id, exc)
 
     async def resume(self) -> list[str]:
         """After a restart: renders carry on (finished parts are reused); a drawing in flight is marked failed."""
         resumed = []
         for board in self.store.all():
-            if board.get("status") == "drawing":
+            if board.get("status") in ("drawing", "checking"):
                 self._set(board["id"], status="failed", error="The server restarted while drawing; draw again.")
             elif board.get("status") in ("rendering", "joining"):
                 self._set(board["id"], status="rendering")
@@ -849,7 +1213,8 @@ WRITER_IMAGES = 4
 
 
 async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | None = None, count: int = 8,
-                        aspect_ratio: str = "9:16", models: str | None = None, character: str = "") -> dict:
+                        aspect_ratio: str = "9:16", models: str | None = None, character: str = "",
+                        platform: str = "general") -> dict:
     """A storyboard written by an LLM from the idea and the reference images: the character as the images show
     them, the look, one shot line and one motion line per shot. The system prompt is the editable "storyboard"
     prompt (Prompts page), with the platform rules after it."""
@@ -875,7 +1240,7 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
     chain = models_llm.resolve_many("planner", models or WRITER_MODELS, await service.model_catalogue(), vision=bool(parts))
     if not chain:
         raise Unavailable("No model is set up to write the shots.")
-    ask = (f"Idea: {idea}\nShots: exactly {count}\nVideo shape: {aspect_ratio}\n"
+    ask = (f"Idea: {idea}\nShots: exactly {count}\nVideo shape: {aspect_ratio}\nPlatform: {platform or 'general'}\n"
            + (f"The character, as the user describes them -- these facts are fixed; keep them and add only what the "
               f"pictures show beyond them: {character.strip()}\n" if character.strip() else "")
            + (f"The first {len(parts)} attached image{'s are' if len(parts) > 1 else ' is'} the character's reference."
@@ -896,6 +1261,55 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
             failures.append(f"{model}: wrote {len(shots)} of {count} shots")
             continue
         motions = [str(m).strip() for m in data.get("motions") or []][:count]
+        modes = [str(m).strip().lower() for m in data.get("modes") or []][:count]
+        modes = [m if m in MODES else "frame" for m in modes] + ["frame"] * (count - len(modes))
         return {"character": str(data.get("character") or "").strip(), "style": str(data.get("style") or "").strip(),
-                "shots": shots[:count], "motions": motions + [""] * (count - len(motions)), "model": model}
+                "shots": shots[:count], "motions": motions + [""] * (count - len(motions)), "modes": modes,
+                "model": model}
     raise Unavailable("No model wrote the shots: " + (" | ".join(failures) or "none answered."))
+
+
+# --------------------------------------------------------------------------- one call for a film
+
+async def make_film(boards: "StoryboardManager", *, characters: list[str] | None = None,
+                    identity_asset_ids: list[str] | None = None, character: str = "", idea: str = "",
+                    shots: list[str] | None = None, motions: list[str] | None = None, modes: list[str] | None = None,
+                    dialogue: list[list[str]] | None = None, shot_count: int = 8,
+                    panel_asset_ids: list[str] | None = None, sheet_asset_id: str | None = None,
+                    from_sheets: list[dict] | None = None, title: str = "", aspect_ratio: str = "9:16",
+                    style: str = "", platform: str = "", quality: str = "final", review: str = "ask",
+                    music_asset_id: str | None = None, music_prompt: str = "", segment_seconds: float = 6.0,
+                    mood: str = "", settings: RenderSettings | None = None, link: dict | None = None) -> dict:
+    """Who, what, where it goes -- and the engine does the rest: the shots are written when only an idea is given
+    (with the people's facts fixed and a mode chosen per shot), drawn or taken from the user's images or sheets,
+    checked, and filmed -- at once (review auto) or after approve (review ask)."""
+    service = boards.service
+    facts, identity, people_platform = character, list(identity_asset_ids or []), ""
+    if characters:
+        if boards.characters is None:
+            raise StoryboardError("The character library isn't available on this server.")
+        people = boards.characters.resolve(characters)
+        facts = f"{people['character']} {character.strip()}".strip()
+        identity = identity or people["identity_asset_ids"]
+        people_platform = people["platform"]
+    platform = platform or people_platform or "general"
+    written = None
+    if not shots and not panel_asset_ids and not sheet_asset_id and not from_sheets:
+        if not idea.strip():
+            raise StoryboardError("Give an idea (the shots are written for you), shots, your own images or a sheet.")
+        written = await suggest_shots(service, idea, identity, shot_count, aspect_ratio, character=facts, platform=platform)
+        shots, motions, modes = written["shots"], motions or written["motions"], modes or written["modes"]
+        style = style or written["style"]
+    follow = {"settings": settings.model_dump() if settings else None, "segment_seconds": segment_seconds,
+              "mood": mood, "music": ""}
+    board = boards.create(title=title or (idea.strip()[:80] if idea else "Film"),
+                          character="" if characters else (facts or (written or {}).get("character", "")),
+                          identity_asset_ids=identity if not characters else (identity_asset_ids or None),
+                          characters=characters, shots=shots or [], motions=motions, modes=modes, dialogue=dialogue,
+                          aspect_ratio=aspect_ratio, style=style, platform=platform, quality=quality, review=review,
+                          music_asset_id=music_asset_id, music_prompt=music_prompt, then_render=follow,
+                          panel_asset_ids=panel_asset_ids, sheet_asset_id=sheet_asset_id, from_sheets=from_sheets,
+                          link=link)
+    if written:
+        board["written_by"] = written.get("model")
+    return board

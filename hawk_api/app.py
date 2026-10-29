@@ -22,7 +22,8 @@ from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
 from .story import StoryManager
-from .storyboard import StoryboardManager, compose_sheet, identity_pack, suggest_shots
+from .characters import CharacterManager
+from .storyboard import StoryboardManager, compose_sheet, identity_pack, make_film, suggest_shots
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -36,7 +37,8 @@ from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
-    IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn
+    IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
+    CharacterPackIn, FilmIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -105,11 +107,14 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     manhwa = ManhwaManager(service)
     stories = StoryManager(service)
     boards = StoryboardManager(service)
+    characters = CharacterManager(service)
+    boards.characters = characters
     stories.boards = boards  # a chapter's storyboard is a board
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
-    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories, boards=boards)
+    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories, boards=boards,
+                    characters=characters)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -158,6 +163,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     app.state.manhwa = manhwa
     app.state.stories = stories
     app.state.boards = boards
+    app.state.characters = characters
     app.state.snapshots = snapshots
 
     @app.exception_handler(RequestError)
@@ -599,7 +605,9 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         return boards.create(title=body.title, character=body.character, identity_asset_ids=body.identity_asset_ids,
                              shots=body.shots, aspect_ratio=body.aspect_ratio, style=body.style, motions=body.motions,
                              draw=body.draw, panel_asset_ids=body.panel_asset_ids, sheet_asset_id=body.sheet_asset_id,
-                             sheet_columns=body.sheet_columns, sheet_rows=body.sheet_rows)
+                             sheet_columns=body.sheet_columns, sheet_rows=body.sheet_rows, characters=body.characters,
+                             modes=body.modes, platform=body.platform, quality=body.quality, review=body.review,
+                             check=body.check, music_asset_id=body.music_asset_id, music_prompt=body.music_prompt)
 
     @app.post("/v1/storyboards/suggest", tags=["storyboard"])
     async def board_suggest(body: StoryboardSuggestIn):
@@ -631,6 +639,42 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         if body.asset_id:
             return boards.set_panel(board_id, number, body.asset_id)
         return await boards.redo_panel(board_id, number, shot=body.shot, keep_setting=body.keep_setting)
+
+    @app.post("/v1/storyboards/{board_id}/approve", tags=["storyboard"], status_code=202)
+    async def board_approve(board_id: str, body: StoryboardApproveIn):
+        """The panels are good: make the film (what the request asked for, unless overridden here)."""
+        return boards.approve(board_id, body.settings, body.segment_seconds, body.mood)
+
+    @app.post("/v1/films", tags=["storyboard"], status_code=202)
+    async def films_make(body: FilmIn):
+        """Who, what, where it goes: the shots are written (from the idea), drawn or taken from your images or a
+        sheet, checked, and filmed -- after your approval (review ask, the default) or straight away (auto)."""
+        return await make_film(boards, settings=body.settings, **body.model_dump(exclude={"settings"}))
+
+    @app.get("/v1/characters", tags=["characters"])
+    async def characters_list():
+        return {"characters": characters.list()}
+
+    @app.post("/v1/characters", tags=["characters"], status_code=201)
+    async def characters_create(body: CharacterIn):
+        return characters.create(body.name, body.facts, body.identity_asset_ids, body.notes, body.platform)
+
+    @app.get("/v1/characters/{name}", tags=["characters"])
+    async def characters_get(name: str):
+        return characters.view(name)
+
+    @app.patch("/v1/characters/{name}", tags=["characters"])
+    async def characters_patch(name: str, body: CharacterPatch):
+        return characters.update(name, **body.model_dump(exclude_none=True))
+
+    @app.delete("/v1/characters/{name}", tags=["characters"])
+    async def characters_delete(name: str):
+        return characters.delete(name)
+
+    @app.post("/v1/characters/{name}/pack", tags=["characters"])
+    async def characters_pack(name: str, body: CharacterPackIn):
+        """Front, back, side and face views drawn as one $0.018 sheet and kept on the character."""
+        return await characters.make_pack(name, anatomy=body.anatomy, style=body.style)
 
     @app.post("/v1/storyboards/{board_id}/render", tags=["storyboard"], status_code=202)
     async def board_render(board_id: str, body: StoryboardRenderIn):

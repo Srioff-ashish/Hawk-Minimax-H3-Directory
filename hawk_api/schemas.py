@@ -543,8 +543,8 @@ class StoryChapterImageIn(BaseModel):
 
 class StoryboardIn(BaseModel):
     title: str = Field("Storyboard", max_length=120)
-    character: str = Field(min_length=1, max_length=2000, description="Who is in every shot and how they look.")
-    identity_asset_ids: list[str] = Field(min_length=1, max_length=3,
+    character: str = Field("", max_length=2000, description="Who is in every shot and how they look (adds to a library character's facts).")
+    identity_asset_ids: list[str] = Field(default_factory=list, max_length=3,
                                           description="The character's identity picture(s), ideally full body on a plain background.")
     shots: list[str] = Field(default_factory=list, max_length=40, description="One shot per line, in story order (pose, place, clothing).")
     motions: list[str] | None = Field(None, description="Optional: what moves in each shot's video; default the shot text.")
@@ -559,9 +559,23 @@ class StoryboardIn(BaseModel):
         "into its panels (grid from sheet_columns/sheet_rows, or found from its borders)."))
     sheet_columns: int = Field(0, ge=0, le=40)
     sheet_rows: int = Field(0, ge=0, le=40)
+    characters: list[str] | None = Field(None, max_length=3, description="Names from the character library: their facts and identity pictures.")
+    modes: list[Literal["frame", "look", "none"]] | None = Field(None, description="Per shot: frame (first frame), look (setting and person only; the video model composes the action), none.")
+    platform: Literal["", "general", "instagram", "fanvue"] = ""
+    quality: Literal["draft", "final"] = "final"
+    review: Literal["auto", "ask"] = "auto"
+    check: bool = Field(True, description="A vision model checks every panel; rejected drawn panels are drawn again.")
+    music_asset_id: str | None = Field(None, description="One track from the library laid over the whole film.")
+    music_prompt: str = Field("", max_length=2000, description="Or one instrumental track composed for the film (MiniMax Music 3.0, about $0.15).")
 
 
 class StoryboardPatch(BaseModel):
+    modes: list[Literal["frame", "look", "none"]] | None = None
+    platform: Literal["general", "instagram", "fanvue"] | None = None
+    quality: Literal["draft", "final"] | None = None
+    review: Literal["auto", "ask"] | None = None
+    music_asset_id: str | None = None
+    music_prompt: str | None = None
     title: str | None = None
     character: str | None = None
     style: str | None = None
@@ -613,3 +627,54 @@ class StoryboardSuggestIn(BaseModel):
     aspect_ratio: AspectRatio = "9:16"
     models: str | None = Field(None, description="A comma-separated model chain; default Gemma 4 31B, DeepSeek, Kimi K2.6.")
     character: str = Field("", max_length=2000, description="What you already know about the character (age, looks): kept as fixed facts.")
+
+
+class StoryboardApproveIn(BaseModel):
+    settings: RenderSettings | None = None
+    segment_seconds: float | None = Field(None, ge=1, le=15)
+    mood: str | None = Field(None, max_length=1000)
+
+
+class CharacterIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    facts: str = Field(min_length=1, max_length=2000, description="What every prompt keeps: age, ethnicity, figure, hair. Adults only.")
+    identity_asset_ids: list[str] = Field(default_factory=list, max_length=3)
+    notes: str = Field("", max_length=1000, description="Wording that fixes a model's habit, e.g. 'teardrop breasts with natural sag'.")
+    platform: Literal["general", "instagram", "fanvue"] = "general"
+
+
+class CharacterPatch(BaseModel):
+    name: str | None = Field(None, max_length=80)
+    facts: str | None = Field(None, max_length=2000)
+    identity_asset_ids: list[str] | None = Field(None, max_length=3)
+    notes: str | None = Field(None, max_length=1000)
+    platform: Literal["general", "instagram", "fanvue"] | None = None
+
+
+class CharacterPackIn(BaseModel):
+    anatomy: bool = Field(False, description="Add nude views (adult platforms only).")
+    style: str = Field("", max_length=1000)
+
+
+class FilmIn(BaseModel):
+    characters: list[str] | None = Field(None, max_length=3, description="Names from the character library.")
+    identity_asset_ids: list[str] | None = Field(None, max_length=3, description="Or identity pictures directly.")
+    character: str = Field("", max_length=2000)
+    idea: str = Field("", max_length=2000, description="With no shots, the shots are written from this.")
+    shots: list[str] | None = Field(None, max_length=40)
+    motions: list[str] | None = None
+    modes: list[Literal["frame", "look", "none"]] | None = None
+    shot_count: int = Field(8, ge=1, le=40)
+    panel_asset_ids: list[str] | None = Field(None, max_length=40)
+    sheet_asset_id: str | None = None
+    title: str = Field("", max_length=120)
+    aspect_ratio: AspectRatio = "9:16"
+    style: str = Field("", max_length=1000)
+    platform: Literal["", "general", "instagram", "fanvue"] = ""
+    quality: Literal["draft", "final"] = "final"
+    review: Literal["auto", "ask"] = "ask"
+    music_asset_id: str | None = None
+    music_prompt: str = Field("", max_length=2000)
+    segment_seconds: float = Field(6.0, ge=1, le=15)
+    mood: str = Field("", max_length=1000)
+    settings: RenderSettings | None = None

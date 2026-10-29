@@ -1293,7 +1293,13 @@
             <div class="card-head"><h2>Storyboard</h2><span class="badge plain" id="sbStatus" hidden></span><div class="spacer"></div><select class="select" id="sbPick" style="width:auto;max-width:55%;height:30px"></select><button class="btn btn-sm" type="button" id="sbNew">New board</button></div>
             <form class="card-body grid" id="sbForm" autocomplete="off">
               <label class="field"><span class="label">Title</span><input class="input" id="sbTitle" maxlength="120" placeholder="e.g. Rebel – villa day"></label>
-              <label class="field"><span class="label">Character <span class="hint">who is in every shot, how they look</span></span><textarea class="textarea" id="sbCharacter" rows="2" style="min-height:56px" maxlength="2000" placeholder="e.g. Rebel: a fair-skinned Indian woman, 45, very petite, long black hair…"></textarea></label>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Character <span class="hint">from the library</span></span><select class="select" id="sbChar"><option value="">None: describe below</option></select></label>
+                <label class="field"><span class="label">Platform</span><select class="select" id="sbPlatform"><option value="">Character's default</option><option value="general">General</option><option value="instagram">Instagram-safe (clothed, checked)</option><option value="fanvue">Fanvue (adult nudity)</option></select></label>
+              </div>
+              <div class="row"><label class="check">Quality <select class="select" id="sbQuality" style="width:auto;height:30px"><option value="final">Final</option><option value="draft">Draft (fast)</option></select></label>
+                <label class="check"><input type="checkbox" id="sbCheck" checked>Check every panel automatically</label></div>
+              <label class="field"><span class="label">Description <span class="hint">who is in every shot, how they look · added to a library character's facts</span></span><textarea class="textarea" id="sbCharacter" rows="2" style="min-height:56px" maxlength="2000" placeholder="e.g. Rebel: a fair-skinned Indian woman, 45, very petite, long black hair…"></textarea></label>
               <div class="field"><span class="label">Identity picture <span class="hint">full body on a plain background works best · up to 3</span></span>
                 <div class="sb-ids" id="sbIds"><span class="hint">None yet.</span></div>
                 <div class="row"><button class="btn btn-sm" type="button" id="sbIdPick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="sbIdUpload" hidden></label></div>
@@ -1332,11 +1338,12 @@
               <span class="hint">Each shot opens on its panel and moves as its motion says. Up to 8 shots per render part, joined into one video.</span>
               <div class="grid grid-2">
                 <label class="field"><span class="label">Seconds per shot</span><input class="input" id="sbSeconds" type="number" min="1" max="15" step="0.5" value="6"></label>
-                <label class="field"><span class="label">Resolution</span><select class="select" id="sbMp"><option value="0.6">0.6: faster</option><option value="0.98" selected>0.98: standard</option><option value="1.5">1.5: sharp (slow)</option></select></label>
+                <label class="field"><span class="label">Resolution</span><select class="select" id="sbMp"><option value="" selected>By quality (draft 0.6 · final 0.98)</option><option value="0.6">0.6: faster</option><option value="0.98">0.98: standard</option><option value="1.5">1.5: sharp (slow)</option></select></label>
               </div>
               <label class="field"><span class="label">Base model</span><select class="select" id="sbUnet"></select></label>
               <label class="field"><span class="label">Mood <span class="hint">optional</span></span><input class="input" id="sbMood" maxlength="1000" placeholder="e.g. slow, sensual, intimate"></label>
-              <label class="field"><span class="label">Music <span class="hint">H3 composes it</span></span><input class="input" id="sbMusic" maxlength="500" placeholder="e.g. one slow chill R&B track at 85 bpm"></label>
+              <label class="field"><span class="label">Music <span class="hint">one track over the whole film</span></span><input class="input" id="sbMusic" maxlength="2000" placeholder="describe it: composed once, about $0.15 (blank: each part makes its own)"></label>
+              <label class="field"><span class="label">Or a track from Media <span class="hint">audio asset id</span></span><input class="input" id="sbMusicAsset" maxlength="40" placeholder="e.g. aa6adb7ae8bd"></label>
               <div class="row"><div class="spacer"></div><button class="btn btn-primary" type="submit" id="sbRender">Make film</button></div>
               <div id="sbFilm"></div>
             </form>
@@ -1349,6 +1356,18 @@
               <label class="check"><input type="checkbox" id="sbPackAnatomy">Add nude views (adult platforms only)</label>
               <div class="row"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit" id="sbPackGo">Make pack</button></div>
               <div class="st-imgs" id="sbPack"></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Characters">
+            <div class="card-head"><h2>Characters</h2><span class="hint">saved once, used everywhere</span></div>
+            <form class="card-body grid" id="chForm" autocomplete="off">
+              <div id="chList" class="grid" style="gap:6px"><span class="hint">No characters yet.</span></div>
+              <label class="field"><span class="label">Name</span><input class="input" id="chName" maxlength="80" placeholder="Rebel"></label>
+              <label class="field"><span class="label">Facts <span class="hint">what every prompt keeps · adults only</span></span><textarea class="textarea" id="chFacts" rows="2" style="min-height:56px" maxlength="2000" placeholder="fair-skinned Indian woman, 45, very petite, long black hair…"></textarea></label>
+              <label class="field"><span class="label">Notes <span class="hint">wording that fixes a model's habit</span></span><input class="input" id="chNotes" maxlength="1000" placeholder="teardrop breasts with natural sag"></label>
+              <label class="field"><span class="label">Usual platform</span><select class="select" id="chPlatform"><option value="general">General</option><option value="instagram">Instagram-safe</option><option value="fanvue">Fanvue</option></select></label>
+              <span class="hint">Identity pictures: the ones picked on the left (Identity picture).</span>
+              <div class="row"><button class="btn btn-sm" type="button" id="chPack" title="Front, back, side and face views ($0.018)">Make pack</button><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save character</button></div>
             </form>
           </section>
           <section class="card" aria-label="Merge into one sheet">
@@ -2653,12 +2672,45 @@
   // A board: a character, the shot list, its $0.018 Seedream Flash sheet(s) cut into panels, and the film in which
   // every shot opens on its panel. Drawing and rendering run on the server; the page polls while they do.
   const board = { id: storage.get("hawkH3Board") || "", view: null, ids: [], own: [], merge: [], thumbs: {}, timer: null };
-  const SB_BUSY = ["drawing", "rendering", "joining"];
+  const SB_BUSY = ["drawing", "checking", "rendering", "joining"];
   const sbPath = (rest = "") => `/v1/storyboards/${encodeURIComponent(board.id)}${rest}`;
   const sbLines = (id) => $(id).value.split("\n").map((l) => l.trim());
   const sbWrap = (fn, failTitle) => async (...args) => { try { await fn(...args); } catch (error) { toast(failTitle, readableError(error.message).short, "bad", 8000); } };
 
+  async function chLoad() {
+    try {
+      const { characters } = await api("/v1/characters");
+      board.characters = characters;
+      const keep = $("sbChar").value;
+      $("sbChar").innerHTML = `<option value="">None: describe below</option>` + characters.map((c) => `<option value="${esc(c.name)}"${c.name === keep ? " selected" : ""}>${esc(c.name)}</option>`).join("");
+      $("chList").innerHTML = characters.length ? characters.map((c) => `<div class="row" style="gap:6px">${(c.identity_views[0] ? `<img src="${esc(c.identity_views[0].thumb_url)}" alt="" style="width:32px;height:40px;object-fit:cover;border-radius:4px">` : "")}`
+        + `<strong style="flex:1">${esc(c.name)}</strong><span class="hint">${esc(c.platform)}${Object.keys(c.pack || {}).length ? " · pack" : ""}</span><button class="btn btn-sm" type="button" data-ch-edit="${esc(c.name)}">Edit</button></div>`).join("")
+        : `<span class="hint">No characters yet: fill the form below.</span>`;
+    } catch (error) { $("chList").innerHTML = `<span class="hint">${esc(error.message)}</span>`; }
+  }
+  $("chList").onclick = (e) => {
+    const b = e.target.closest("[data-ch-edit]"); if (!b) return;
+    const c = (board.characters || []).find((x) => x.name === b.dataset.chEdit); if (!c) return;
+    $("chName").value = c.name; $("chFacts").value = c.facts; $("chNotes").value = c.notes || ""; $("chPlatform").value = c.platform || "general";
+    if (!board.id) { board.ids = c.identity_asset_ids.slice(); c.identity_views.forEach((v) => { board.thumbs[v.id] = v.thumb_url; }); sbIdsPaint(); }
+  };
+  $("chForm").onsubmit = sbWrap(async (e) => {
+    e.preventDefault();
+    const name = $("chName").value.trim();
+    const body = { name, facts: $("chFacts").value.trim(), notes: $("chNotes").value.trim(), platform: $("chPlatform").value, identity_asset_ids: board.ids };
+    const exists = (board.characters || []).some((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (exists) await putJson(`/v1/characters/${encodeURIComponent(name)}`, body, "PATCH"); else await post("/v1/characters", body);
+    toast("Character saved", name); await chLoad(); $("sbChar").value = name;
+  }, "Could not save the character");
+  $("chPack").onclick = sbWrap(async () => {
+    const name = $("chName").value.trim(); if (!name) throw new Error("Save the character first.");
+    $("chPack").disabled = true; $("chPack").textContent = "Drawing…";
+    try { await post(`/v1/characters/${encodeURIComponent(name)}/pack`, {}); toast("Pack ready", `${name}: front, back, side and face`); await chLoad(); }
+    finally { $("chPack").disabled = false; $("chPack").textContent = "Make pack"; }
+  }, "Could not make the pack");
+
   async function sbLoad() {
+    chLoad();
     try {
       const { storyboards } = await api("/v1/storyboards");
       if (!storyboards.some((b) => b.id === board.id)) board.id = storyboards[0]?.id || "";
@@ -2712,6 +2764,8 @@
     if (!document.activeElement?.closest("#sbForm")) {
       $("sbTitle").value = v.title; $("sbCharacter").value = v.character; $("sbAspect").value = v.aspect_ratio;
       $("sbStyle").value = v.style || ""; $("sbShots").value = v.shots.join("\n"); $("sbMotions").value = (v.motions || []).join("\n");
+      $("sbPlatform").value = v.platform || ""; $("sbQuality").value = v.quality || "final"; $("sbCheck").checked = v.check !== false;
+      $("sbChar").value = (v.characters || [])[0] || ""; $("sbMusicAsset").value = (v.music || {}).asset_id || ""; $("sbMusic").value = (v.music || {}).prompt || "";
       board.ids = v.identity_asset_ids.slice();
       sbIdsPaint(v.identity_views);
     }
@@ -2728,12 +2782,15 @@
 
   function sbPanelsPaint(v, busy) {
     $("sbNote").innerHTML = (v.error ? `<div class="alert bad">${errorHtml(v.error)}</div>` : "") + (v.note ? `<div class="alert warn">${esc(v.note)}</div>` : "")
-      + (v.status === "drawing" ? `<div class="alert">Drawing ${Math.ceil(v.shots.length / 8)} sheet${v.shots.length > 8 ? "s" : ""} on Seedream Flash… about 30 seconds.</div>` : "");
+      + (v.status === "drawing" ? `<div class="alert">Drawing ${Math.ceil(v.shots.length / 8)} sheet${v.shots.length > 8 ? "s" : ""} on Seedream Flash… about 30 seconds.</div>` : "")
+      + (v.status === "checking" ? `<div class="alert">Checking every panel; rejected ones are drawn again…</div>` : "")
+      + (v.status === "review" ? `<div class="alert warn">Waiting for your approval: check the panels, then press <b>Make film</b>.</div>` : "");
     $("sbPanels").innerHTML = v.shots.map((shot, n) => {
       const p = (v.panel_views || [])[n];
       return `<div class="sb-panel" data-sb-n="${n + 1}">
         ${p ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img src="${esc(p.thumb_url)}" alt="Shot ${n + 1}" loading="lazy"></a>` : `<div class="sb-empty">${v.status === "drawing" ? "drawing…" : "no panel"}</div>`}
-        <strong class="hint">Shot ${n + 1}</strong>
+        <div class="row" style="gap:4px"><strong class="hint" style="flex:1">Shot ${n + 1}</strong>${sbCheckBadge(v, n)}</div>
+        <select class="select" data-sb-mode style="height:28px" title="Frame: the panel is the first frame. Look: only the place and person; the video composes the action. None: no panel.">${["frame", "look", "none"].map((m) => `<option value="${m}"${(v.modes || [])[n] === m ? " selected" : ""}>${m === "frame" ? "Frame: first frame" : m === "look" ? "Look: action composed" : "None: no panel"}</option>`).join("")}</select>
         <textarea class="textarea" data-sb-shot>${esc(shot)}</textarea>
         <div class="row" style="gap:4px"><button class="btn btn-sm" type="button" data-sb-redo${busy ? " disabled" : ""} title="Draw this shot again on its own ($0.018), keeping its setting">Redo</button>
           <button class="btn btn-sm" type="button" data-sb-fresh${busy ? " disabled" : ""} title="Draw it again from scratch">New</button>
@@ -2741,6 +2798,12 @@
       </div>`;
     }).join("") || `<span class="hint">No shots yet.</span>`;
     $("sbSheets").innerHTML = (v.sheet_views || []).filter((s) => s.asset).map((s, i) => `<figure><a href="${esc(s.asset.file_url)}" target="_blank" rel="noopener"><img src="${esc(s.asset.thumb_url)}" alt=""></a><span>sheet ${i + 1}</span></figure>`).join("");
+  }
+
+  function sbCheckBadge(v, n) {
+    const c = (v.checks || {})[String(n)];
+    if (!c) return "";
+    return c.ok ? `<span class="badge done" title="Passed the check">✓</span>` : `<span class="badge failed" title="${esc(c.issues || "rejected")}">⚠ ${esc((c.issues || "rejected").slice(0, 28))}</span>`;
   }
 
   function sbFilmPaint(v) {
@@ -2754,16 +2817,20 @@
   function sbBody() {
     const shots = sbLines("sbShots").filter(Boolean);
     const motions = sbLines("sbMotions");
+    const modes = [...document.querySelectorAll("#sbPanels [data-sb-mode]")].map((el) => el.value);
     return { title: $("sbTitle").value.trim() || "Storyboard", character: $("sbCharacter").value.trim(), identity_asset_ids: board.ids,
              shots, motions: motions.some(Boolean) ? motions.slice(0, shots.length) : null, aspect_ratio: $("sbAspect").value,
-             style: $("sbStyle").value.trim() };
+             style: $("sbStyle").value.trim(), characters: $("sbChar").value ? [$("sbChar").value] : null,
+             platform: $("sbPlatform").value || "", quality: $("sbQuality").value, check: $("sbCheck").checked,
+             music_prompt: $("sbMusic").value.trim(), music_asset_id: $("sbMusicAsset").value.trim() || null,
+             modes: modes.length === shots.length ? modes : null };
   }
 
   async function sbSave(draw) {
     const body = sbBody();
-    if (!body.character) throw new Error("Describe the character first.");
+    if (!body.character && !body.characters) throw new Error("Pick a character from the library, or describe one.");
     if (!body.shots.length && !(board.own.length && !board.id)) throw new Error("Write at least one shot, one per line, or pick your images as panels.");
-    if (!board.ids.length) throw new Error("Add the character's identity picture first.");
+    if (!board.ids.length && !body.characters) throw new Error("Add the character's identity picture, or pick a library character.");
     if (!board.id) {
       if (board.own.length) {
         if (body.shots.length && body.shots.length !== board.own.length) throw new Error(`${board.own.length} images need ${board.own.length} shot lines (or none).`);
@@ -2775,7 +2842,9 @@
       const made = await post("/v1/storyboards", { ...body, draw });
       board.id = made.id; await sbLoad(); return made;
     }
-    const { identity_asset_ids, ...patch } = body;  // identity pictures are fixed once a board exists
+    const { identity_asset_ids, characters, check, ...patch } = body;  // who is in it is fixed once a board exists
+    if (!patch.platform) delete patch.platform;
+    if (!patch.modes) delete patch.modes;
     await putJson(sbPath(), patch, "PATCH");
     if (draw) await post(sbPath("/draw"), {});
     await sbShow();
@@ -2885,9 +2954,11 @@
     e.preventDefault();
     if (!board.id) throw new Error("Save and draw the board first.");
     await sbSave(false);
-    const settings = { aspect_ratio: board.view.aspect_ratio, megapixels: Number($("sbMp").value), continuity: "off",
+    const settings = { aspect_ratio: board.view.aspect_ratio, continuity: "off", ...($("sbMp").value ? { megapixels: Number($("sbMp").value) } : {}),
                        ...($("sbUnet").value ? { unet_name: $("sbUnet").value } : {}) };
-    await post(sbPath("/render"), { settings, segment_seconds: Number($("sbSeconds").value) || 6, mood: $("sbMood").value.trim(), music: $("sbMusic").value.trim() });
+    const seconds = Number($("sbSeconds").value) || 6, mood = $("sbMood").value.trim();
+    if (board.view.status === "review") await post(sbPath("/approve"), { settings, segment_seconds: seconds, mood });
+    else await post(sbPath("/render"), { settings, segment_seconds: seconds, mood, music: "" });
     toast("Making the film", "Each shot opens on its panel. Parts render in the queue, then join into one video.");
     await sbShow();
   }, "Could not start the film");
