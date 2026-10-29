@@ -22,6 +22,7 @@ from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
 from .story import StoryManager
+from .storyboard import StoryboardManager, identity_pack
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
 from .comfy_client import ComfyError
@@ -34,7 +35,8 @@ from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
-    UrlAssetRequest, VideoRequest, LLMSettingsUpdate
+    UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
+    IdentityPackIn, StoryPackIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -102,10 +104,12 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     imports = ImportManager(service, drive)
     manhwa = ManhwaManager(service)
     stories = StoryManager(service)
+    boards = StoryboardManager(service)
+    stories.boards = boards  # a chapter's storyboard is a board
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
-    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories)
+    mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories, boards=boards)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -125,6 +129,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         # An autopilot the last runtime was in the middle of carries on once ComfyUI answers.
         resume = asyncio.create_task(manhwa.resume_pipelines())
         resume_stories = asyncio.create_task(stories.resume())
+        resume_boards = asyncio.create_task(boards.resume())
         try:
             async with mcp.session_manager.run():
                 yield
@@ -133,6 +138,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             # the one copy that matters when a Colab runtime is going away.
             resume.cancel()
             resume_stories.cancel()
+            resume_boards.cancel()
             await imports.stop()
             await manhwa.stop()
             await stories.stop()
@@ -151,6 +157,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     app.state.agent = agent
     app.state.manhwa = manhwa
     app.state.stories = stories
+    app.state.boards = boards
     app.state.snapshots = snapshots
 
     @app.exception_handler(RequestError)
@@ -554,6 +561,21 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Plan, render and append the chapter to the main film, with no stops. redo=true replaces its video."""
         return stories.make_video(story_id, chapter_id, redo=redo)
 
+    @app.post("/v1/stories/{story_id}/chapters/{chapter_id}/storyboard", tags=["story"], status_code=202)
+    async def story_chapter_storyboard(story_id: str, chapter_id: str):
+        """Draw the chapter's scenes as a storyboard (Seedream Flash, $0.018 per 8 scenes) with the cast's pictures;
+        once drawn, Make video opens each scene on its panel. The board is on the Storyboard page to fix panels."""
+        return stories.make_storyboard(story_id, chapter_id)
+
+    @app.delete("/v1/stories/{story_id}/chapters/{chapter_id}/storyboard", tags=["story"])
+    async def story_chapter_storyboard_drop(story_id: str, chapter_id: str):
+        return stories.drop_storyboard(story_id, chapter_id)
+
+    @app.post("/v1/stories/{story_id}/characters/pack", tags=["story"])
+    async def story_character_pack(story_id: str, body: StoryPackIn):
+        """The character's identity pack (front, back, side, face); the front view and face become their pictures."""
+        return await stories.identity_pack(story_id, body.name, anatomy=body.anatomy)
+
     @app.post("/v1/stories/{story_id}/film", tags=["story"])
     async def story_film(story_id: str):
         """Rebuild the main film from every chapter with a finished video."""
@@ -563,6 +585,54 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def story_subtitles(story_id: str):
         return Response(stories.subtitles(story_id), media_type="application/x-subrip; charset=utf-8",
                         headers={"content-disposition": f'attachment; filename="story_{story_id}.srt"'})
+
+    # ------------------------------------------------------------- storyboards
+
+    @app.get("/v1/storyboards", tags=["storyboard"])
+    async def board_list():
+        return {"storyboards": boards.list()}
+
+    @app.post("/v1/storyboards", tags=["storyboard"], status_code=202)
+    async def board_create(body: StoryboardIn):
+        """A board: the shots are drawn in the background as Seedream Flash sheets ($0.018 per 8 shots), then cut
+        into panels. Poll GET /v1/storyboards/{id} until status is ready."""
+        return boards.create(title=body.title, character=body.character, identity_asset_ids=body.identity_asset_ids,
+                             shots=body.shots, aspect_ratio=body.aspect_ratio, style=body.style, motions=body.motions,
+                             draw=body.draw)
+
+    @app.get("/v1/storyboards/{board_id}", tags=["storyboard"])
+    async def board_get(board_id: str):
+        return boards.view(board_id)
+
+    @app.patch("/v1/storyboards/{board_id}", tags=["storyboard"])
+    async def board_patch(board_id: str, body: StoryboardPatch):
+        return boards.update(board_id, **body.model_dump(exclude_none=True))
+
+    @app.delete("/v1/storyboards/{board_id}", tags=["storyboard"])
+    async def board_delete(board_id: str):
+        return boards.delete(board_id)
+
+    @app.post("/v1/storyboards/{board_id}/draw", tags=["storyboard"], status_code=202)
+    async def board_draw(board_id: str, missing_only: bool = False):
+        """Draw the board again (every shot), or only the shots that have no panel."""
+        return boards.start_draw(board_id, only_missing=missing_only)
+
+    @app.post("/v1/storyboards/{board_id}/panels/{number}", tags=["storyboard"])
+    async def board_panel(board_id: str, number: int, body: StoryboardPanelIn):
+        """Shot `number` (from 1) drawn again on its own ($0.018), or set to an image from Media."""
+        if body.asset_id:
+            return boards.set_panel(board_id, number, body.asset_id)
+        return await boards.redo_panel(board_id, number, shot=body.shot, keep_setting=body.keep_setting)
+
+    @app.post("/v1/storyboards/{board_id}/render", tags=["storyboard"], status_code=202)
+    async def board_render(board_id: str, body: StoryboardRenderIn):
+        """Render the film: each shot opens on its panel, in parts of up to nine pictures, joined into one video."""
+        return boards.start_render(board_id, body.settings, body.segment_seconds, body.mood, body.music)
+
+    @app.post("/v1/identity-packs", tags=["storyboard"], status_code=201)
+    async def make_identity_pack(body: IdentityPackIn):
+        """A character's reference views (front, back, side, face; nude views only with anatomy) as one $0.018 sheet."""
+        return await identity_pack(service, body.name, body.description, body.identity_asset_ids, body.style, body.anatomy)
 
     @app.get("/v1/assets/{asset_id}/file", tags=["assets"])
     async def asset_file(asset_id: str, w: int = 0):

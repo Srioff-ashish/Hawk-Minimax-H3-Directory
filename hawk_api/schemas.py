@@ -536,3 +536,53 @@ class StoryAutopilotIn(BaseModel):
 class StoryChapterImageIn(BaseModel):
     asset_id: str
     label: str = Field("", max_length=200, description="What it is for, e.g. 'the rooftop bar at night'.")
+
+
+# --------------------------------------------------------------------------- storyboards
+
+
+class StoryboardIn(BaseModel):
+    title: str = Field("Storyboard", max_length=120)
+    character: str = Field(min_length=1, max_length=2000, description="Who is in every shot and how they look.")
+    identity_asset_ids: list[str] = Field(min_length=1, max_length=3,
+                                          description="The character's identity picture(s), ideally full body on a plain background.")
+    shots: list[str] = Field(min_length=1, max_length=40, description="One shot per line, in story order (pose, place, clothing).")
+    motions: list[str] | None = Field(None, description="Optional: what moves in each shot's video; default the shot text.")
+    aspect_ratio: AspectRatio = "9:16"
+    style: str = Field("", max_length=1000, description="Look of the whole sheet, e.g. 'luxury boudoir photography, warm light'.")
+    draw: bool = Field(True, description="Draw the sheet(s) straight away ($0.018 per 8 shots on Seedream Flash).")
+
+
+class StoryboardPatch(BaseModel):
+    title: str | None = None
+    character: str | None = None
+    style: str | None = None
+    aspect_ratio: AspectRatio | None = None
+    shots: list[str] | None = Field(None, max_length=40)
+    motions: list[str] | None = None
+
+
+class StoryboardPanelIn(BaseModel):
+    shot: str | None = Field(None, max_length=1000, description="New text for the shot before it is drawn again.")
+    keep_setting: bool = Field(True, description="Give the old panel as a reference, so the setting and framing stay.")
+    asset_id: str | None = Field(None, description="Use this image from Media as the panel instead of drawing one.")
+
+
+class StoryboardRenderIn(BaseModel):
+    settings: RenderSettings | None = None
+    segment_seconds: float = Field(6.0, ge=1, le=15)
+    mood: str = Field("", max_length=1000)
+    music: str = Field("", max_length=500, description="The music to compose, when no music bed is set.")
+
+
+class IdentityPackIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    description: str = Field("", max_length=2000)
+    identity_asset_ids: list[str] = Field(min_length=1, max_length=3)
+    style: str = Field("", max_length=1000)
+    anatomy: bool = Field(False, description="Add a nude front view and a rear close-up (adult platforms only).")
+
+
+class StoryPackIn(BaseModel):
+    name: str = Field(description="The character.")
+    anatomy: bool = Field(False, description="Add a nude front view and a rear close-up (adult platforms only).")

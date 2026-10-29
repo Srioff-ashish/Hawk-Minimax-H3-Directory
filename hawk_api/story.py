@@ -156,6 +156,10 @@ def chapter_brief(story: dict, chapter: dict, earlier: list[dict], labels: list[
     if labels:
         lines.append("Attached pictures: " + "; ".join(f"<Picture {n}> = {label}" for n, label in enumerate(labels, 1))
                      + ". Use a character's picture in every segment they are in, so they look the same throughout.")
+        if any(label.startswith("first frame of scene") for label in labels):
+            lines.append("A picture labelled 'first frame of scene N' is that segment's literal first frame (keyframe "
+                         "completion): start the segment exactly on it and animate from there, keeping its pose, framing, "
+                         "setting and clothing; the character pictures keep the faces.")
     if story.get("style"):
         lines.append(f"Style and tone: {story['style']}")
     if earlier:
@@ -278,6 +282,7 @@ class StoryManager:
         self._jobs: dict[str, asyncio.Task] = {}  # background chat / draft calls, by story
         self._autopilots: dict[str, asyncio.Task] = {}
         self.poll = POLL
+        self.boards = None  # the StoryboardManager; create_app sets it, so a chapter can have a storyboard
 
     async def stop(self) -> None:
         tasks = list(self._tasks.values()) + list(self._jobs.values()) + list(self._autopilots.values())
@@ -704,8 +709,23 @@ class StoryManager:
 
     # ----------------------------------------------------------------- video
 
+    def _storyboard_panels(self, chapter: dict) -> list[str]:
+        """The chapter's storyboard panels, one per scene, once its board has them all; else none."""
+        board_id = chapter.get("storyboard_id")
+        if not board_id or self.boards is None:
+            return []
+        try:
+            board = self.boards.board(board_id)
+        except NotFound:
+            return []
+        panels = board.get("panels") or []
+        if board.get("status") in ("drawing",) or not panels or not all(panels):
+            return []
+        return [p for p in panels if self.service.store.get_asset(p)]
+
     def _references(self, story: dict, chapter: dict) -> tuple[list[ReferenceIn], list[str]]:
-        """The chapter's pictures, cast first (one per character in it), then its own images: nine at most."""
+        """The chapter's pictures, cast first (one per character in it), then its storyboard panels (each the first
+        frame of its scene), then its own images: nine at most."""
         names = {n for scene in chapter["scenes"] for n in scene["characters"] + [d["speaker"] for d in scene["dialogue"]]}
         refs, labels = [], []
         for character in story.get("characters") or []:
@@ -718,6 +738,12 @@ class StoryManager:
                 label = f"{character['name']}" + (f" -- {character['description']}" if character.get("description") else "")
                 refs.append(ReferenceIn(asset_id=asset_id, role="picture", label=label[:200]))
                 labels.append(label[:200])
+        for scene, panel in enumerate(self._storyboard_panels(chapter)[: len(chapter["scenes"])], 1):
+            if len(refs) >= MAX_PICTURES:
+                break
+            label = f"first frame of scene {scene} (storyboard)"
+            refs.append(ReferenceIn(asset_id=panel, role="picture", label=label))
+            labels.append(label)
         for image in chapter.get("images") or []:
             if len(refs) >= MAX_PICTURES or not self.service.store.get_asset(image["asset_id"]):
                 continue
@@ -725,6 +751,73 @@ class StoryManager:
             refs.append(ReferenceIn(asset_id=image["asset_id"], role="picture", label=label[:200]))
             labels.append(label[:200])
         return refs, labels
+
+    def _chapter_cast(self, story: dict, chapter: dict) -> list[dict]:
+        """The chapter's people who have a picture: the storyboard's identity references."""
+        names = {n for scene in chapter["scenes"] for n in scene["characters"] + [d["speaker"] for d in scene["dialogue"]]}
+        return [c for c in story.get("characters") or []
+                if c["name"] in names and c.get("role") != "narrator" and c.get("image_asset_ids")
+                and not is_minor(c["name"], {"appearance": c.get("description")})
+                and any(self.service.store.get_asset(i) for i in c["image_asset_ids"])]
+
+    def make_storyboard(self, story_id: str, chapter_id: str) -> dict:
+        """The chapter's scenes drawn as a storyboard (one $0.018 Seedream Flash sheet per 8 scenes), with the cast's
+        pictures keeping their faces. Once drawn, Make video opens each scene on its panel."""
+        if self.boards is None:
+            raise Unavailable("Storyboards aren't available on this server.")
+        story = self._story(story_id)
+        chapter = self._chapter(story_id, chapter_id)
+        if not chapter.get("scenes"):
+            raise RequestError("This chapter has no scenes to draw.")
+        if chapter.get("status") in ACTIVE:
+            raise RequestError("This chapter's video is being made; storyboard it after.")
+        cast = self._chapter_cast(story, chapter)[:3]
+        if not cast:
+            raise RequestError("Give this chapter's characters a picture first: the storyboard keeps their faces from it.")
+        identity = [next(i for i in c["image_asset_ids"] if self.service.store.get_asset(i)) for c in cast]
+        people = "; ".join(f"{c['name']}" + (f" -- {c['description']}" if c.get("description") else "") for c in cast)
+        character = (f"The people, in the order of the reference images: {people}. All are adults."
+                     if len(cast) > 1 else f"{people}. An adult.")
+        shots = []
+        for scene in chapter["scenes"]:
+            who = ", ".join(scene.get("characters") or [])
+            shot = (f"{scene['setting']}: " if scene.get("setting") else "") + (scene.get("description") or "")
+            shots.append((shot + (f" ({who})" if who else "")).strip()[:600] or "a scene")
+        settings = {**SETTINGS_DEFAULTS, **(story.get("settings") or {})}
+        board = self.boards.create(title=f"{story['title']} - ch {chapter['idx'] + 1}"[:120], character=character,
+                                   identity_asset_ids=identity, shots=shots, aspect_ratio=settings["aspect_ratio"],
+                                   style=story.get("style") or "", link={"story_id": story_id, "chapter_id": chapter_id})
+        chapter = self._set(chapter_id, storyboard_id=board["id"])
+        return {"chapter": chapter, "storyboard": board}
+
+    def drop_storyboard(self, story_id: str, chapter_id: str) -> dict:
+        """Make video goes back to planning the chapter from its text alone. The board stays on the Storyboard page."""
+        self._chapter(story_id, chapter_id)
+        return self._set(chapter_id, storyboard_id=None)
+
+    async def identity_pack(self, story_id: str, name: str, *, anatomy: bool = False) -> dict:
+        """The character's reference views as one sheet; the front view and the face close-up become their first
+        pictures, so every later image and video of them starts from a clean, full-body reference."""
+        from .storyboard import identity_pack
+
+        story = self._story(story_id)
+        character = self._character(story, name)
+        if character.get("role") == "narrator":
+            raise RequestError(f"{name} is the narrator: a voice, no picture.")
+        if is_minor(character["name"], {"appearance": character.get("description")}):
+            raise RequestError(f"{name} reads as under 18 and can't be given pictures.")
+        sources = [i for i in character.get("image_asset_ids") or [] if self.service.store.get_asset(i)][:3]
+        if not sources:
+            raise RequestError(f"Give {name} a picture first: the pack is drawn from it.")
+        pack = await identity_pack(self.service, character["name"], character.get("description") or "", sources,
+                                   story.get("style") or "", anatomy, collection=f"story/{story['title']}")
+        views = {p["view"]: p["id"] for p in pack["panels"]}
+        story = self._story(story_id)
+        character = self._character(story, name)
+        first = [views[v] for v in ("front", "face") if v in views]
+        character["image_asset_ids"] = (first + [i for i in character.get("image_asset_ids") or [] if i not in first])[:4]
+        self.store.save_story(story)
+        return {"pack": pack, "story": self.view(story_id)}
 
     def make_video(self, story_id: str, chapter_id: str, *, redo: bool = False) -> dict:
         """Plan, render and append the chapter, with no stops. redo keeps the old video in the chapter's history

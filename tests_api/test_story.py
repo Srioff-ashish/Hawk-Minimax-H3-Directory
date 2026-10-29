@@ -150,6 +150,43 @@ class Story(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RequestError):
             await self.manager.set_character_image(sid, "Jun", photo["id"])
 
+    async def test_a_storyboard_opens_each_scene_on_its_panel(self):
+        chapter = await self.drafted()
+        sid = self.story["id"]
+        face = (await self.service.add_asset("mina.png", io.BytesIO(b"mina"), source={"type": "generated"}))["id"]
+        panels = [(await self.service.add_asset(f"p{n}.png", io.BytesIO(b"panel%d" % n), source={"type": "generated"}))["id"]
+                  for n in range(2)]
+        await self.manager.set_character_image(sid, "Mina", face)
+
+        class Boards:
+            made = {}
+
+            def create(self, **kwargs):
+                self.made = kwargs
+                return {"id": "board1", "status": "drawing"}
+
+            def board(self, board_id):
+                return {"id": board_id, "status": "ready", "panels": panels}
+
+        boards = Boards()
+        self.manager.boards = boards
+        made = self.manager.make_storyboard(sid, chapter["id"])
+        self.assertEqual(made["chapter"]["storyboard_id"], "board1")
+        self.assertEqual(boards.made["identity_asset_ids"], [face], "the cast's pictures keep their faces")
+        self.assertEqual(len(boards.made["shots"]), 2, "one shot per scene")
+        self.assertEqual(boards.made["link"], {"story_id": sid, "chapter_id": chapter["id"]})
+
+        story = self.manager._story(sid)
+        refs, labels = self.manager._references(story, self.manager.store.get_chapter(chapter["id"]))
+        self.assertEqual([r.asset_id for r in refs], [face] + panels, "cast first, then the panels")
+        self.assertEqual(labels[1:], ["first frame of scene 1 (storyboard)", "first frame of scene 2 (storyboard)"])
+        brief, _ = chapter_brief(story, self.manager.store.get_chapter(chapter["id"]), [], labels, 12)
+        self.assertIn("keyframe completion", brief)
+
+        self.manager.drop_storyboard(sid, chapter["id"])
+        refs, _ = self.manager._references(story, self.manager.store.get_chapter(chapter["id"]))
+        self.assertEqual([r.asset_id for r in refs], [face], "dropped: planned from the text alone again")
+
     async def test_the_brief_times_scenes_by_their_lines(self):
         chapter = await self.drafted()
         story = self.manager._story(self.story["id"])

@@ -148,6 +148,14 @@
   .st-attach:empty { display: none; }
   .st-imgs { display: flex; flex-wrap: wrap; gap: 6px; align-items: flex-start; }
   .st-imgs figure { margin: 0; display: grid; gap: 2px; font-size: 11px; color: var(--ink-2); max-width: 90px; overflow-wrap: anywhere; }
+  .sb-panels { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .sb-panels > .hint { grid-column: 1 / -1; }
+  .sb-panel { display: grid; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); min-width: 0; }
+  .sb-panel img, .sb-panel .sb-empty { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; border-radius: 6px; background: var(--surface-3); display: block; }
+  .sb-panel .sb-empty { display: grid; place-items: center; color: var(--ink-3); font-size: 12px; }
+  .sb-panel .textarea { min-height: 56px; font-size: 12px; }
+  .sb-ids { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .sb-ids img { width: 56px; height: 72px; object-fit: cover; border-radius: 6px; }
   .st-chapter { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); }
   .st-scene { display: grid; gap: 6px; padding: 8px 10px; border-left: 3px solid var(--line); }
   .st-scene .textarea { min-height: 48px; }
@@ -706,6 +714,7 @@
   <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
   <symbol id="i-cloud" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4.5 4.5 0 1 1 .9-8.9A6 6 0 0 1 19.5 11 3.5 3.5 0 0 1 18 18z"/></symbol>
   <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/></symbol>
   <symbol id="i-film" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
 </svg>
 
@@ -717,6 +726,7 @@
     <a class="nav-item" href="#agent" data-route="agent"><svg><use href="#i-sparkle"/></svg><span>Agent</span><span class="nav-count" id="agentBusy" hidden title="Agent working">●</span></a>
     <a class="nav-item" href="#prompts" data-route="prompts"><svg><use href="#i-prompt"/></svg><span>Prompts</span></a>
     <a class="nav-item" href="#story" data-route="story"><svg><use href="#i-film"/></svg><span>Story</span><span class="nav-count" id="storyBusy" hidden title="Making a chapter's video">●</span></a>
+    <a class="nav-item" href="#storyboard" data-route="storyboard"><svg><use href="#i-board"/></svg><span>Storyboard</span><span class="nav-count" id="boardBusy" hidden title="Drawing or rendering">●</span></a>
     <a class="nav-item" href="#manhwa" data-route="manhwa"><svg><use href="#i-library"/></svg><span>Manhwa</span><span class="nav-count" id="manhwaBusy" hidden title="Cataloguing">●</span></a>
     <a class="nav-item" href="#assets" data-route="assets"><svg><use href="#i-assets"/></svg><span>Media</span></a>
     <a class="nav-item" href="#connect" data-route="connect"><svg><use href="#i-connect"/></svg><span>Connect <span class="nav-label-long">&amp; settings</span></span></a>
@@ -1275,6 +1285,67 @@
       </div>
     </main>
 
+    <main class="content" id="page-storyboard" data-page="storyboard" hidden>
+      <div class="mh-layout">
+        <div style="display:grid;gap:16px;min-width:0">
+          <section class="card" aria-label="Storyboard">
+            <div class="card-head"><h2>Storyboard</h2><span class="badge plain" id="sbStatus" hidden></span><div class="spacer"></div><select class="select" id="sbPick" style="width:auto;max-width:55%;height:30px"></select><button class="btn btn-sm" type="button" id="sbNew">New board</button></div>
+            <form class="card-body grid" id="sbForm" autocomplete="off">
+              <label class="field"><span class="label">Title</span><input class="input" id="sbTitle" maxlength="120" placeholder="e.g. Rebel – villa day"></label>
+              <label class="field"><span class="label">Character <span class="hint">who is in every shot, how they look</span></span><textarea class="textarea" id="sbCharacter" rows="2" style="min-height:56px" maxlength="2000" placeholder="e.g. Rebel: a fair-skinned Indian woman, 45, very petite, long black hair…"></textarea></label>
+              <div class="field"><span class="label">Identity picture <span class="hint">full body on a plain background works best · up to 3</span></span>
+                <div class="sb-ids" id="sbIds"><span class="hint">None yet.</span></div>
+                <div class="row"><button class="btn btn-sm" type="button" id="sbIdPick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="sbIdUpload" hidden></label></div>
+                <div class="mh-picker" id="sbIdPicker" hidden></div></div>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Video shape</span><select class="select" id="sbAspect"><option>9:16</option><option>16:9</option><option>1:1</option><option>3:4</option><option>4:3</option><option>21:9</option></select></label>
+                <label class="field"><span class="label">Look <span class="hint">optional</span></span><input class="input" id="sbStyle" maxlength="1000" placeholder="e.g. luxury boudoir photography, warm window light"></label>
+              </div>
+              <label class="field"><span class="label">Shots <span class="hint">one per line, in order: pose, place, clothing · 8 per $0.018 sheet</span></span><textarea class="textarea" id="sbShots" rows="8" placeholder="morning: she wakes in white silk sheets and stretches&#10;at the tall window in an open sheer robe, looking at the sea&#10;…"></textarea></label>
+              <label class="field"><span class="label">Motion per shot <span class="hint">optional, one per line; blank lines use the shot text</span></span><textarea class="textarea" id="sbMotions" rows="3" placeholder="she slowly stretches her arms up and smiles&#10;she turns her head to the camera"></textarea></label>
+              <div class="row"><button class="btn btn-sm btn-danger" type="button" id="sbDelete">Delete board</button><span class="hint" id="sbCost"></span><div class="spacer"></div><button class="btn btn-sm" type="submit">Save</button><button class="btn btn-sm btn-primary" type="button" id="sbDraw">Draw sheets</button></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Panels">
+            <div class="card-head"><h2>Panels</h2><span class="hint" id="sbPanelHint">check each one before the film</span><div class="spacer"></div><button class="btn btn-sm" type="button" id="sbDrawMissing" title="Draw only the shots that have no panel">Draw missing</button></div>
+            <div class="card-body grid">
+              <div id="sbNote"></div>
+              <div class="sb-panels" id="sbPanels"><span class="hint">Write the shots, add the identity picture, then press Draw sheets.</span></div>
+              <div class="st-imgs" id="sbSheets"></div>
+              <div class="mh-picker" id="sbPanelPicker" hidden></div>
+            </div>
+          </section>
+        </div>
+        <aside style="display:grid;gap:16px;min-width:0">
+          <section class="card" aria-label="Film">
+            <div class="card-head"><h2>Film</h2></div>
+            <form class="card-body grid" id="sbRenderForm" autocomplete="off">
+              <span class="hint">Each shot opens on its panel and moves as its motion says. Up to 8 shots per render part, joined into one video.</span>
+              <div class="grid grid-2">
+                <label class="field"><span class="label">Seconds per shot</span><input class="input" id="sbSeconds" type="number" min="1" max="15" step="0.5" value="6"></label>
+                <label class="field"><span class="label">Resolution</span><select class="select" id="sbMp"><option value="0.6">0.6: faster</option><option value="0.98" selected>0.98: standard</option><option value="1.5">1.5: sharp (slow)</option></select></label>
+              </div>
+              <label class="field"><span class="label">Base model</span><select class="select" id="sbUnet"></select></label>
+              <label class="field"><span class="label">Mood <span class="hint">optional</span></span><input class="input" id="sbMood" maxlength="1000" placeholder="e.g. slow, sensual, intimate"></label>
+              <label class="field"><span class="label">Music <span class="hint">H3 composes it</span></span><input class="input" id="sbMusic" maxlength="500" placeholder="e.g. one slow chill R&B track at 85 bpm"></label>
+              <div class="row"><div class="spacer"></div><button class="btn btn-primary" type="submit" id="sbRender">Make film</button></div>
+              <div id="sbFilm"></div>
+            </form>
+          </section>
+          <section class="card" aria-label="Identity pack">
+            <div class="card-head"><h2>Identity pack</h2><span class="hint">$0.018</span></div>
+            <form class="card-body grid" id="sbPackForm" autocomplete="off">
+              <span class="hint">Front, back, side and face of a character on one sheet: clean references for every later image and video. Uses the identity picture above.</span>
+              <label class="field"><span class="label">Name</span><input class="input" id="sbPackName" maxlength="80" placeholder="Rebel"></label>
+              <label class="check"><input type="checkbox" id="sbPackAnatomy">Add nude views (adult platforms only)</label>
+              <div class="row"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit" id="sbPackGo">Make pack</button></div>
+              <div class="st-imgs" id="sbPack"></div>
+            </form>
+          </section>
+        </aside>
+      </div>
+    </main>
+
     <!-- ================================================================ BILLING -->
     <main class="content" id="page-openrouter" data-page="openrouter" hidden><div class="billing" data-provider="openrouter" id="billing-openrouter"></div></main>
     <main class="content" id="page-atlas" data-page="atlas" hidden><div class="billing" data-provider="atlas" id="billing-atlas"></div></main>
@@ -1672,6 +1743,7 @@
     prompts: ["Prompts", "Edit the agent, story planner and SFW check instructions"],
     manhwa: ["Manhwa", "Catalogue chapters from a URL: scenes, characters, dialogue, search"],
     story: ["Story", "Write a story with a co-writer; each chapter becomes video, appended to one main film"],
+    storyboard: ["Storyboard", "Many shots from one $0.018 sheet: check the panels, fix any, then each opens its segment of the film"],
     openrouter: ["OpenRouter", "Credits, spend and usage per model"],
     atlas: ["Atlas Cloud", "Balance, spend and usage per model"],
     gcp: ["Google Cloud", "Nano Banana spend on the Gemini API"],
@@ -1859,6 +1931,8 @@
     if (page === "manhwa" && (PREFIX || token)) { loadManhwa(); mhLoadSettings(); mhAutoResume(); }
     if (page === "story" && (PREFIX || token)) loadStories();
     else clearTimeout(story.timer);
+    if (page === "storyboard" && (PREFIX || token)) sbLoad();
+    else clearTimeout(board.timer);
     if (page === "agent" && (PREFIX || token)) showAgentPage(agentLink ? agentLink[1] : null);
     else clearTimeout(agent.timer);
   }
@@ -2291,6 +2365,7 @@
         <div class="row mh-char-actions"><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button>
           ${canPic ? `<button class="btn btn-sm" type="button" data-st-act="pick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" data-st-act="upload" hidden></label>` : ""}
           ${c.images.length ? `<button class="btn btn-sm" type="button" data-st-act="clear">Remove picture</button>` : ""}
+          ${c.images.length && canPic ? `<button class="btn btn-sm" type="button" data-st-act="pack" title="Front, back, side and face views from their picture ($0.018); the front and face become their first pictures">Identity pack</button>` : ""}
           <button class="btn btn-sm btn-danger" type="button" data-st-act="remove">Remove</button></div>
         <div class="mh-picker" hidden></div></form>`;
     }).join("") : `<span class="hint">Characters appear here as the co-writer drafts chapters, or add them yourself.</span>`;
@@ -2320,7 +2395,9 @@
         <div class="field"><span class="label">Supporting pictures <span class="hint">places, objects, a look</span></span><div class="st-imgs">${imgs || `<span class="hint">None yet.</span>`}</div>
           <div class="row"><button class="btn btn-sm" type="button" data-st-chpick>Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" data-st-chupload hidden></label></div>
           <div class="mh-picker" hidden></div></div>
-        <div class="row">${c.video_url ? `<a class="btn btn-sm" href="${esc(c.video_url)}" target="_blank" rel="noopener">▶ Chapter video</a>` : ""}${(c.history || []).length ? `<span class="hint">${c.history.length} earlier version${c.history.length === 1 ? "" : "s"}</span>` : ""}<div class="spacer"></div>
+        <div class="row">${c.storyboard_id ? `<a class="btn btn-sm" href="#storyboard" data-st-board="${esc(c.storyboard_id)}" title="Check or fix the panels; Make video opens each scene on its panel">Storyboard ✓</a><button class="btn btn-sm" type="button" data-st-unboard${busy ? " disabled" : ""} title="Plan the video from the text alone again">Drop</button>`
+            : `<button class="btn btn-sm" type="button" data-st-boardmake${busy ? " disabled" : ""} title="Draw the scenes as one $0.018 sheet per 8 scenes with the cast's pictures; the video then opens each scene on its panel">Storyboard</button>`}
+          ${c.video_url ? `<a class="btn btn-sm" href="${esc(c.video_url)}" target="_blank" rel="noopener">▶ Chapter video</a>` : ""}${(c.history || []).length ? `<span class="hint">${c.history.length} earlier version${c.history.length === 1 ? "" : "s"}</span>` : ""}<div class="spacer"></div>
           <button class="btn btn-sm btn-danger" type="button" data-st-chdel${busy ? " disabled" : ""}>Delete</button>
           <button class="btn btn-sm" type="submit"${busy ? " disabled" : ""}>Save</button>
           ${c.render_job_id ? `<button class="btn btn-sm" type="button" data-st-video="redo"${busy ? " disabled" : ""} title="Make a new video and put it in this chapter's place in the main video">Redo video</button>`
@@ -2481,6 +2558,10 @@
       try { await stSetImage(name, id); toast("Picture set", name); await stShow(true); } catch (er) { toast("Not used", readableError(er.message).short, "bad", 8000); }
     });
     if (act === "clear") { await stSetImage(name, null); await stShow(true); }
+    if (act === "pack" && await confirmAction(`Identity pack for ${name}?`, "Front, back, side and face views drawn from their picture as one $0.018 Seedream Flash sheet. The front view and the face become their first pictures, so every chapter starts from a clean full-body reference.", "Make pack")) {
+      button.disabled = true; button.textContent = "Drawing…";
+      try { await post(stPath("/characters/pack"), { name }); toast("Identity pack ready", name); } finally { await stShow(true); }
+    }
     if (act === "remove" && await confirmAction(`Remove ${name}?`, "They leave the cast list; chapters keep their lines.", "Remove")) {
       await api(stPath(`/characters?name=${encodeURIComponent(name)}`), { method: "DELETE" }); await stShow(true);
     }
@@ -2500,6 +2581,16 @@
       const body = stChapterBody(form); body.scenes.push({ description: "New scene", setting: "", characters: [], dialogue: [] });
       await putJson(stPath(`/chapters/${id}`), body, "PATCH"); document.activeElement.blur(); await stShow(true);
     }
+    const toBoard = e.target.closest("[data-st-board]");
+    if (toBoard) { board.id = toBoard.dataset.stBoard; storage.set("hawkH3Board", board.id); return; }
+    if (e.target.closest("[data-st-boardmake]")) {
+      await putJson(stPath(`/chapters/${id}`), stChapterBody(form), "PATCH");  // draw what is on screen
+      const made = await post(stPath(`/chapters/${id}/storyboard`), {});
+      board.id = made.storyboard.id; storage.set("hawkH3Board", board.id);
+      toast("Drawing the storyboard", "About 30 seconds. Open Storyboard ✓ to check the panels; Make video then uses them.");
+      document.activeElement.blur(); await stShow(true);
+    }
+    if (e.target.closest("[data-st-unboard]")) { await api(stPath(`/chapters/${id}/storyboard`), { method: "DELETE" }); await stShow(true); }
     const video = e.target.closest("[data-st-video]");
     if (video) {
       const redo = video.dataset.stVideo === "redo";
@@ -2529,6 +2620,197 @@
     const label = await askInput("Picture for this chapter", "What is it?", "");
     await post(stPath(`/chapters/${form.dataset.stCh}/images`), { asset_id: asset.id, label: label || "" }); await stShow(true);
   }, "Not used"));
+
+  // ================================================================ storyboard
+  // A board: a character, the shot list, its $0.018 Seedream Flash sheet(s) cut into panels, and the film in which
+  // every shot opens on its panel. Drawing and rendering run on the server; the page polls while they do.
+  const board = { id: storage.get("hawkH3Board") || "", view: null, ids: [], thumbs: {}, timer: null };
+  const SB_BUSY = ["drawing", "rendering", "joining"];
+  const sbPath = (rest = "") => `/v1/storyboards/${encodeURIComponent(board.id)}${rest}`;
+  const sbLines = (id) => $(id).value.split("\n").map((l) => l.trim());
+  const sbWrap = (fn, failTitle) => async (...args) => { try { await fn(...args); } catch (error) { toast(failTitle, readableError(error.message).short, "bad", 8000); } };
+
+  async function sbLoad() {
+    try {
+      const { storyboards } = await api("/v1/storyboards");
+      if (!storyboards.some((b) => b.id === board.id)) board.id = storyboards[0]?.id || "";
+      $("sbPick").innerHTML = storyboards.length
+        ? storyboards.map((b) => `<option value="${esc(b.id)}"${b.id === board.id ? " selected" : ""}>${esc(b.title)} (${b.shots.length} shots · ${esc(b.status)})</option>`).join("")
+        : `<option value="">No boards yet</option>`;
+      sbUnets();
+      if (board.id) await sbShow(); else sbEmpty();
+    } catch (error) { toast("Could not load storyboards", error.message, "bad"); }
+  }
+
+  function sbUnets() {
+    const o = state.options || {};
+    const keep = $("sbUnet").value;
+    $("sbUnet").innerHTML = `<option value="">Server default</option>` + (o.diffusion_models || [])
+      .map((f) => `<option value="${esc(f)}"${f === keep ? " selected" : ""}>${esc(shortName(f))}</option>`).join("");
+  }
+
+  function sbEmpty() {
+    board.view = null; board.ids = [];
+    ["sbTitle", "sbCharacter", "sbStyle", "sbShots", "sbMotions"].forEach((id) => { $(id).value = ""; });
+    $("sbStatus").hidden = true; $("sbCost").textContent = "";
+    sbIdsPaint();
+    $("sbPanels").innerHTML = `<span class="hint">Write the shots, add the identity picture, then press <b>Draw sheets</b>.</span>`;
+    $("sbSheets").innerHTML = ""; $("sbNote").innerHTML = ""; $("sbFilm").innerHTML = "";
+  }
+
+  function sbIdsPaint(views) {
+    (views || []).forEach((v) => { board.thumbs[v.id] = v.thumb_url; });
+    $("sbIds").innerHTML = board.ids.length ? board.ids.map((id) => `<figure style="margin:0;display:grid;gap:2px">${board.thumbs[id] ? `<img src="${esc(board.thumbs[id])}" alt="">` : `<span class="hint" style="width:56px">missing from Media</span>`}`
+      + `<button class="btn btn-sm" type="button" data-sb-unid="${esc(id)}">×</button></figure>`).join("") : `<span class="hint">None yet.</span>`;
+  }
+
+  async function sbShow() {
+    clearTimeout(board.timer);
+    storage.set("hawkH3Board", board.id);
+    const v = await api(sbPath());
+    board.view = v;
+    if (!document.activeElement?.closest("#sbForm")) {
+      $("sbTitle").value = v.title; $("sbCharacter").value = v.character; $("sbAspect").value = v.aspect_ratio;
+      $("sbStyle").value = v.style || ""; $("sbShots").value = v.shots.join("\n"); $("sbMotions").value = (v.motions || []).join("\n");
+      board.ids = v.identity_asset_ids.slice();
+      sbIdsPaint(v.identity_views);
+    }
+    const busy = SB_BUSY.includes(v.status);
+    $("sbStatus").hidden = false; $("sbStatus").textContent = v.status;
+    $("sbStatus").className = `badge ${v.status === "done" || v.status === "ready" ? "done" : v.status === "failed" ? "failed" : busy ? "rendering" : "plain"}`;
+    $("sbCost").textContent = v.cost_usd ? `sheets so far: $${Number(v.cost_usd).toFixed(3)}` : "";
+    ["sbDraw", "sbDrawMissing", "sbRender", "sbDelete"].forEach((id) => { $(id).disabled = busy; });
+    sbPanelsPaint(v, busy);
+    sbFilmPaint(v);
+    $("boardBusy").hidden = !busy;
+    if (busy) board.timer = setTimeout(() => sbShow().catch(() => {}), 4000);
+  }
+
+  function sbPanelsPaint(v, busy) {
+    $("sbNote").innerHTML = (v.error ? `<div class="alert bad">${errorHtml(v.error)}</div>` : "") + (v.note ? `<div class="alert warn">${esc(v.note)}</div>` : "")
+      + (v.status === "drawing" ? `<div class="alert">Drawing ${Math.ceil(v.shots.length / 8)} sheet${v.shots.length > 8 ? "s" : ""} on Seedream Flash… about 30 seconds.</div>` : "");
+    $("sbPanels").innerHTML = v.shots.map((shot, n) => {
+      const p = (v.panel_views || [])[n];
+      return `<div class="sb-panel" data-sb-n="${n + 1}">
+        ${p ? `<a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img src="${esc(p.thumb_url)}" alt="Shot ${n + 1}" loading="lazy"></a>` : `<div class="sb-empty">${v.status === "drawing" ? "drawing…" : "no panel"}</div>`}
+        <strong class="hint">Shot ${n + 1}</strong>
+        <textarea class="textarea" data-sb-shot>${esc(shot)}</textarea>
+        <div class="row" style="gap:4px"><button class="btn btn-sm" type="button" data-sb-redo${busy ? " disabled" : ""} title="Draw this shot again on its own ($0.018), keeping its setting">Redo</button>
+          <button class="btn btn-sm" type="button" data-sb-fresh${busy ? " disabled" : ""} title="Draw it again from scratch">New</button>
+          <button class="btn btn-sm" type="button" data-sb-media${busy ? " disabled" : ""} title="Use an image from Media">Media</button></div>
+      </div>`;
+    }).join("") || `<span class="hint">No shots yet.</span>`;
+    $("sbSheets").innerHTML = (v.sheet_views || []).filter((s) => s.asset).map((s, i) => `<figure><a href="${esc(s.asset.file_url)}" target="_blank" rel="noopener"><img src="${esc(s.asset.thumb_url)}" alt=""></a><span>sheet ${i + 1}</span></figure>`).join("");
+  }
+
+  function sbFilmPaint(v) {
+    const jobs = (v.jobs || []).map((j, i) => `<div class="row" style="gap:6px;font-size:13px"><strong>Part ${i + 1}</strong><span class="badge ${j.status === "done" ? "done" : j.status === "failed" ? "failed" : "rendering"}">${esc(j.status)}</span>`
+      + `${j.progress && j.progress.segments_total ? `<span class="hint">${j.progress.segments_done}/${j.progress.segments_total} shots</span>` : ""}</div>`).join("");
+    const film = v.film ? `<a class="btn btn-primary" href="${esc(v.film.file_url)}" target="_blank" rel="noopener">▶ Play the film</a>`
+      + (v.render && v.render.drive ? `<span class="hint">Drive: ${esc(v.render.drive)}</span>` : "") : "";
+    $("sbFilm").innerHTML = jobs || film ? `<div class="grid" style="gap:6px">${jobs}${film}</div>` : "";
+  }
+
+  function sbBody() {
+    const shots = sbLines("sbShots").filter(Boolean);
+    const motions = sbLines("sbMotions");
+    return { title: $("sbTitle").value.trim() || "Storyboard", character: $("sbCharacter").value.trim(), identity_asset_ids: board.ids,
+             shots, motions: motions.some(Boolean) ? motions.slice(0, shots.length) : null, aspect_ratio: $("sbAspect").value,
+             style: $("sbStyle").value.trim() };
+  }
+
+  async function sbSave(draw) {
+    const body = sbBody();
+    if (!body.character) throw new Error("Describe the character first.");
+    if (!body.shots.length) throw new Error("Write at least one shot, one per line.");
+    if (!board.ids.length) throw new Error("Add the character's identity picture first.");
+    if (!board.id) {
+      const made = await post("/v1/storyboards", { ...body, draw });
+      board.id = made.id; await sbLoad(); return made;
+    }
+    const { identity_asset_ids, ...patch } = body;  // identity pictures are fixed once a board exists
+    await putJson(sbPath(), patch, "PATCH");
+    if (draw) await post(sbPath("/draw"), {});
+    await sbShow();
+  }
+
+  $("sbPick").onchange = (e) => { board.id = e.target.value; sbShow().catch((er) => toast("Could not open", er.message, "bad")); };
+  $("sbNew").onclick = () => { board.id = ""; storage.set("hawkH3Board", ""); sbEmpty(); $("sbTitle").focus(); };
+  $("sbForm").onsubmit = sbWrap(async (e) => { e.preventDefault(); await sbSave(false); toast("Board saved"); document.activeElement.blur(); }, "Could not save");
+  $("sbDraw").onclick = sbWrap(async () => {
+    if (board.view && board.view.panels.some(Boolean) && !await confirmAction("Draw every shot again?", "New sheets replace all the panels ($0.018 per 8 shots). To fix one shot, use its Redo button instead.", "Draw again")) return;
+    await sbSave(true); toast("Drawing the sheets", "Seedream Flash, about 30 seconds.");
+  }, "Could not draw");
+  $("sbDrawMissing").onclick = sbWrap(async () => { if (!board.id) return; await post(sbPath("/draw?missing_only=true"), {}); await sbShow(); }, "Could not draw");
+  $("sbDelete").onclick = sbWrap(async () => {
+    if (!board.id || !await confirmAction("Delete this board?", "Its sheets, panels and film stay in Media.", "Delete")) return;
+    await api(sbPath(), { method: "DELETE" }); board.id = ""; await sbLoad();
+  }, "Could not delete");
+
+  // identity pictures
+  $("sbIdPick").onclick = () => stPicker($("sbIdPicker"), async (id) => {
+    if (board.id) { toast("Identity is fixed", "A board keeps the identity it was drawn with: start a New board for another.", "warn"); return; }
+    const img = $("sbIdPicker").querySelector(`[data-pick="${CSS.escape(id)}"]`);
+    if (img) board.thumbs[id] = img.src;
+    if (!board.ids.includes(id) && board.ids.length < 3) board.ids.push(id);
+    sbIdsPaint();
+  });
+  $("sbIdUpload").onchange = sbWrap(async (e) => {
+    if (!e.target.files[0]) return;
+    const asset = await uploadFile(e.target.files[0], () => {}, { collection: "storyboard uploads" });
+    board.thumbs[asset.id] = asset.thumb_url;
+    if (board.ids.length < 3) board.ids.push(asset.id);
+    e.target.value = ""; sbIdsPaint();
+  }, "Upload failed");
+  $("sbIds").onclick = (e) => {
+    const x = e.target.closest("[data-sb-unid]"); if (!x) return;
+    if (board.id) { toast("Identity is fixed", "Start a New board to use other identity pictures.", "warn"); return; }
+    board.ids = board.ids.filter((i) => i !== x.dataset.sbUnid); sbIdsPaint();
+  };
+
+  // panels
+  $("sbPanels").addEventListener("click", sbWrap(async (e) => {
+    const card = e.target.closest("[data-sb-n]"); if (!card || !board.id) return;
+    const n = Number(card.dataset.sbN);
+    const shot = card.querySelector("[data-sb-shot]").value.trim();
+    const redo = e.target.closest("[data-sb-redo]"), fresh = e.target.closest("[data-sb-fresh]");
+    if (redo || fresh) {
+      const button = redo || fresh;
+      button.disabled = true; button.textContent = "Drawing…";
+      try { await post(sbPath(`/panels/${n}`), { shot, keep_setting: !!redo }); toast(`Shot ${n} redrawn`, "$0.018"); }
+      finally { await sbShow(); }
+    }
+    if (e.target.closest("[data-sb-media]")) await stPicker($("sbPanelPicker"), async (id) => {
+      await post(sbPath(`/panels/${n}`), { asset_id: id }); $("sbPanelPicker").hidden = true; await sbShow();
+    });
+  }, "Could not redraw"));
+
+  // the film
+  $("sbRenderForm").onsubmit = sbWrap(async (e) => {
+    e.preventDefault();
+    if (!board.id) throw new Error("Save and draw the board first.");
+    await sbSave(false);
+    const settings = { aspect_ratio: board.view.aspect_ratio, megapixels: Number($("sbMp").value), continuity: "off",
+                       ...($("sbUnet").value ? { unet_name: $("sbUnet").value } : {}) };
+    await post(sbPath("/render"), { settings, segment_seconds: Number($("sbSeconds").value) || 6, mood: $("sbMood").value.trim(), music: $("sbMusic").value.trim() });
+    toast("Making the film", "Each shot opens on its panel. Parts render in the queue, then join into one video.");
+    await sbShow();
+  }, "Could not start the film");
+
+  // identity pack
+  $("sbPackForm").onsubmit = sbWrap(async (e) => {
+    e.preventDefault();
+    const name = $("sbPackName").value.trim() || $("sbTitle").value.trim();
+    if (!name) throw new Error("Give the character's name.");
+    if (!board.ids.length) throw new Error("Add the identity picture on the left first.");
+    $("sbPackGo").disabled = true; $("sbPackGo").textContent = "Drawing…";
+    try {
+      const pack = await post("/v1/identity-packs", { name, description: $("sbCharacter").value.trim(), identity_asset_ids: board.ids,
+                                                       style: $("sbStyle").value.trim(), anatomy: $("sbPackAnatomy").checked });
+      $("sbPack").innerHTML = pack.panels.map((p) => `<figure><a href="${esc(p.file_url)}" target="_blank" rel="noopener"><img src="${esc(p.thumb_url)}" alt=""></a><span>${esc(p.view)}</span></figure>`).join("");
+      toast("Identity pack ready", `${pack.panels.length} views, tagged identity-pack in Media.`);
+    } finally { $("sbPackGo").disabled = false; $("sbPackGo").textContent = "Make pack"; }
+  }, "Could not make the pack");
 
   // ------------------------------------------------ Photograph settings: the Manhwa page's own Qwen 2.1 config
   // Who looks at each panel and writes its prompt; "" is the fixed template, with no model call.

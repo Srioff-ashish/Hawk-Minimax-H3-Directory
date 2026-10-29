@@ -92,16 +92,22 @@ class Cut(unittest.TestCase):
 
 class FakeStore:
     def __init__(self):
-        self.assets = {}
+        self.assets, self.jobs = {}, {}
 
     def get_asset(self, asset_id):
         return self.assets.get(asset_id)
+
+    def get_job(self, job_id):
+        return self.jobs.get(job_id)
 
 
 class FakeService:
     """Just what the storyboard steps call."""
 
-    def __init__(self, sheet: bytes):
+    def __init__(self, sheet: bytes, data_dir: str = ""):
+        import tempfile, types
+
+        self.settings = types.SimpleNamespace(data_dir=data_dir or tempfile.mkdtemp())
         self.store = FakeStore()
         self.sheet = sheet
         self.image_calls, self.videos, self.tags = [], [], {}
@@ -109,9 +115,13 @@ class FakeService:
 
     async def generate_images(self, prompt, **kwargs):
         self.image_calls.append((prompt, kwargs))
-        asset = {"id": "sheet1", "kind": "image", "filename": "sheet.jpg", "collection": "Generated"}
-        self.store.assets["sheet1"] = asset
+        asset_id = "sheet1" if len(self.image_calls) == 1 else f"img{len(self.image_calls)}"
+        asset = {"id": asset_id, "kind": "image", "filename": "sheet.jpg", "collection": "Generated"}
+        self.store.assets[asset_id] = asset
         return {"assets": [asset], "cost_usd": 0.018, "model": "bytedance/seedream-v5.0-flash/edit"}
+
+    def job_summary(self, job):
+        return job
 
     def update_asset(self, asset_id, **kwargs):
         self.tags.setdefault(asset_id, []).extend(kwargs.get("add_tags") or [])
@@ -131,7 +141,9 @@ class FakeService:
 
     async def create_video(self, request):
         self.videos.append(request)
-        return {"id": "job1", "status": "planning"}
+        job = {"id": f"job{len(self.videos)}", "status": "done"}
+        self.store.jobs[job["id"]] = job
+        return job
 
 
 class Steps(unittest.TestCase):
@@ -164,6 +176,72 @@ class Steps(unittest.TestCase):
             asyncio.run(sb.make_sheet(service, ["one"], "Rebel.", []))
         with self.assertRaises(sb.StoryboardError):
             asyncio.run(sb.render_film(service, ["a", "b"], "face", ["only one"], "Rebel."))
+
+
+class Boards(unittest.IsolatedAsyncioTestCase):
+    async def test_ten_shots_are_two_sheets_two_renders_and_one_film(self):
+        service = FakeService(sheet_png(4, 2, 2048, 2048, border=40))
+        boards = sb.StoryboardManager(service)
+        boards.poll = 0.01
+        joined = []
+
+        async def fake_join(board_id):
+            joined.append(board_id)
+            board = boards.board(board_id)
+            board["render"]["film_asset_id"] = "film"
+            board["status"] = "done"
+            boards.store.save(board)
+
+        boards._join = fake_join
+        board = boards.create(title="Villa", character="Rebel.", identity_asset_ids=["face"],
+                              shots=[f"shot {n}" for n in range(1, 11)])
+        self.assertEqual(board["status"], "drawing")
+        await boards._tasks[board["id"]]
+        board = boards.board(board["id"])
+        self.assertEqual(board["status"], "ready", board.get("error"))
+        self.assertEqual(len(board["sheets"]), 2, "eight shots to a sheet")
+        self.assertTrue(all(board["panels"]))
+        self.assertEqual(board["cost_usd"], 0.036)
+
+        redone = await boards.redo_panel(board["id"], 3, shot="shot three, laughing")
+        prompt, kwargs = service.image_calls[-1]
+        self.assertEqual(kwargs["size"], "1584x2816", "one tall 9:16 panel, the biggest at the same price")
+        self.assertIn(board["panels"][2], kwargs["reference_asset_ids"], "the old panel keeps the setting")
+        self.assertIn("laughing", prompt)
+        self.assertEqual(redone["shots"][2], "shot three, laughing")
+
+        boards.start_render(board["id"], segment_seconds=5)
+        await boards._tasks[board["id"]]
+        self.assertEqual([len(v.references) for v in service.videos], [9, 3], "8 + identity, then 2 + identity")
+        self.assertEqual(joined, [board["id"]])
+        self.assertEqual(boards.board(board["id"])["status"], "done")
+
+    async def test_a_one_call_film_renders_once_drawn(self):
+        service = FakeService(sheet_png(2, 1, 2048, 2048, border=40))
+        boards = sb.StoryboardManager(service)
+        boards.poll = 0.01
+
+        async def fake_join(board_id):
+            boards._set(board_id, status="done")
+
+        boards._join = fake_join
+        board = boards.create(title="Two", character="Rebel.", identity_asset_ids=["face"], shots=["a", "b"],
+                              then_render={"segment_seconds": 4})
+        for _ in range(50):  # the drawing hands over to the render, then the render ends
+            task = boards._tasks.get(board["id"])
+            if task is None:
+                break
+            await task
+            await asyncio.sleep(0)
+        self.assertEqual(len(service.videos), 1)
+        self.assertEqual(boards.board(board["id"])["status"], "done")
+
+    async def test_rendering_waits_for_every_panel(self):
+        service = FakeService(sheet_png(2, 1))
+        boards = sb.StoryboardManager(service)
+        board = boards.create(title="x", character="Rebel.", identity_asset_ids=["face"], shots=["a", "b"], draw=False)
+        with self.assertRaises(sb.StoryboardError):
+            boards.start_render(board["id"])
 
 
 if __name__ == "__main__":
