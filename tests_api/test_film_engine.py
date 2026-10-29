@@ -279,6 +279,14 @@ class ManhwaFilm(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         await self.manager.stop()
 
+    async def test_only_the_chosen_tiles_are_filmed(self):
+        self.manager.store.save_characters("S", {"Mina": {"appearance": "short black hair, early 30s", "role": "cast",
+                                                          "portrait_asset_id": self.portrait}})
+        with self.assertRaises(RequestError):
+            await self.manager.make_film("ch1", tile_ids=["not-a-tile"])
+        out = await self.manager.make_film("ch1", tile_ids=["ch1-0000"])
+        self.assertEqual((out["panels"], out["skipped"]["shows a minor"]), (1, 0), "the other tile is not even looked at")
+
     async def test_no_portraits_no_film(self):
         with self.assertRaises(RequestError):
             await self.manager.make_film("ch1")

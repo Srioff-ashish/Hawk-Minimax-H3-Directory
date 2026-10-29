@@ -523,13 +523,16 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
             "under-18 ones left out) turned into live-action stills eight at a time on Seedream Flash ($0.018 per 8) "
             "with the cast's portraits for their faces, checked, then filmed with each panel's lines word for word. "
             "review ask (default) stops for approval: show the user the panels (get_storyboard) and call "
-            "approve_film. Needs the cast's portraits (make_manhwa_cast)."))
+            "approve_film. Needs the cast's portraits (make_manhwa_cast). tile_ids: only these tiles, to leave scenes "
+            "out (ids from get_manhwa_chapter)."))
         async def make_manhwa_film(chapter_id: str, platform: str = "general", quality: str = "final", review: str = "ask",
                                    style: str = "", aspect_ratio: str = "9:16", max_panels: int = 40,
-                                   music_prompt: str = "", segment_seconds: float = 5.0) -> dict:
+                                   music_prompt: str = "", segment_seconds: float = 5.0,
+                                   tile_ids: list[str] | None = None) -> dict:
             return await run(manhwa.make_film(chapter_id, platform=platform, quality=quality, review=review, style=style,
                                               aspect_ratio=aspect_ratio, max_panels=max_panels,
-                                              music_prompt=music_prompt, segment_seconds=segment_seconds))
+                                              music_prompt=music_prompt, segment_seconds=segment_seconds,
+                                              tile_ids=tile_ids))
 
         @mcp.tool(description=(
             "Catalogue a manhwa chapter from its reader page URL: downloads the panel images in order into the library "

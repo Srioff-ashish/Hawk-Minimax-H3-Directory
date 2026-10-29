@@ -689,3 +689,4 @@ class ManhwaFilmIn(BaseModel):
     max_panels: int = Field(40, ge=1, le=40)
     music_prompt: str = Field("", max_length=2000, description="One instrumental track over the whole film (about $0.15).")
     segment_seconds: float = Field(5.0, ge=1, le=15)
+    tile_ids: list[str] | None = Field(None, description="Only these tiles (ids from the chapter): leave scenes out.")

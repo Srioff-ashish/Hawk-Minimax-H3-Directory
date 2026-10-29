@@ -2084,11 +2084,12 @@ class ManhwaManager:
 
     async def make_film(self, chapter_id: str, *, platform: str = "general", quality: str = "final", review: str = "ask",
                         style: str = "", aspect_ratio: str = "9:16", max_panels: int = 40, music_prompt: str = "",
-                        segment_seconds: float = 5.0) -> dict:
+                        segment_seconds: float = 5.0, tile_ids: list[str] | None = None) -> dict:
         """The chapter through the film engine: its panels cut from the pages (blank and repeated ones dropped, any
         showing someone who reads as under 18 left out), turned into live-action stills eight at a time on Seedream
         Flash with the cast's portraits for their faces, then checked and filmed -- each panel's scene as its shot
-        and its lines word for word. Review ask (the default) stops for approval on the Storyboard page."""
+        and its lines word for word. Review ask (the default) stops for approval on the Storyboard page.
+        tile_ids: only these tiles' panels (ids from the chapter), e.g. to leave scenes out."""
         from .storyboard import live_action_sheets
 
         if self.boards is None:
@@ -2098,6 +2099,10 @@ class ManhwaManager:
             raise NotFound(f"No manhwa chapter {chapter_id!r}.")
         series = chapter["series"]
         pages = self.store.pages(chapter_id)
+        wanted = set(tile_ids or [])
+        unknown = wanted - {p["id"] for p in pages}
+        if unknown:
+            raise RequestError(f"Not tiles of this chapter: {', '.join(sorted(unknown)[:5])}.")
         tiles = {(p.get("asset_id"), p.get("part")): p for p in pages}
         roster = self.store.characters(series)
         portraits = self._portraits(series)
@@ -2110,6 +2115,8 @@ class ManhwaManager:
                 continue
             for part, jpeg in await asyncio.to_thread(cut_panels, await self.service.asset_bytes(asset)):
                 tile = tiles.get((asset_id, part)) or {}
+                if wanted and tile.get("id") not in wanted:
+                    continue
                 names = [p.get("name") for p in tile.get("characters") or [] if p.get("name")]
                 if any(is_minor(n, roster.get(n) or {"appearance": next((p.get("appearance", "") for p in tile["characters"]
                                                                           if p.get("name") == n), "")}) for n in names):
