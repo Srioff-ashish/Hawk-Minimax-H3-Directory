@@ -17,6 +17,7 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - Images: one frozen moment. Drop the motion line and keep the rest. What works for explicit stills (tested on Qwen 2.1 with its NSFW LoRA): open with the kind of photo ("amateur candid phone photo", "POV porn still"), then spend most of the words on her: face and expression (eyes, brows, mouth, where she looks), skin, hair, body, jewellery; then the position's geometry and what the camera sees at the frame edges ("her spread knees at the bottom corners of the frame"); then the background and light in a sentence or two; then the camera ("high angle, medium shot"); then the tag line. Plain explicit words read better than clinical ones. For Qwen 2.1 outside POV, keep its long paragraph and say "two complete, separate adult bodies" with which parts of each are visible -- but expect merged bodies; prefer POV or Krea 2 for two full bodies.
 - Sound (video): the slap, breath and moans follow the rhythm you wrote; script them in the soundscape like any other sound, with the exclusion sentence.
 - With picture references, say which <Picture N> is which person before describing the pose, and keep each person's face, skin and build tied to their own reference. A pose reference (<Pose N>) shows the bodies' positions only; still describe them in words.
+- A tag that is also an object gets drawn as the object: tested on Krea 2, "wheelbarrow" in the tag line put a garden wheelbarrow in the room. Keep such names (wheelbarrow, bridge, table, chair) out of the tag line and describe the bodies instead.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
 ## missionary-pillow — Elevated missionary (pillow under her hips)
@@ -450,20 +451,20 @@ prompt: She rests on her shoulders with her hips lifted above her head and her l
 
 ## wheelbarrow — Standing wheelbarrow
 aliases: wheelbarrow, standing wheelbarrow
-tags: wheelbarrow, standing, from behind, legs held, hands on floor
-her: Hands flat on the floor, arms straight, her body held horizontal off the floor, her legs held up by him around his waist.
+tags: standing sex, from behind, legs held up, legs around his waist, hands on floor, suspended
+her: Face down: her chest and belly face the floor and her back faces up toward him. Hands flat on the floor, arms straight like the top of a push-up, her body held horizontal off the floor, her legs held up by him around his waist.
 him: Standing behind her, legs apart, holding her thighs at his hips.
 hands: His hands grip her thighs at his waist; her hands are flat on the floor carrying her upper body.
 faces: She looks at the floor or forward toward the camera, hair hanging down; he looks down at her back.
 camera: Side profile, full figure, low.
 pov: From his eyes standing behind her, looking down along her horizontal back to her hands on the floor; his hands on her thighs at the bottom.
 motion: He thrusts from behind while holding her legs; her arms brace against each thrust.
-watch: Her knees end up on the floor (doggy); say her legs are off the floor in his hands and only her hands touch the floor.
-prompt: She holds herself up on straight arms with her hands flat on the floor, her body horizontal and her legs lifted around his waist. He stands behind her gripping her thighs at his hips, penetrating her from behind.
+watch: Tested on Krea 2: with "wheelbarrow" in the prompt it drew a garden wheelbarrow and left her feet on the floor. Without the word it lifted her legs but turned her face up, braced on her hands behind her. Never write the word; say she is face down like the top of a push-up, chest to the floor, legs held at his hips.
+prompt: She is face down, holding herself up on straight arms like the top of a push-up with her hands flat on the floor, her chest facing the floor and her back toward him, her body horizontal and her legs lifted off the floor around his waist. He stands behind her gripping her thighs at his hips, penetrating her from behind.
 
 ## seated-wheelbarrow — Seated wheelbarrow
 aliases: seated wheelbarrow
-tags: wheelbarrow, seated, from behind, hands on floor
+tags: seated sex, from behind, legs around his waist, hands on floor
 her: Hands on the floor in front of the bed, her legs bent around his waist, her hips on his lap, facing away from him.
 him: Sitting on the edge of the bed, feet on the floor, holding her hips on his lap.
 hands: His hands hold her hips or waist; her hands are flat on the floor.
@@ -471,7 +472,7 @@ faces: She faces the floor or forward; he looks down at her back.
 camera: Side profile, full figure.
 pov: From his eyes sitting, looking down along her back to her hands on the floor; his hands on her hips.
 motion: He rocks her hips on his lap; small strokes.
-watch: She falls off his lap; say her hips rest on his lap and her legs wrap his waist.
+watch: She falls off his lap; say her hips rest on his lap and her legs wrap his waist. Never write "wheelbarrow": the model draws the object.
 prompt: He sits on the edge of the bed with his feet on the floor. She faces away from him with her hips on his lap and her legs bent around his waist, her hands flat on the floor in front, while he holds her hips and rocks her on him.
 
 ## lotus — Lotus (seated, face to face)
@@ -513,18 +514,18 @@ motion: Deep thrusts from behind; her body slides forward on the sheet.
 watch: She rises onto her hands (doggy); say her chest and shoulders are flat on the bed.
 prompt: She kneels on the bed with her chest, shoulders and cheek pressed flat to the sheet and her hips raised high, arms stretched forward. He kneels directly behind her with his hands on her hips, penetrating her from behind.
 
-## bridge — Bridge
+## bridge — Bridge (supported)
 aliases: the bridge, bridge position
-tags: woman on top, straddling, him arched, flexible
-her: Straddling his raised hips facing him, her feet on the floor or bed either side of him, knees bent, lowering herself onto him.
-him: Arched up in a back bridge, his hands and feet on the floor, his belly up and hips lifted.
-hands: His hands on the floor behind his head (or his shoulders on the bed edge); her hands on his chest or her own knees.
-faces: She looks down at him; his head is tipped back.
-camera: Side profile, full figure.
+tags: woman on top, straddling, him arched back, squatting
+her: Squatting astride his raised hips facing him, her feet flat on the floor either side of his thighs, knees bent wide, her hands on his chest.
+him: Arched backward in a supported bridge: his shoulders and upper back resting on the edge of the bed, his feet flat on the floor, knees bent, his hips pushed up level with the bed so his body is a straight ramp from knees to shoulders.
+hands: His hands grip the bedcover behind his head or hold her hips; her hands are on his chest for balance.
+faces: She looks down at him; his head is tipped back over the edge of the bed.
+camera: Side profile at hip height, full figure, so his arched line and the gap under his back read.
 pov: No real POV; use the side view.
-motion: She moves up and down on his raised hips; he holds the bridge still.
-watch: His hips sink to the floor; say he holds himself up on his hands and feet.
-prompt: He arches up in a back bridge with his hands and feet on the floor and his hips raised. She stands astride his raised hips facing him, knees bent, lowering herself onto him and moving up and down.
+motion: She moves up and down on his raised hips from her squat; he holds the bridge still.
+watch: Tested on Krea 2: a full bridge on hands and feet came out as him lying arched over the bed with her bending over him. Use this supported version (shoulders on the bed edge, feet on the floor) and say his hips are raised level with the bed.
+prompt: He arches backward in a supported bridge, his shoulders resting on the edge of the bed and his feet flat on the floor, hips pushed up level with the bed. She squats astride his raised hips facing him, her feet flat on the floor either side of his thighs and her hands on his chest, lowering herself onto him.
 
 ## chairman — The chairman
 aliases: the chairman, chairman
@@ -660,14 +661,14 @@ prompt: He lies on his back. She kneels astride his face, knees either side of h
 aliases: straddle on all fours, straddle on all four, squatting doggy, crouching doggy
 tags: doggystyle, all fours, from behind, squatting, from above
 her: On her hands and knees on the floor, facing away from the camera, back arched, knees apart, hips raised higher than her shoulders.
-him: Squatting over her hips from behind, his feet planted on the floor either side of her knees, knees bent deep, his hips above and behind hers so he enters downward.
+him: Squatting directly over her raised hips, his feet planted on the floor on either side of her knees (her legs between his feet), his knees bent deep, his buttocks above her lower back, so he enters downward at a steep angle. He is above her, not kneeling behind her.
 hands: His hands rest on her lower back or grip her hips for balance; her hands are flat on the floor.
 faces: She looks forward or back over her shoulder toward him; he looks down at her back.
 camera: From behind and slightly to one side at floor level, full figure, her back to the camera; side profile to show his squat and the downward angle.
 pov: From his eyes squatting above her, looking steeply down her arched back to her face turned over her shoulder; his hands on her hips at the bottom corners.
 motion: He drops his hips downward into her from the squat and rises again; her body rocks forward on her hands.
-watch: He ends up kneeling behind her (plain doggy); say he squats with his feet on the floor either side of her, entering from above. State vaginal or anal in the same sentence.
-prompt: She is on her hands and knees on the floor with her back to the camera, back arched and hips raised. He squats over her hips from behind with his feet planted on the floor either side of her knees, his hands on her hips, entering her vagina (or anus) downward from above.
+watch: Tested on Krea 2: he squatted behind her instead of over her. Say his feet are on either side of her knees and his buttocks above her lower back. State vaginal or anal in the same sentence.
+prompt: She is on her hands and knees on the floor with her back to the camera, back arched and hips raised. He squats directly over her raised hips with his feet planted on the floor on either side of her knees, his buttocks above her lower back and his hands on her hips, entering her vagina (or anus) steeply downward from above.
 
 ## bullseye — Bullseye (seated oral)
 aliases: bullseye, bull's eye, bulls eye
