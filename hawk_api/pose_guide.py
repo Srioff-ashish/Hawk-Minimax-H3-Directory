@@ -16,7 +16,7 @@ PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides", "poses
 #: ("cock" the bird, "Dick" the name, "cum laude", a plot that "thrusts") are left out.
 SEXUAL = re.compile(r"\b(sex|sexual|having sex|\w*fuck\w*|penetrat\w*|anal|vagina\w*|vulva|pussy|penis|his cock|"
                     r"his dick|blowjob|handjob|titjob|oral sex|cunnilingus|fellatio|nsfw|porn\w*|orgasm\w*|cumming|"
-                    r"cumshot|creampie|intercourse|rides him|riding him|sucks him)\b", re.IGNORECASE)
+                    r"cumshot|creampie|intercourse|rides him|riding him|sucks him|double penetration|threesome)\b", re.IGNORECASE)
 #: Position names that are also everyday words: a butterfly tattoo, a candle-lit room, a cowgirl at a rodeo, a doggy
 #: in the park. They pick a position only in a brief that is already sexual; on their own they mean nothing here.
 EVERYDAY = frozenset({"butterfly", "candle", "carry", "riding", "cowgirl", "doggy", "pretzel", "flatiron", "face down",
@@ -27,7 +27,9 @@ EVERYDAY = frozenset({"butterfly", "candle", "carry", "riding", "cowgirl", "dogg
                       "man on top", "missionary", "half folded", "carrying", "69", "sixty nine",
                       "piledriver", "pile driver", "anvil", "deep impact", "knees to chest", "knees out",
                       "standing split", "standing face to face", "standing against the wall", "frog legs",
-                      "closed leg", "legs on shoulders", "on his lap", "bullseye", "bull s eye", "bulls eye"})
+                      "closed leg", "legs on shoulders", "on his lap", "bullseye", "bull s eye", "bulls eye", "king of clubs",
+                      "sandwich", "sidesaddle", "wishbone", "northern exposure", "southern exposure", "standard dp",
+                      "reverse right angle", "missionary double"})
 #: An everyday name followed by one of these describes a thing, not a position: "candle-lit", "butterfly tattoo".
 NOT_A_POSE = re.compile(r"^(?:-|\s+)(?:lit|light|lights|tattoo|tattoos|print|necklace|earrings?|stand|shop|wings?|"
                         r"clip|sleeves?|garden|holder|flame|wax|race|hat|boots?)\b", re.IGNORECASE)

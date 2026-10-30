@@ -20,6 +20,7 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - Facing away is the hardest thing to get (tested on Krea 2): chairman, caboose and rider on fire all came back face to face. Say it three ways: "facing away from him", "her back against his chest" (or "her head toward his feet"), and that they both face the same direction, toward the camera. Reversed bodies (69) likewise: say their bodies point in opposite directions, her head at his hips and his head between her thighs. If that still fails, place them in the frame: where the camera stands and where each head is ("his head on the pillow at the left of the frame, hers at the right near his feet"; "seen from the foot of the bed, her face toward the camera, his just behind her shoulder"). Tested: that fixed rider on fire and caboose when the wording alone did not.
 - Describe one woman and one position. A prompt that also mentions a variant ("or reverse: she faces his feet") drew two women (tested, cowgirl). Use a portrait frame for her-on-top positions.
 - A tag that is also an object gets drawn as the object: tested on Krea 2, "wheelbarrow" in the tag line put a garden wheelbarrow in the room. Keep such names (wheelbarrow, bridge, table, chair) out of the tag line and describe the bodies instead.
+- Threesomes (the dp- entries: one woman and two men, all consenting adults): three bodies merge even more easily than two. Make the two men look different and name them by that look every time ("the dark-haired man", "the blond man") or by place ("the man beneath her", "the man behind her"); never "he" once there are two. Give each body its own sentence and account for every limb. Say which man is in her vagina and which in her anus, in the same sentence as the position. Prefer a side profile so all three bodies and both points of contact are in view, and a wide frame (16:9) so nobody is cut off.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
 ## missionary-pillow — Elevated missionary (pillow under her hips)
@@ -685,3 +686,210 @@ motion: She rocks her hips slowly against his mouth; his head moves little.
 watch: Tested on Krea 2: she came back sitting in his lap. Say she stands upright on her feet, does not sit on him, her hips at his face. He sits leaning back against the wall. Roles can swap: the receiver stands, the giver sits leaning back, and with a man receiving it is fellatio with her mouth on the tip of his penis.
 prompt: He sits on the floor leaning back against the wall, his legs out in front. She stands upright on her own feet in front of him, straddling his legs, feet apart and knees almost straight, her hips at the height of his face and pushed toward it, one hand on the wall above his head. She does not sit on him. His mouth is on her clitoris and his hands hold the backs of her thighs. Tag: oral sex, cunnilingus.
 
+## dp-cowgirl — DP cowgirl
+aliases: dp cowgirl, double penetration cowgirl, cowgirl dp, standard dp
+tags: double penetration, threesome, cowgirl position, from behind, vaginal and anal
+her: Kneeling astride the first man's hips facing him, knees on the bed either side of his waist, leaning forward with her chest low toward his and her buttocks raised and pushed back.
+him: The first man (dark-haired) lies on his back beneath her, in her vagina from below. The second man (blond) kneels upright behind her between the first man's legs, in her anus from behind.
+hands: Her hands on the bed either side of the first man's head; the first man's hands on her waist; the second man's hands grip her hips.
+faces: She looks down at the first man or back over her shoulder, mouth open; the first man looks up at her; the second man looks down at her back.
+camera: Side profile at bed height, wide, all three bodies and both points of contact in view; or low three-quarter rear.
+pov: From the second man's eyes kneeling behind her, looking down her back to her face turned over her shoulder, the first man's legs below; only the second man's hands on her hips show.
+motion: The man behind thrusts; the man below lifts his hips in counter-rhythm; she rocks between them.
+watch: The man behind ends up beside them; say he kneels directly behind her between the first man's legs. Keep the two men's looks distinct.
+prompt: The dark-haired man lies on his back. She kneels astride his hips facing him, leaning forward with her chest low and her buttocks raised, and he is in her vagina from below, his hands on her waist. The blond man kneels upright directly behind her between the dark-haired man's legs, gripping her hips, in her anus from behind.
+
+## dp-reverse-cowgirl — Reverse DP cowgirl
+aliases: reverse dp cowgirl, dp reverse cowgirl, reverse cowgirl dp
+tags: double penetration, threesome, reverse cowgirl position, vaginal and anal
+her: Lying back on top of the first man with her back on his chest, facing up and away from him toward his feet, her knees bent and spread, feet on the bed.
+him: The first man (dark-haired) lies on his back beneath her, in her anus from below. The second man (blond) kneels between her spread knees facing her, in her vagina from the front.
+hands: One of her hands rubs her clitoris, the other holds the second man's arm; the first man's hands hold her waist or breasts from below; the second man's hands on her thighs.
+faces: She faces up and toward the second man, head back on the first man's shoulder; the second man looks down at her; the first man's face is beside her head.
+camera: Side profile at bed height, wide, all three in view.
+pov: From the second man's eyes kneeling, looking down at her spread on top of the first man; only the second man's hands on her thighs show.
+motion: Both men thrust in turn; she lies back between them.
+watch: She sits upright facing the first man (plain cowgirl); say her back lies on his chest and she faces the second man.
+prompt: The dark-haired man lies on his back. She lies back on top of him with her back on his chest, facing away from him toward the foot of the bed, knees bent and spread, and he is in her anus from below. The blond man kneels between her spread knees facing her, hands on her thighs, in her vagina from the front, while she rubs her clitoris.
+
+## dp-doggy — Doggy DP
+aliases: doggy dp, dp doggy, doggy style dp, double penetration doggy, doggy double penetration
+tags: double penetration, threesome, doggystyle, all fours, from behind
+her: On her hands and knees, or with her chest lowered, straddling the first man who lies beneath her.
+him: The first man (dark-haired) lies on his back under her, in her vagina from below. The second man (blond) crouches over her from behind, feet planted either side, in her anus from above.
+hands: Her hands on the bed beside the first man's head; the first man's hands on her waist; the second man's hands on her hips or lower back.
+faces: She looks forward or down at the first man; the second man looks down at her back.
+camera: Side profile at bed height, wide; three-quarter rear shows both points of contact.
+pov: From the second man's eyes crouching above her, looking down her back; his hands on her hips.
+motion: The crouching man drives down; the man below thrusts up; she braces on her hands.
+watch: The crouching man ends up kneeling beside; say he crouches directly over her hips from behind with his feet either side.
+prompt: The dark-haired man lies on his back. She is on all fours over him, straddling his hips, and he is in her vagina from below. The blond man crouches over her from behind with his feet planted either side of her knees and his hands on her hips, in her anus from above.
+
+## dp-missionary — Missionary DP
+aliases: missionary dp, dp missionary, double penetration missionary, missionary double, missionary double penetration
+tags: double penetration, threesome, missionary, on back, vaginal and anal
+her: On her back on the edge of the bed, hips raised and legs spread and lifted.
+him: The first man (dark-haired) crouches over her between her thighs, in her vagina from above. The second man (blond) stands at the edge of the bed, lower, in her anus.
+hands: Her hands free, one rubbing her clitoris; the first man's hands on the bed beside her; the second man's hands under her thighs.
+faces: She faces up, eyes on the first man; both men look down at her.
+camera: Side profile at bed height, wide, both men and both points of contact in view.
+pov: From the first man's eyes above her, looking down at her face; only his arms show.
+motion: The two men thrust in turn.
+watch: The second man disappears behind the first; keep the side profile and say he stands lower at the bed's edge.
+prompt: She lies on her back at the edge of the bed with her hips raised and her legs spread and lifted, rubbing her clitoris. The dark-haired man crouches over her between her thighs, in her vagina from above. The blond man stands at the edge of the bed below him, holding her thighs, in her anus.
+
+## dp-king-of-clubs — King of clubs DP
+aliases: king of clubs dp, dp king of clubs, king of clubs
+tags: double penetration, threesome, woman on top, squatting
+her: Squatting over both men's hips where they meet, feet flat on the bed, knees wide, facing one of them.
+him: The two men lie on their backs facing each other, their legs crossed over one another so their hips are close together.
+hands: Her hands on the nearer man's chest or her own knees, one rubbing her clitoris; their hands on her hips and thighs.
+faces: She looks down; both men look up at her.
+camera: Side profile at bed height, wide, both men's heads at opposite ends of the frame.
+pov: No real POV; use the side view.
+motion: She rises and sinks on both of them.
+watch: Model draws one man; say two men lie facing each other with crossed legs, heads at opposite ends of the bed.
+prompt: Two men lie on their backs facing each other, their heads at opposite ends of the bed and their legs crossed over one another so their hips meet. She squats over their joined hips with her feet flat on the bed and her knees wide, taking both of them, one hand rubbing her clitoris.
+
+## dp-spooning — Spooning DP (sandwich)
+aliases: spooning dp, dp spooning, sandwich, sandwich dp
+tags: double penetration, threesome, spooning, side lying, sandwich
+her: Lying on her side between the two men, her top leg lifted and hooked over the front man's hip.
+him: The front man (dark-haired) lies on his side facing her, in her vagina. The back man (blond) lies on his side behind her, his chest to her back, in her anus.
+hands: The front man's hand on her lifted thigh; the back man's arm around her waist; her hands on the front man's chest.
+faces: She faces the front man, eyes closed; the back man's face is at her neck.
+camera: From above or at bed height from the side of the front man, all three in a line.
+pov: From the front man's eyes, her face close, the back man's face behind her shoulder.
+motion: Both men thrust from the side, short strokes.
+watch: The back man ends up beside rather than behind; say his chest is against her back.
+prompt: Three people lie on their sides in a line. She is in the middle, her top leg hooked over the front man's hip. The dark-haired man lies facing her, in her vagina; the blond man lies behind her, his chest against her back and his arm around her waist, in her anus.
+
+## dp-standing — Standing DP
+aliases: standing dp, dp standing, air tight standing
+tags: double penetration, threesome, standing sex, suspended
+her: Lifted off the floor between the two men, facing the front man, her legs wrapped around the front man's waist, her arms reaching back around the back man's neck.
+him: The front man (dark-haired) stands facing her, holding her legs up, in her vagina. The back man (blond) stands behind her, hands under her buttocks, in her anus.
+hands: The front man's hands under her thighs; the back man's hands on her buttocks; her arms around the back man's neck.
+faces: Her head leans back on the back man's shoulder; the front man looks at her.
+camera: Side profile, full figure, wide.
+pov: No real POV; use the side view.
+motion: Both men lift and thrust; she is held between them.
+watch: Her feet end up on the floor; say she is lifted off the floor, held between them.
+prompt: She is lifted off the floor between two standing men, facing the dark-haired man in front with her legs wrapped around his waist; he holds her thighs and is in her vagina. The blond man stands behind her with his hands under her buttocks, in her anus, and her arms reach back around his neck.
+
+## dp-piledriver — Piledriver DP
+aliases: piledriver dp, dp piledriver, double piledriver
+tags: double penetration, foursome, piledriver, legs over head, oral
+her: On her shoulders with her hips raised high above her head, legs spread over her.
+him: Three men: one (bald) kneels by her head with his penis in her mouth; one (dark-haired) stands over her raised hips facing away from her face, in her vagina; one (blond) stands over her facing the dark-haired man, in her anus.
+hands: The two standing men brace on each other's shoulders or on her thighs; the kneeling man holds her head.
+faces: Her face is up toward the kneeling man; the two standing men face each other.
+camera: Side profile, full figure, wide; the stack of bodies reads vertically.
+pov: No real POV.
+motion: The two standing men drop into her in turn; the kneeling man moves gently.
+watch: Four bodies is the limit of what the models hold; expect merging. Name each man by his look, and use video rather than a still where possible.
+prompt: She rests on her shoulders with her hips raised high above her head and her legs spread. A bald man kneels by her head with his penis in her mouth. A dark-haired man stands over her raised hips facing away from her face, in her vagina, and a blond man stands over her facing him, in her anus.
+
+## dp-reverse-piledriver — Reverse piledriver DP
+aliases: reverse piledriver dp, dp reverse piledriver, ass to ass dp
+tags: double penetration, threesome, piledriver, legs over head
+her: On her shoulders with her hips raised above her head, legs spread.
+him: The two men stand over her raised hips back to back, their buttocks touching, both squatting downward: one (dark-haired) in her vagina, one (blond) in her anus.
+hands: Each man's hands on her thighs or his own knees.
+faces: She looks up between her legs; the men face away from each other.
+camera: Side profile, full figure, wide.
+pov: No real POV.
+motion: They squat down into her in turns, their buttocks bumping.
+watch: They end up facing each other (the piledriver DP); say back to back, buttocks touching.
+prompt: She rests on her shoulders with her hips raised above her head and her legs spread. Two men stand over her raised hips back to back, their buttocks touching, squatting downward: the dark-haired man in her vagina and the blond man in her anus.
+
+## dp-sidesaddle — Sidesaddle DP
+aliases: sidesaddle dp, dp sidesaddle, side saddle dp, sidesaddle
+tags: double penetration, threesome, side lying
+her: Lying on her side facing the first man, her top leg lifted over his hip.
+him: The first man (dark-haired) lies on his side facing her, in her vagina. The second man (blond) kneels over them from above and behind her, straddling her lower leg, in her anus.
+hands: The second man's hands on her top hip; the first man's hand on her back.
+faces: She faces the first man; the second man looks down.
+camera: From above at an angle, or side profile, wide.
+pov: From the second man's eyes above, looking down at her side and the first man beyond.
+motion: The man above drives down; the man beside thrusts sideways.
+watch: The second man ends up lying beside (spooning DP); say he kneels over them from above.
+prompt: She lies on her side facing the dark-haired man, her top leg over his hip, and he lies facing her, in her vagina. The blond man kneels over them from above and behind her, straddling her lower leg with his hands on her top hip, in her anus.
+
+## dp-wishbone — Wishbone DP
+aliases: wishbone dp, dp wishbone, wishbone
+tags: double penetration, threesome, legs up, edge of bed, standing
+her: On her back at the edge of the bed, both legs raised and spread wide apart like a wishbone.
+him: Two men stand side by side at the edge of the bed between her raised legs, each holding one of her legs; one (dark-haired) in her vagina, one (blond) in her anus.
+hands: Each man holds one of her ankles; her hands grip the bedcover.
+faces: She looks up at them; they look down at her.
+camera: From behind and above the men's shoulders, or side profile, wide.
+pov: From one man's eyes standing, her raised leg in his hand, the other man beside him.
+motion: They alternate: one goes in as the other comes out.
+watch: One man is dropped; say two men stand side by side, each holding one leg.
+prompt: She lies on her back at the edge of the bed with both legs raised and spread wide. Two men stand side by side between her legs, each holding one of her ankles: the dark-haired man in her vagina and the blond man in her anus, thrusting in turn.
+
+## dp-northern-exposure — Northern exposure DP
+aliases: northern exposure dp, dp northern exposure, northern exposure
+tags: double penetration, threesome, on back, lying stacked
+her: Lying on her back on top of the first man, her back on his chest, legs spread and bent.
+him: The first man (dark-haired) lies on his back beneath her, in her anus from below. The second man (blond) lies on top of her, between her legs, in her vagina, propped on his forearms.
+hands: The second man's forearms on the bed either side; the first man's hands on her breasts; her hands on the second man's back.
+faces: She faces up toward the second man, head on the first man's shoulder.
+camera: Side profile at bed height, wide, three bodies stacked.
+pov: From the second man's eyes above, her face below, the first man's face beside hers.
+motion: Both men thrust; she is pressed between them.
+watch: The bodies merge in the stack; name each man's position (beneath her, on top of her).
+prompt: The dark-haired man lies on his back. She lies on her back on top of him, her back on his chest and her legs spread, and he is in her anus from below. The blond man lies on top of her between her legs, propped on his forearms, in her vagina.
+
+## dp-southern-exposure — Southern exposure DP
+aliases: southern exposure dp, dp southern exposure, southern exposure
+tags: double penetration, threesome, reverse cowgirl, from behind, crouching
+her: Astride the first man in reverse cowgirl, facing his feet, leaning forward with her buttocks raised.
+him: The first man (dark-haired) lies on his back, in her vagina from below. The second man (blond) crouches over her from behind (above the first man's chest), in her anus.
+hands: Her hands on the first man's thighs; the second man's hands on her hips.
+faces: She faces forward toward the first man's feet and the camera; the second man looks down at her back.
+camera: From in front of her at bed height, past the first man's feet, wide; or side profile.
+pov: From the second man's eyes crouching, looking down her back.
+motion: The crouching man drives down; the man below lifts his hips.
+watch: She turns to face the first man; say facing his feet.
+prompt: The dark-haired man lies on his back. She kneels astride his hips facing his feet, leaning forward with her buttocks raised and her hands on his thighs, and he is in her vagina from below. The blond man crouches over her from behind, above the dark-haired man's chest, gripping her hips, in her anus.
+
+## dp-right-angle — Right angle DP
+aliases: right angle dp, dp right angle
+tags: double penetration, threesome, on back, crossed bodies
+her: Lying on her back with her legs open.
+him: The first man (dark-haired) lies on his side at a right angle to her, his hips to hers, in her vagina. The second man (blond) crouches or sits over her hips at the other angle, in her anus.
+hands: The second man's hands on her knees; the first man's hand on her thigh.
+faces: She looks up; the men look down at her.
+camera: From above, so the right angle between the bodies reads.
+pov: From above.
+motion: Both thrust at their angles; short strokes.
+watch: The angle collapses into a line; shoot from above and say "at a right angle to her".
+prompt: She lies on her back with her legs open. The dark-haired man lies on his side at a right angle to her body, his hips against hers, in her vagina. The blond man crouches over her hips, in her anus.
+
+## dp-reverse-right-angle — Reverse right angle DP
+aliases: reverse right angle dp, dp reverse right angle, reverse right angle
+tags: double penetration, threesome, on back, facing each other
+her: Lying on her back, legs raised.
+him: Both men crouch over her hips facing each other, one (dark-haired) in her vagina and one (blond) in her anus.
+hands: The men's hands on her thighs and on each other's shoulders for balance.
+faces: The men face each other; she looks up at both.
+camera: Side profile, wide.
+pov: No real POV.
+motion: They thrust in turn while facing each other.
+watch: Looks like the piledriver DP; keep her lying flat on her back rather than on her shoulders.
+prompt: She lies on her back with her legs raised. Two men crouch over her hips facing each other, steadying themselves on each other's shoulders: the dark-haired man in her vagina and the blond man in her anus.
+
+## dp-amazon — Amazon DP
+aliases: amazon dp, dp amazon
+tags: double penetration, threesome, woman on top, amazon position
+her: Squatting on top of the first man, facing him, lowering onto him.
+him: The first man (dark-haired) lies on his back with his legs raised and knees bent toward his chest, in her vagina. The second man (blond) kneels behind her (and behind the first man's raised buttocks), in her anus.
+hands: Her hands on the first man's knees; the second man's hands on her hips.
+faces: She looks down at the first man; the second man looks at her back.
+camera: Side profile at bed height, wide.
+pov: From the second man's eyes behind her, her back and the first man's raised knees beyond.
+motion: She sinks on the first man while the second thrusts from behind.
+watch: The first man's legs go flat (DP cowgirl); say his knees are bent up toward his chest.
+prompt: The dark-haired man lies on his back with his legs raised and knees bent toward his chest. She squats over him facing him, her hands on his knees, and he is in her vagina. The blond man kneels behind her and behind his raised buttocks, gripping her hips, in her anus.
