@@ -787,8 +787,8 @@ faces: Her face is up toward the kneeling man; the two standing men face each ot
 camera: Side profile, full figure, wide; the stack of bodies reads vertically.
 pov: No real POV.
 motion: The two standing men drop into her in turn; the kneeling man moves gently.
-watch: Four bodies is the limit of what the models hold; expect merging. Name each man by his look, and use video rather than a still where possible.
-prompt: She rests on her shoulders with her hips raised high above her head and her legs spread. A bald man kneels by her head with his penis in her mouth. A dark-haired man stands over her raised hips facing away from her face, in her vagina, and a blond man stands over her facing him, in her anus.
+watch: Tested on Krea 2: she came back flat on her back with three men standing around. Say she is upside down on her shoulders with her back vertical and hips straight up. Four bodies is the limit of what the models hold; name each man by his look.
+prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head toward the ceiling and her spread legs folded over toward the bed beyond her head. A bald man kneels on the bed by her head with his penis in her mouth. A dark-haired man stands astride her upturned hips facing away from her face, squatting down into her vagina, and a blond man stands astride her hips facing him, squatting down into her anus.
 
 ## dp-reverse-piledriver — Reverse piledriver DP
 aliases: reverse piledriver dp, dp reverse piledriver, ass to ass dp
@@ -800,8 +800,8 @@ faces: She looks up between her legs; the men face away from each other.
 camera: Side profile, full figure, wide.
 pov: No real POV.
 motion: They squat down into her in turns, their buttocks bumping.
-watch: They end up facing each other (the piledriver DP); say back to back, buttocks touching.
-prompt: She rests on her shoulders with her hips raised above her head and her legs spread. Two men stand over her raised hips back to back, their buttocks touching, squatting downward: the dark-haired man in her vagina and the blond man in her anus.
+watch: Tested on Krea 2: she came back flat on her back and the men faced each other. Say she is upside down on her shoulders with her hips straight up, and the men stand back to back facing opposite ends of the bed.
+prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head and her legs spread wide apart. Two men stand astride her upturned hips back to back, facing away from each other toward opposite ends of the bed, their buttocks touching, both squatting downward: the dark-haired man in her vagina and the blond man in her anus.
 
 ## dp-sidesaddle — Sidesaddle DP
 aliases: sidesaddle dp, dp sidesaddle, side saddle dp, sidesaddle
