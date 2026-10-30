@@ -17,6 +17,8 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - Images: one frozen moment. Drop the motion line and keep the rest. What works for explicit stills (tested on Qwen 2.1 with its NSFW LoRA): open with the kind of photo ("amateur candid phone photo", "POV porn still"), then spend most of the words on her: face and expression (eyes, brows, mouth, where she looks), skin, hair, body, jewellery; then the position's geometry and what the camera sees at the frame edges ("her spread knees at the bottom corners of the frame"); then the background and light in a sentence or two; then the camera ("high angle, medium shot"); then the tag line. Plain explicit words read better than clinical ones. For Qwen 2.1 outside POV, keep its long paragraph and say "two complete, separate adult bodies" with which parts of each are visible -- but expect merged bodies; prefer POV or Krea 2 for two full bodies.
 - Sound (video): the slap, breath and moans follow the rhythm you wrote; script them in the soundscape like any other sound, with the exclusion sentence.
 - With picture references, say which <Picture N> is which person before describing the pose, and keep each person's face, skin and build tied to their own reference. A pose reference (<Pose N>) shows the bodies' positions only; still describe them in words.
+- Facing away is the hardest thing to get (tested on Krea 2): chairman, caboose and rider on fire all came back face to face. Say it three ways: "facing away from him", "her back against his chest" (or "her head toward his feet"), and that they both face the same direction, toward the camera. Reversed bodies (69) likewise: say their bodies point in opposite directions, her head at his hips and his head between her thighs. If that still fails, place them in the frame: where the camera stands and where each head is ("his head on the pillow at the left of the frame, hers at the right near his feet"; "seen from the foot of the bed, her face toward the camera, his just behind her shoulder"). Tested: that fixed rider on fire and caboose when the wording alone did not.
+- Describe one woman and one position. A prompt that also mentions a variant ("or reverse: she faces his feet") drew two women (tested, cowgirl). Use a portrait frame for her-on-top positions.
 - A tag that is also an object gets drawn as the object: tested on Krea 2, "wheelbarrow" in the tag line put a garden wheelbarrow in the room. Keep such names (wheelbarrow, bridge, table, chair) out of the tag line and describe the bodies instead.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
@@ -321,16 +323,16 @@ prompt: Pick the rear-entry body position from doggy, standing-doggy or prone-bo
 
 ## cowgirl — Cowgirl
 aliases: cowgirl, woman on top, riding
-tags: cowgirl position, woman on top, straddling; reverse: reverse cowgirl position
-her: Kneeling astride his hips: her knees on the bed on either side of his waist, her shins flat on the bed behind her, sitting upright, controlling the rhythm. Facing his head (cowgirl) or facing his feet (reverse cowgirl).
+tags: cowgirl position, woman on top, straddling
+her: Kneeling astride his hips facing his head: her knees on the bed on either side of his waist, her shins flat on the bed behind her, sitting upright, controlling the rhythm.
 him: Lying on his back, legs straight.
-hands: Cowgirl: her hands on his chest, his on her hips or breasts. Reverse: her hands on his thighs or knees, his on her buttocks.
-faces: Cowgirl: she looks down at him, he looks up at her. Reverse: she faces the camera, he looks at her back.
-camera: Low angle from the foot of the bed looking up along his legs (tested: the best framing for this position); for reverse, from in front of her so her face and body are seen. Not an exact side profile: her near thigh hides the contact.
-pov: From his eyes lying on his back, looking up at her above him; the man is out of frame except his hands on her hips and his penis in the foreground; her knees either side at the bottom corners. Reverse: looking at her back and buttocks, her face over her shoulder.
+hands: Her hands on his chest; his on her hips or breasts.
+faces: She looks down at him; he looks up at her.
+camera: Low angle from the foot of the bed looking up along his legs (tested: the best framing for this position). Not an exact side profile: her near thigh hides the contact.
+pov: From his eyes lying on his back, looking up at her above him; the man is out of frame except his hands on her hips and his penis in the foreground; her knees either side at the bottom corners.
 motion: She rides up and down or grinds forward and back; her breasts and hair move with her, his hips lift to meet her.
-watch: She ends up sitting beside him; say "astride his hips, one knee either side of him".
-prompt: He lies on his back with his legs straight. She kneels astride his hips, her knees on the bed on either side of his waist and her shins flat behind her, sitting upright with her hands on his chest, riding him up and down and setting the rhythm herself. (Reverse: she faces his feet, hands on his thighs, her face toward the camera.)
+watch: She ends up sitting beside him; say "astride his hips, one knee either side of him". Tested on Krea 2: with the reverse variant mentioned in the same prompt it drew two women; describe one woman and one position only. Use a portrait frame.
+prompt: He lies on his back with his legs straight. One woman kneels astride his hips facing him, her knees on the bed on either side of his waist and her shins flat behind her, sitting upright with her hands on his chest, riding him up and down and setting the rhythm herself.
 
 ## reverse-cowgirl — Reverse cowgirl
 aliases: reverse cowgirl, reverse riding
@@ -378,11 +380,11 @@ her: On top of him facing his feet, her torso lying forward along his legs, her 
 him: Lying on his back, legs straight and together.
 hands: Her hands hold his ankles or the bed beside his feet; his hands are on her buttocks or her lower back.
 faces: Her face is down by his knees, turned toward the camera; he looks down at her back.
-camera: Side profile at bed height, full length of both bodies.
+camera: Side profile at bed height, full length of both bodies: his head on the pillow at the left edge of the frame, her head at the right edge near his feet.
 pov: From his eyes on his back, looking along his body at her back and buttocks lying forward over his legs; only his hands on her hips show.
 motion: She slides her body forward and back along his legs; small deep strokes.
-watch: She sits upright (plain reverse cowgirl); say her chest lies forward along his legs.
-prompt: He lies on his back with his legs straight together. She is on top of him facing his feet, her knees either side of his hips and her torso lying forward along his legs, hands holding his ankles, sliding forward and back on him.
+watch: Tested on Krea 2: she came back lying forward face to face on his chest. Say she faces his feet, her head down near his feet and her buttocks toward his face.
+prompt: Side view of a bed. He lies on his back with his head on the pillow at the left of the frame and his legs straight together toward the right. She is on top of him the other way round: her buttocks over his hips and toward his face, her back to him, her torso lying forward along his legs so that her head is at the right of the frame near his feet, her face turned to the camera, her hands holding his ankles. Their heads are at opposite ends of the bed. She slides forward and back on him.
 
 ## missionary — Missionary
 aliases: missionary, classic missionary, man on top
@@ -446,8 +448,8 @@ faces: She looks up at him between her spread legs; he looks down at her face.
 camera: Side profile, full figure.
 pov: From his eyes squatting, looking down at her upturned hips and her face beyond them; only his hands on her thighs show.
 motion: He moves straight up and down from his squat, like churning; slow and deep.
-watch: He ends up kneeling; say squatting and facing her face.
-prompt: She rests on her shoulders with her hips lifted above her head and her legs spread and folded back. He squats over her raised pelvis facing her, hands on the backs of her thighs, moving straight up and down into her.
+watch: Tested on Krea 2: it came back as plain missionary. Say she is upside down on her shoulders with her hips above her head pointing at the ceiling, and he squats over them.
+prompt: She is upside down on her shoulders: her shoulders and head on the bed, her hips lifted high above her head pointing at the ceiling, her legs spread and folded back over her so her feet are beside her head. He squats over her upturned pelvis with his feet on the bed beside her shoulders, facing her face, his hands on the backs of her thighs, moving straight down into her from above.
 
 ## wheelbarrow — Standing wheelbarrow
 aliases: wheelbarrow, standing wheelbarrow
@@ -472,8 +474,8 @@ faces: She faces the floor or forward; he looks down at her back.
 camera: Side profile, full figure.
 pov: From his eyes sitting, looking down along her back to her hands on the floor; his hands on her hips.
 motion: He rocks her hips on his lap; small strokes.
-watch: She falls off his lap; say her hips rest on his lap and her legs wrap his waist. Never write "wheelbarrow": the model draws the object.
-prompt: He sits on the edge of the bed with his feet on the floor. She faces away from him with her hips on his lap and her legs bent around his waist, her hands flat on the floor in front, while he holds her hips and rocks her on him.
+watch: Tested on Krea 2: it came back as a face-to-face embrace on his lap. Say she faces away, bent down with her hands on the floor and her chest toward the floor. Never write "wheelbarrow": the model draws the object.
+prompt: He sits on the edge of the bed with his feet on the floor. She faces away from him, bent forward and down: her hands flat on the floor in front of the bed, arms straight, her chest toward the floor and her head low, while her hips rest on his lap and her legs wrap back around his waist. Her back is toward him. He holds her hips and rocks her on him.
 
 ## lotus — Lotus (seated, face to face)
 aliases: lotus, lotus face to face, seated lotus, yab yum
@@ -537,8 +539,8 @@ faces: She faces the camera; he looks over her shoulder or at her back.
 camera: From in front of her at chair height, full figure.
 pov: From his eyes seated behind her, looking at her back and over her shoulder; his hands on her waist.
 motion: She bounces and grinds on his lap, using her feet on the floor.
-watch: She sits beside him; say on his lap between his knees, facing away.
-prompt: He sits on the edge of the bed with his feet apart on the floor. She sits on his lap facing away from him, her feet on the floor between his, hands on his knees, moving up and down on him while he guides her waist.
+watch: Tested on Krea 2: she came back sitting face to face. Say facing away, her back against his chest, both facing the camera, his face behind her shoulder.
+prompt: He sits on the edge of the bed with his feet apart on the floor. She sits on his lap facing away from him, her back against his chest, both of them facing the same way toward the camera; her feet are on the floor between his, her hands on his knees, and his face is behind her shoulder. She moves up and down on him while he guides her waist.
 
 ## caboose — Caboose
 aliases: caboose
@@ -547,11 +549,11 @@ her: Sitting between his legs on his lap, facing away from him, leaning back aga
 him: Sitting up on the bed, leaning back on one hand or against the headboard, legs out in front.
 hands: His free hand around her waist or on her breast; her hands on his thighs.
 faces: Her head leans back on his shoulder, face toward the camera; his face beside hers.
-camera: From the front at bed level, both faces in frame.
+camera: From the front, at the foot of the bed, facing them: her face and chest toward the camera with his face just behind and above her shoulder; both faces look toward the camera.
 pov: From his eyes over her shoulder, looking down her body; his arm around her waist.
 motion: Slow rocking, her back sliding against his chest.
-watch: She sits upright away from him; say her back rests against his chest.
-prompt: He sits up on the bed leaning back against the headboard with his legs out in front. She sits on his lap facing away, leaning back against his chest with her head on his shoulder, rocking slowly on him while his arm holds her waist.
+watch: Tested on Krea 2: she came back facing him. Say facing away toward the camera, her back against his chest, his arm around her from behind.
+prompt: Seen from the foot of the bed, facing them. He sits up against the headboard with his legs out in front. She sits on his lap in front of him with her back against his chest, so her face, breasts and belly face the camera and his face is just behind her shoulder; her head rests back on his shoulder, her legs lie over his thighs, and his arm wraps around her waist from behind. Both of them look toward the camera. She rocks slowly on him.
 
 ## seashell — Seashell
 aliases: seashell, sea shell
@@ -641,8 +643,8 @@ faces: Her face over his hips; his face under her hips; neither looks at the cam
 camera: Side profile at bed height, both bodies in full.
 pov: From his eyes under her, looking up at her hips above his face, her body stretched toward his feet.
 motion: Both heads move; slow rhythm.
-watch: Bodies end up side by side or the same way round; say reversed, her head at his hips and his head between her thighs.
-prompt: He lies on his back. She lies on top of him reversed, her knees either side of his head and her mouth on his penis, while his face is between her thighs and his mouth on her vulva, his hands on her buttocks. Tag: oral sex, cunnilingus, fellatio.
+watch: Tested on Krea 2: she came back lying the same way round, kissing his face. Say their bodies point in opposite directions, her head at his hips and her feet beside his head.
+prompt: He lies on his back. She lies on top of him upside down relative to him: their bodies point in opposite directions, her head at his hips and her feet beside his head. Her knees are either side of his head and her mouth is on his penis, while his face is between her thighs with his mouth on her vulva and his hands on her buttocks. Tag: oral sex, cunnilingus, fellatio.
 
 ## face-sitting — Face-sitting
 aliases: face sitting, facesitting, sitting on his face
@@ -680,6 +682,6 @@ faces: She looks down at him, head tipped back or eyes closed; his face is betwe
 camera: Side profile at hip height, full figure for her; or three-quarter from beside her hips.
 pov: From his eyes sitting against the wall, looking up at her body above, her spread thighs either side of the frame.
 motion: She rocks her hips slowly against his mouth; his head moves little.
-watch: He ends up kneeling; say he sits leaning back against the wall. Roles can swap: the receiver stands, the giver sits leaning back, and with a man receiving it is fellatio with her mouth on the tip of his penis.
-prompt: He sits on the floor leaning back against the wall. She stands in front of him with her feet apart and legs spread, her hips pushed toward his face and one hand on the wall above his head, while his mouth is on her clitoris and his hands hold the backs of her thighs. Tag: oral sex, cunnilingus.
+watch: Tested on Krea 2: she came back sitting in his lap. Say she stands upright on her feet, does not sit on him, her hips at his face. He sits leaning back against the wall. Roles can swap: the receiver stands, the giver sits leaning back, and with a man receiving it is fellatio with her mouth on the tip of his penis.
+prompt: He sits on the floor leaning back against the wall, his legs out in front. She stands upright on her own feet in front of him, straddling his legs, feet apart and knees almost straight, her hips at the height of his face and pushed toward it, one hand on the wall above his head. She does not sit on him. His mouth is on her clitoris and his hands hold the backs of her thighs. Tag: oral sex, cunnilingus.
 
