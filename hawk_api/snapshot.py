@@ -1,4 +1,4 @@
-"""Periodic copies of jobs.sqlite3 into the mounted Google Drive.
+"""Periodic copies of jobs.sqlite3 (and the small JSON stores beside it) into the mounted Google Drive.
 
 A Colab runtime is erased when it ends, and DATA_DIR lives on /content, so every chat, persona, memory and
 asset record would go with it. The database is never *run* from Drive: a FUSE mount has no working advisory
@@ -7,6 +7,10 @@ copy onto local disk, and only that finished file is moved across.
 
 Two files are kept on Drive -- the live snapshot and one previous generation -- so a copy taken while the
 database was in a bad state can never be the only one left.
+
+The JSON stores in DATA_DIR that hold the user's work (STATE_FILES: storyboards, the character library, prompts,
+model and engine choices) go along with every copy; without them a restored runtime has its jobs back but not the
+boards that made them. llm_settings.json is left out on purpose: it holds the API key.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ SNAPSHOT_NAME = "jobs.sqlite3"
 PREV_SUFFIX = ".prev"
 PART_SUFFIX = ".part"
 MIN_MINUTES, MAX_MINUTES = 1.0, 120.0
+STATE_FILES = ("storyboards.json", "characters.json", "prompts.json", "render_models.json", "image_engines.json",
+               "drive_export.json")
 
 
 def snapshot_db(db_path: str, local_tmp: str) -> int:
@@ -85,12 +91,20 @@ class DbSnapshotter:
 
     # ------------------------------------------------------------------ the copy
 
-    def _stat(self) -> tuple[int, int] | None:
+    def _stat(self) -> tuple | None:
+        """The database's and the state files' (mtime, size): a copy is due when any of them changed."""
         try:
             info = os.stat(self.service.settings.db_path)
         except OSError:
             return None
-        return (info.st_mtime_ns, info.st_size)
+        files = []
+        for name in STATE_FILES:
+            try:
+                extra = os.stat(os.path.join(os.path.dirname(self.service.settings.db_path), name))
+                files.append((name, extra.st_mtime_ns, extra.st_size))
+            except OSError:
+                pass
+        return (info.st_mtime_ns, info.st_size, tuple(files))
 
     def _write(self, folder: str) -> tuple[str, int]:
         """Back up locally, then move the finished file into Drive. Runs in a worker thread."""
@@ -107,6 +121,14 @@ class DbSnapshotter:
             for leftover in (local_tmp, part):
                 if os.path.exists(leftover):
                     os.unlink(leftover)
+        for name in STATE_FILES:  # each written whole by its store (tmp + replace), so a plain copy is consistent
+            source = os.path.join(os.path.dirname(self.service.settings.db_path), name)
+            if not os.path.isfile(source):
+                continue
+            part = os.path.join(drive_dir, name + PART_SUFFIX)
+            shutil.copyfile(source, part)
+            os.replace(part, os.path.join(drive_dir, name))
+            size += os.path.getsize(source)
         return os.path.join(folder, SNAPSHOT_NAME), size
 
     async def snapshot(self, force: bool = False) -> str | None:

@@ -2595,6 +2595,15 @@ class HawkService:
             self._plan_tasks.add(task)
             task.add_done_callback(self._plan_tasks.discard)
             return self.store.get_job(job["id"]) or job
+        # The graph loads its references from ComfyUI's input folder, which a restarted runtime has emptied:
+        # put them back first, or the resubmit fails with "Invalid image file".
+        missing = []
+        for ref in job.get("refs") or []:
+            asset = self.store.get_asset(ref.get("asset_id"))
+            if asset is not None and not await self.ensure_asset_on_disk(asset):
+                missing.append(asset.get("filename") or asset["id"])
+        if missing:
+            raise RequestError(self._lost_files_message(missing))
         # Only a job recorded before planning moved into the gateway still has a planner node in its graph.
         if job["kind"] == "render" and job.get("script") and job["nodes"].get("planner"):
             # One-call job whose plan already arrived: render that exact script so the

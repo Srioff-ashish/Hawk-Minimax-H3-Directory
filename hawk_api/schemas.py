@@ -541,16 +541,29 @@ class StoryChapterImageIn(BaseModel):
 # --------------------------------------------------------------------------- storyboards
 
 
+class FrameIn(BaseModel):
+    """One frame in full: who is in it, what they wear (or don't), where, the camera, the action."""
+    characters: str | list[str] = Field("", description="Exactly who is in the frame, by name.")
+    wearing: str = Field("", max_length=600, description="What each one wears, or is not wearing.")
+    setting: str = Field("", max_length=400, description="The place and the light.")
+    camera: str = Field("", max_length=200, description="Shot size and angle, e.g. 'low-angle wide shot'.")
+    action: str = Field("", max_length=600, description="What is happening in this frame.")
+
+
+Shot = str | FrameIn
+
+
 class StoryboardIn(BaseModel):
     title: str = Field("Storyboard", max_length=120)
     character: str = Field("", max_length=2000, description="Who is in every shot and how they look (adds to a library character's facts).")
     identity_asset_ids: list[str] = Field(default_factory=list, max_length=3,
                                           description="The character's identity picture(s), ideally full body on a plain background.")
-    shots: list[str] = Field(default_factory=list, max_length=40, description="One shot per line, in story order (pose, place, clothing).")
+    shots: list[Shot] = Field(default_factory=list, max_length=40, description=(
+        "One shot per entry, in story order: text, or a frame {characters, wearing, setting, camera, action}."))
     motions: list[str] | None = Field(None, description="Optional: what moves in each shot's video; default the shot text.")
     aspect_ratio: AspectRatio = "9:16"
     style: str = Field("", max_length=1000, description="Look of the whole sheet, e.g. 'luxury boudoir photography, warm light'.")
-    draw: bool = Field(True, description="Draw the sheet(s) straight away ($0.018 per 8 shots on Seedream Flash).")
+    draw: bool = Field(True, description="Draw the sheet(s) straight away ($0.018 per 4 shots on Seedream Flash).")
     panel_asset_ids: list[str] | None = Field(None, max_length=40, description=(
         "Your own images as the panels, in order: nothing is drawn (no model call) and the board is ready at once. "
         "shots may then be left empty."))
@@ -564,7 +577,7 @@ class StoryboardIn(BaseModel):
     platform: Literal["", "general", "instagram", "fanvue"] = ""
     quality: Literal["draft", "final"] = "final"
     review: Literal["auto", "ask"] = "auto"
-    check: bool = Field(True, description="A vision model checks every panel; rejected drawn panels are drawn again.")
+    check: bool = Field(True, description="A vision model checks every panel; a rejected one is left out of the video (that segment is built from the identity pictures).")
     music_asset_id: str | None = Field(None, description="One track from the library laid over the whole film.")
     music_prompt: str = Field("", max_length=2000, description="Or one instrumental track composed for the film (MiniMax Music 3.0, about $0.15).")
 
@@ -580,7 +593,7 @@ class StoryboardPatch(BaseModel):
     character: str | None = None
     style: str | None = None
     aspect_ratio: AspectRatio | None = None
-    shots: list[str] | None = Field(None, max_length=40)
+    shots: list[Shot] | None = Field(None, max_length=40)
     motions: list[str] | None = None
 
 
@@ -661,7 +674,7 @@ class FilmIn(BaseModel):
     identity_asset_ids: list[str] | None = Field(None, max_length=3, description="Or identity pictures directly.")
     character: str = Field("", max_length=2000)
     idea: str = Field("", max_length=2000, description="With no shots, the shots are written from this.")
-    shots: list[str] | None = Field(None, max_length=40)
+    shots: list[Shot] | None = Field(None, max_length=40)
     motions: list[str] | None = None
     modes: list[Literal["frame", "look", "none"]] | None = None
     shot_count: int = Field(8, ge=1, le=40)

@@ -38,11 +38,18 @@ Describe the person exactly as they appear, so every panel can keep them: appare
 
 WRITE THE SHOTS
 - Exactly the number of shots asked for, in story order: a clear beginning, a build, and a closing shot that feels like an ending.
-- One line per shot, 15 to 30 words, in this order: what they are doing and their pose, where they are, what they wear (or that they are nude when the idea calls for it), then the camera ("close-up", "low angle", "wide shot from the doorway").
+- Every shot is one frame described in full, as five fields, so the image model guesses nothing:
+  "characters": exactly who is in the frame, by name (nobody else appears);
+  "wearing": what each of them wears, or is not wearing (nude, topless, barefoot), item by item with colours;
+  "setting": the place and the light;
+  "camera": shot size and angle ("close-up", "low-angle wide shot", "over-the-shoulder from the doorway");
+  "action": their pose and what is happening in this one moment.
+- Never name a relationship (mother, sister, stepson, teacher, friend's wife ...): an image shows names and looks,
+  not ties. Use the characters' names.
 - Vary it: mix wide, medium and close shots; change the pose and the camera from shot to shot; keep the places consistent with the idea instead of jumping at random.
 - Each shot is something one still picture can show. No time jumps inside a shot, no "then", no sequences.
 - Write what is visible, not feelings or backstory. No text, signs, captions or logos in the scene.
-- Keep the same person in every shot unless the idea brings in others; then say who is in each shot.
+- Keep the same person in every shot unless the idea brings in others; "characters" says who is in each shot.
 
 CHOOSE EACH SHOT'S MODE
 The picture model draws faces, places and posed bodies well but bodies in motion badly; the video model moves
@@ -68,7 +75,7 @@ see-through. Fanvue: adult nudity is allowed when the idea asks for it. General:
 
 REPLY
 Only JSON, nothing else:
-{"character": "...", "style": "...", "shots": ["...", "..."], "motions": ["...", "..."], "modes": ["frame", "look", ...]}
+{"character": "...", "style": "...", "shots": [{"characters": "...", "wearing": "...", "setting": "...", "camera": "...", "action": "..."}, ...], "motions": ["...", "..."], "modes": ["frame", "look", ...]}
 shots, motions and modes have exactly the number of entries asked for."""
 
 DEFAULT_PERSONA = "A decisive, friendly film director who explains choices briefly and keeps the user informed."

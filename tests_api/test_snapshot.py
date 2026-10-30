@@ -16,7 +16,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from hawk_api.snapshot import DbSnapshotter, PREV_SUFFIX, SNAPSHOT_NAME  # noqa: E402
+from hawk_api.snapshot import STATE_FILES, DbSnapshotter, PREV_SUFFIX, SNAPSHOT_NAME  # noqa: E402
 
 
 class Snapshot(unittest.IsolatedAsyncioTestCase):
@@ -90,6 +90,25 @@ class Snapshot(unittest.IsolatedAsyncioTestCase):
             self.add_chat(f"s{n}")
             await self.snapshots.snapshot()
         self.assertEqual(len(os.listdir(self.folder)), 2, "five copies still leave two files")
+
+    async def test_the_boards_and_characters_go_along_but_not_the_api_key(self):
+        for name, text in (("storyboards.json", '{"b1": {}}'), ("characters.json", '{"c1": {}}'),
+                           ("llm_settings.json", '{"api_key": "secret"}')):
+            with open(os.path.join(self.data, name), "w") as handle:
+                handle.write(text)
+        self.add_chat("s1")
+        await self.snapshots.snapshot()
+        with open(os.path.join(self.folder, "storyboards.json")) as handle:
+            self.assertEqual(handle.read(), '{"b1": {}}')
+        self.assertTrue(os.path.exists(os.path.join(self.folder, "characters.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.folder, "llm_settings.json")))
+        self.assertNotIn("llm_settings.json", STATE_FILES)
+
+        with open(os.path.join(self.data, "storyboards.json"), "w") as handle:
+            handle.write('{"b1": {}, "b2": {}}')  # a new board and no new chat: still a copy
+        self.assertIsNotNone(await self.snapshots.snapshot())
+        with open(os.path.join(self.folder, "storyboards.json")) as handle:
+            self.assertIn("b2", handle.read())
 
     async def test_an_unmounted_drive_is_simply_skipped(self):
         self.snapshots.browser = type("Browser", (), {"root": self.drive, "available": False})()

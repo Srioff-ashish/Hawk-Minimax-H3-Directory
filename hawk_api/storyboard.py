@@ -1,11 +1,12 @@
 """Storyboard sheets: many shots from one cheap image, each panel the first frame of a video segment.
 
-One Seedream Flash image ($0.018, any size) holds a grid of up to eight panels of the same character in one style,
-which costs an eighth of eight separate images and keeps the face, body and light consistent across the shots
-because they are one generation. The sheet is cut into its panels, and each panel opens its segment of the film
-(H3's keyframe completion), with the character's own identity picture beside it in every segment.
+One Seedream Flash image ($0.018, any size) holds a grid of up to four panels of the same characters in one style,
+which costs a quarter of four separate images and keeps the faces, bodies and light consistent across the shots
+because they are one generation. A longer film takes several sheets. The sheet is cut into its panels, and each
+panel opens its segment of the film (H3's keyframe completion), with the identity pictures beside it.
 
-Eight panels at most: with the identity picture that is nine, a render's picture limit.
+Four panels at most: past that the image model starts drifting -- places change, panels are added, numbers appear.
+Every panel is described in full (who is in it, what they wear, where, the camera, the action) so nothing is guessed.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ async def draw(service, prompt: str, reference_asset_ids: list[str], size: str, 
                                       "(and is not retried on another engine). Change what the shots ask for.") from None
             last = exc
     raise StoryboardError(f"Drawing failed on Flash and on Seedream Pro: {last}")
-MAX_PANELS = 8
+MAX_PANELS = 4
 SPLIT_MAX = 40  # panels a sheet the user brings may have (a board's shot limit)
 RENDER_PICTURES = 9  # a render's picture limit
 #: Seedream Flash presets: one price at every size, so the sheet takes whichever fits its grid best.
@@ -102,19 +103,89 @@ def grid_for(panels: int, aspect_ratio: str) -> tuple[int, int, tuple[int, int]]
     return columns, rows, size
 
 
+#: The five things every frame states, in this order.
+FRAME_FIELDS = ("characters", "wearing", "setting", "camera", "action")
+FRAME_LABELS = {"characters": "Characters", "wearing": "Wearing", "setting": "Setting", "camera": "Camera",
+                "action": "Action"}
+
+
+def describe_frame(shot) -> str:
+    """One frame as the line every prompt uses. A shot given as {characters, wearing, setting, camera, action}
+    becomes "Characters: … · Wearing: … · Setting: … · Camera: … · Action: …"; text is kept as it is."""
+    if hasattr(shot, "model_dump"):
+        shot = shot.model_dump()
+    if isinstance(shot, dict):
+        parts = []
+        for field in FRAME_FIELDS:
+            value = shot.get(field)
+            if isinstance(value, list):
+                value = ", ".join(str(v).strip() for v in value if str(v).strip())
+            value = str(value or "").strip().rstrip(".")
+            if value:
+                parts.append(f"{FRAME_LABELS[field]}: {value}")
+        return " · ".join(parts)
+    return str(shot or "").strip()
+
+
+#: Family and social ties: not visible in a picture, so an image prompt never needs them (names and looks carry
+#: who is who), and naming them only gets prompts refused. Video briefs and dialogue keep them.
+_WOMAN = ("mother", "mom", "mommy", "mum", "mummy", "mama", "maa", "sister", "sis", "didi", "aunt", "auntie", "aunty",
+          "daughter", "niece", "wife", "girlfriend", "fiancee", "bhabhi", "landlady")
+_MAN = ("father", "dad", "daddy", "papa", "brother", "bro", "bhaiya", "bhai", "uncle", "son", "nephew", "husband",
+        "boyfriend", "fiance", "devar", "landlord")
+_OTHER = ("cousin", "in-law", "teacher", "student", "tutor", "pupil", "boss", "employee", "neighbor", "neighbour",
+          "roommate", "friend")
+_RELATION = (r"(?:(?:step|half|grand|god)-?)?(?:" + "|".join(sorted(_WOMAN + _MAN + _OTHER, key=len, reverse=True))
+             + r")(?:s|-in-laws?)?")
+_WHOSE = r"(?:his|her|their|my|your|our|the|a|an|[A-Z][\w.-]*'s)\s+"
+_EXTRA = r"(?:(?:best|old|new|younger|older|little|big|elder|own|late|ex-?)\s+)*"
+_PHRASE = rf"{_WHOSE}{_EXTRA}(?:{_RELATION}'s\s+{_EXTRA})*{_RELATION}\b"
+_ASIDE = re.compile(rf",\s*(?:who is\s+|who's\s+)?(?:{_PHRASE}|{_RELATION}\b)\s*(,|(?=[.;:!?]|$))", re.IGNORECASE)
+_BRACKETED = re.compile(rf"\s*\(\s*(?:{_PHRASE}|{_RELATION})\s*\)", re.IGNORECASE)
+_RELATION_PHRASE = re.compile(rf"\b{_PHRASE}", re.IGNORECASE)
+_RELATION_WORD = re.compile(rf"\b{_RELATION}\b", re.IGNORECASE)
+
+
+def _neutral(found: str) -> str:
+    """the woman / the man / the person, from the last relationship word in what was found."""
+    words = re.findall(rf"\b{_RELATION}\b", found, re.IGNORECASE)
+    word = (words[-1] if words else "").lower()
+    many = word.endswith("s") and word.rstrip("s") in _WOMAN + _MAN + _OTHER
+    last = re.sub(r"^(?:step|half|grand|god)-?|-in-laws?$", "", word.rstrip("s") if many else word)
+    if last in _WOMAN:
+        return "the women" if many else "the woman"
+    if last in _MAN:
+        return "the men" if many else "the man"
+    return "the people" if many else "the person"
+
+
+def strip_relations(text: str) -> str:
+    """Image-prompt text without relationship words: an aside ("Mrs. Cha, Dae-ho's friend's mom, laughs", "Riya
+    (Didi)") is dropped; elsewhere the tie becomes the woman / the man / the person ("hugs his stepmother" -> "hugs
+    the woman"). Names and looks stay."""
+    out = _BRACKETED.sub("", text or "")
+    out = _ASIDE.sub(lambda m: m.group(1) and " " or "", out)
+    out = _RELATION_PHRASE.sub(lambda m: _neutral(m.group(0)), out)
+    out = _RELATION_WORD.sub(lambda m: _neutral(m.group(0)), out)
+    out = re.sub(r"(^|[.!?]\s+)the ", lambda m: m.group(1) + "The ", out)
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
 def sheet_prompt(beats: list[str], character: str, columns: int, rows: int, style: str = "") -> str:
-    """The Seedream prompt for one sheet: the grid, the rules that keep it cuttable, the character, the beats."""
+    """The Seedream prompt for one sheet: the grid, the rules that keep it cuttable, the people, every frame in full."""
     panels = len(beats)
     layout = (f"exactly {panels} photo panel{'s' if panels > 1 else ''} arranged in a grid of {columns} "
               f"column{'s' if columns > 1 else ''} and {rows} row{'s' if rows > 1 else ''}, all the same size")
-    return (
+    return strip_relations(
         f"A storyboard contact sheet: {layout}, separated by thin solid black borders, on a black background. "
         "No text, no numbers, no labels, no captions, no logos anywhere. "
-        f"Every panel shows the same person from the reference image -- keep the face, hair, skin tone and exact body. "
-        f"{character.strip()} "
+        "The people are the ones in the reference images -- keep each one's face, hair, skin tone and exact body. "
+        "Each panel shows exactly the characters it lists, wearing exactly what it says, in its setting, from its "
+        f"camera. {character.strip()} "
         f"{(style.strip() + ' ') if style.strip() else ''}"
-        "One continuous story in panel order, left to right, top to bottom: "
-        + " ".join(f"Panel {number}: {beat.strip().rstrip('.')}." for number, beat in enumerate(beats, 1))
+        "One continuous story in panel order, left to right, top to bottom. "
+        + " ".join(f"Panel {number} -- {describe_frame(beat).rstrip('.')}." for number, beat in enumerate(beats, 1))
     )
 
 
@@ -383,9 +454,11 @@ async def redo_panel(service, beat: str, character: str, identity_asset_ids: lis
         refs.append(previous_asset_id)
         keep = (f" The last reference image is an earlier take of this shot: keep its setting, light and framing, "
                 "and fix whatever is wrong in it.")
-    prompt = (f"A single photo, full frame, no borders, no text. The person from the first reference image -- keep "
-              f"the face, hair, skin tone and exact body. {character.strip()} {(style.strip() + ' ') if style.strip() else ''}"
-              f"{beat.strip().rstrip('.')}.{keep}")
+    prompt = strip_relations(
+        f"A single photo, full frame, no borders, no text. The people are the ones in the reference images -- keep "
+        f"each one's face, hair, skin tone and exact body; show exactly the characters listed, wearing exactly what it "
+        f"says. {character.strip()} {(style.strip() + ' ') if style.strip() else ''}"
+        f"{describe_frame(beat).rstrip('.')}.{keep}")
     result = await draw(service, prompt, refs, panel_size(aspect_ratio), engine)
     made = result["assets"][0]
     asset = service.store.get_asset(made["id"]) or made
@@ -414,15 +487,23 @@ async def identity_pack(service, name: str, description: str, identity_asset_ids
     views = PACK_VIEWS + (PACK_ANATOMY_VIEWS if anatomy else [])
     character = (f"{name.strip()}: {description.strip()} " if description.strip() else f"{name.strip()}. ") + \
         "A character reference sheet: the same person in every panel, the same light, nothing else in frame."
-    made = await make_sheet(service, views, character, identity_asset_ids, "3:4", style)
-    grid = made["grid"]
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "character"
-    cut = await split_sheet(service, made["sheet"]["id"], grid["columns"], grid["rows"], grid["panels"],
-                            collection=collection, tags=["identity-pack", f"pack:{slug}"])
+
+    async def one(group: list[str]) -> tuple[dict, dict]:
+        made = await make_sheet(service, group, character, identity_asset_ids, "3:4", style)
+        grid = made["grid"]
+        cut = await split_sheet(service, made["sheet"]["id"], grid["columns"], grid["rows"], grid["panels"],
+                                collection=collection, tags=["identity-pack", f"pack:{slug}"])
+        return made, cut
+
+    results = await asyncio.gather(*(one(views[i:i + MAX_PANELS]) for i in range(0, len(views), MAX_PANELS)))
     labels = ["front", "back", "side", "face"] + (["nude front", "nude rear close-up"] if anatomy else [])
-    panels = [{"view": label, **panel} for label, panel in zip(labels, cut["panels"])]
-    return {"name": name, "sheet": made["sheet"], "panels": panels, "cost_usd": made["cost_usd"],
-            "borders_found": cut["borders_found"], "note": cut["note"]}
+    cuts = [panel for _, cut in results for panel in cut["panels"]]
+    panels = [{"view": label, **panel} for label, panel in zip(labels, cuts)]
+    return {"name": name, "sheet": results[0][0]["sheet"], "sheets": [made["sheet"] for made, _ in results],
+            "panels": panels, "cost_usd": round(sum(made["cost_usd"] or 0 for made, _ in results), 4),
+            "borders_found": all(cut["borders_found"] for _, cut in results),
+            "note": " ".join(cut["note"] for _, cut in results if cut["note"])}
 
 
 # --------------------------------------------------------------------------- engine rules
@@ -436,7 +517,6 @@ PLATFORM_RULE = {
 #: Draft renders fast to check the film; final is the one to post.
 QUALITY = {"draft": 0.6, "final": 0.98}
 REVIEWS = ("auto", "ask")
-CHECK_ROUNDS = 2
 CHECK_BATCH = 3
 MUSIC_MODEL = "minimax/music-3.0"
 MUSIC_COST = 0.15
@@ -693,7 +773,7 @@ class StoryboardManager:
         images as the panels (nothing drawn). sheet_asset_id / from_sheets: ready-made sheets cut into panels (a
         sheet merged from the user's images gives those images back). modes: frame, look or none per shot.
         review: auto films as soon as the panels pass the check; ask stops at status review for approve()."""
-        shots = [s.strip() for s in shots or [] if s and s.strip()]
+        shots = [s for s in (describe_frame(s) for s in shots or []) if s]
         identity_asset_ids = list(identity_asset_ids or [])
         names: list[str] = []
         if characters:
@@ -788,7 +868,7 @@ class StoryboardManager:
                     raise StoryboardError(f"{key} should be one of: {', '.join(allowed)}.")
                 board[key] = fields[key]
         if fields.get("shots") is not None:
-            shots = [s.strip() for s in fields["shots"] if s and s.strip()]
+            shots = [s for s in (describe_frame(s) for s in fields["shots"]) if s]
             if not shots:
                 raise StoryboardError("Give at least one shot.")
             panels = board["panels"] + [None] * max(0, len(shots) - len(board["panels"]))
@@ -912,31 +992,33 @@ class StoryboardManager:
         self.store.save(board)
 
     async def _check(self, board_id: str) -> None:
-        """A vision model looks at every panel; rejected drawn panels are drawn again (at most CHECK_ROUNDS times).
-        The user's own images are only reported on, never replaced."""
+        """A vision model looks at every panel once. A rejected panel is left out of the video, not drawn again:
+        its shot turns to mode none, so that segment is built from the identity pictures and the frame's
+        description. Redo, New or Media on the panel puts a good one back."""
         board = self._set(board_id, status="checking")
         modes = self.modes(board)
         todo = [i for i, panel in enumerate(board["panels"]) if panel and modes[i] != "none"]
-        checks: dict = {}
-        for round_number in range(CHECK_ROUNDS + 1):
-            board = self.board(board_id)
-            failed = await check_panels(self.service, board, todo)
-            for index in todo:
-                checks[str(index)] = {"ok": index not in failed, "issues": failed.get(index, ""), "round": round_number}
-            self._set(board_id, checks=dict(checks))
-            if not failed or board.get("own_images") or round_number == CHECK_ROUNDS:
-                break
-            for index, issues in failed.items():
-                board = self.board(board_id)
-                made = await redo_panel(self.service, f"{board['shots'][index]} Fix: {issues}", board["character"],
-                                        board["identity_asset_ids"], board["aspect_ratio"], self._platform_style(board),
-                                        board["panels"][index], number=index + 1,
-                                        collection=f"storyboard/{board['title']}")
-                board = self.board(board_id)
-                board["panels"][index] = made["panel"]["id"]
-                board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
-                self.store.save(board)
-            todo = list(failed)
+        failed = await check_panels(self.service, board, todo)
+        board = self.board(board_id)
+        modes = self.modes(board)
+        checks = dict(board.get("checks") or {})
+        for index in todo:
+            if index in failed:
+                checks[str(index)] = {"ok": False, "issues": failed[index], "dropped": True, "mode_was": modes[index]}
+                modes[index] = "none"
+            else:
+                checks[str(index)] = {"ok": True, "issues": ""}
+        board.update(checks=checks, modes=modes)
+        self.store.save(board)
+
+    @staticmethod
+    def _restore(board: dict, index: int) -> None:
+        """A new panel for a shot the check dropped: it goes back into the video in its old mode."""
+        check = (board.get("checks") or {}).pop(str(index), None) or {}
+        if check.get("dropped"):
+            modes = StoryboardManager.modes(board)
+            modes[index] = check.get("mode_was") if check.get("mode_was") in ("frame", "look") else "frame"
+            board["modes"] = modes
 
     def _ready(self, board_id: str) -> dict:
         """After drawing and checking: film straight away (review auto with a film asked for), stop for review
@@ -981,7 +1063,7 @@ class StoryboardManager:
         board["shots"][number - 1] = text
         board["panels"][number - 1] = made["panel"]["id"]
         board["cost_usd"] = round(board.get("cost_usd", 0) + (made.get("cost_usd") or 0), 4)
-        (board.get("checks") or {}).pop(str(number - 1), None)
+        self._restore(board, number - 1)
         if board["status"] in ("draft", "failed") and self._missing(board) == []:
             board["status"] = "ready"
         return self.view(self.store.save(board))
@@ -995,7 +1077,7 @@ class StoryboardManager:
         if not 1 <= number <= len(board["shots"]):
             raise StoryboardError(f"Shot {number} is not on this board (1 to {len(board['shots'])}).")
         board["panels"][number - 1] = asset_id
-        (board.get("checks") or {}).pop(str(number - 1), None)
+        self._restore(board, number - 1)
         if self._missing(board) == [] and board["status"] in ("draft", "failed"):
             board["status"] = "ready"
         return self.view(self.store.save(board))
@@ -1294,7 +1376,8 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
             failures.append(f"{model}: {exc}"[:240])
             continue
         data = parse_json(reply or "")
-        shots = [str(s).strip() for s in (data or {}).get("shots") or [] if str(s).strip()] if isinstance(data, dict) else []
+        shots = [describe_frame(s) for s in (data or {}).get("shots") or []] if isinstance(data, dict) else []
+        shots = [s for s in shots if s]
         if len(shots) < count:
             failures.append(f"{model}: wrote {len(shots)} of {count} shots")
             continue
@@ -1362,24 +1445,30 @@ LIVE_ACTION_PROMPT = (
     "lighting of the drawing in that position -- only turn the drawing into a real photograph: real people with "
     "natural skin, real materials, real light. Each panel fills its whole cell: where a drawing has empty bars, "
     "extend the scene to the cell's edges. Remove every speech bubble, caption, sound effect, piece of text and "
-    "number. No drawing, comic or anime style anywhere. {people}{style}")
+    "number. No drawing, comic or anime style anywhere. {people}{style}{frames}")
 
 
 async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: list[str], aspect_ratio: str = "9:16",
                              style: str = "", people: str = "", title: str = "panels",
-                             collection: str | None = None) -> dict:
-    """Drawn panels (a manhwa's, a comic's) turned into live-action ones: eight at a time merged into one sheet
+                             collection: str | None = None, frames: list | None = None) -> dict:
+    """Drawn panels (a manhwa's, a comic's) turned into live-action ones: four at a time merged into one sheet
     ($0), then one Seedream Flash edit per sheet redraws it panel for panel as film stills, with the cast's
-    pictures as references for their faces ($0.018 a sheet). Returns the sheets as a board's from_sheets."""
+    pictures as references for their faces ($0.018 a sheet), each panel described in full (frames: one per panel,
+    text or {characters, wearing, setting, camera, action}). Returns the sheets as a board's from_sheets."""
     if not panels:
         raise StoryboardError("No panels to turn into live action.")
     if aspect_ratio not in ASPECTS:
         raise StoryboardError(f"aspect_ratio should be one of: {', '.join(ASPECTS)}.")
-    cast = (f"The people, matched by look to the reference images after the first: {people.strip()}. All are adults. "
+    cast = (f"The people, matched by look to the reference images after the first: {people.strip()}. "
             if people.strip() else "")
-    look = f"Look: {style.strip()}." if style.strip() else ""
+    look = f"Look: {style.strip()}. " if style.strip() else ""
+    frames = list(frames or [])
 
     async def one(number: int, group: list[bytes]) -> dict:
+        first = (number - 1) * MAX_PANELS
+        said = [describe_frame(f) for f in frames[first:first + len(group)]]
+        each = (" Each panel in full: " + " ".join(f"Panel {n} -- {line.rstrip('.')}." for n, line in enumerate(said, 1) if line)
+                if any(said) else "")
         data, grid = await asyncio.to_thread(compose_grid, group, 0, aspect_ratio, "contain", 24, "black")
         merged = await service.add_asset(
             f"{re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')[:40] or 'panels'}_drawn_{number}.png", io.BytesIO(data),
@@ -1387,7 +1476,9 @@ async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: l
             source={"type": "composed", "grid": [grid["columns"], grid["rows"]]})
         width, height = min(SHEET_SIZES, key=lambda size: abs(math.log((size[0] / size[1]) / (grid["size"][0] / grid["size"][1]))))
         prompt = LIVE_ACTION_PROMPT.format(count=len(group), columns=grid["columns"], cs="s" if grid["columns"] > 1 else "",
-                                           rows=grid["rows"], rs="s" if grid["rows"] > 1 else "", people=cast, style=look)
+                                           rows=grid["rows"], rs="s" if grid["rows"] > 1 else "", people=cast, style=look,
+                                           frames=each)
+        prompt = strip_relations(prompt)
         result = await draw(service, prompt, [merged["id"], *identity_asset_ids[:9]], f"{width}x{height}")
         sheet = result["assets"][0]
         service.update_asset(sheet["id"], add_tags=["storyboard-sheet", "live-action"])

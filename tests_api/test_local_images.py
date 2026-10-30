@@ -917,6 +917,34 @@ class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
                          "with an export to hand, the render should just work")
         self.assertEqual(refs[0].path, self.asset["path"], "and still load by the recorded path")
 
+    async def test_a_retried_job_gets_its_references_back_before_it_is_resubmitted(self):
+        # A render that failed when the runtime restarted keeps its graph, which loads the references from the
+        # emptied input folder: the retry must restore them first, or ComfyUI answers "Invalid image file".
+        from hawk_api.jobs import HawkService, RequestError
+
+        job = {"id": "j1", "kind": "render", "status": "failed", "nodes": {}, "refs": [{"asset_id": self.asset["id"]}]}
+        submitted = []
+
+        async def submit(job):
+            submitted.append(job["id"])
+            return job
+
+        self.service.store = type("Store", (), {"get_asset": staticmethod(lambda _id: self.asset)})()
+        self.service.get_job = lambda _id: job
+        self.service._submit = submit
+        self.service._lost_files_message = HawkService._lost_files_message
+        retry = HawkService.retry.__get__(self.service)
+
+        with self.assertRaises(RequestError) as caught:
+            await retry("j1")
+        self.assertIn("shot.png", str(caught.exception), "a file that can't come back is named, not resubmitted")
+        self.assertEqual(submitted, [])
+
+        self.export()
+        await retry("j1")
+        self.assertEqual(open(self.on_disk(), "rb").read(), b"exported pixels")
+        self.assertEqual(submitted, ["j1"])
+
     async def test_an_export_from_the_day_either_side_still_counts(self):
         # A restore can land either side of midnight from the export that made the file.
         self.asset["created_at"] = time.time() - 86400

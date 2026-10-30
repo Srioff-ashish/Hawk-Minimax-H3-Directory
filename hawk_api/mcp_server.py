@@ -305,7 +305,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
             raise ToolError(str(exc)) from None
 
     @mcp.tool(description=(
-        "Storyboard step 1: draw up to 8 shots of one character as a single Seedream Flash sheet ($0.018 for the "
+        "Storyboard step 1: draw up to 4 shots of one character as a single Seedream Flash sheet ($0.018 for the "
         "whole sheet instead of one image per shot; the same face, body and light in every shot). beats: one short "
         "shot description per panel, in story order. character: who they are and how they look. "
         "reference_asset_ids: the character's identity picture(s), ideally full body on a plain background. "
@@ -337,8 +337,9 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "character): who (characters, names from the character library -- or identity_asset_ids), what (an idea, and "
         "the shots, motions and a mode per shot are written for you; or your own shots, panel_asset_ids or a "
         "sheet_asset_id), where it goes (platform: instagram keeps everyone clothed and checks it; fanvue allows "
-        "adult nudity), quality (draft fast, final to post). The engine draws Seedream Flash sheets ($0.018 per 8 "
-        "shots), checks every panel with a vision model and redraws rejects, then films: frame shots on the "
+        "adult nudity), quality (draft fast, final to post). The engine draws Seedream Flash sheets ($0.018 per 4 "
+        "shots, every frame described in full), checks every panel with a vision model and leaves rejects out of the "
+        "video (their segments are built from the identity pictures), then films: frame shots on the "
         "face-faithful base model, look shots (dancing, positions -- the video model composes them) on the "
         "action one, joined into one video with one music track (music_prompt composes one, about $0.15). "
         "review ask (default): it stops at status review -- show the user the panels (get_storyboard: panel_views, "
@@ -382,7 +383,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
 
     @mcp.tool(description=(
         "Storyboard film in one call -- the cheapest way to a multi-shot video of one recurring character: the shots "
-        "are drawn as Seedream Flash sheets ($0.018 per 8 shots), cut into panels, and as soon as that is done the "
+        "are drawn as Seedream Flash sheets ($0.018 per 4 shots), cut into panels, and as soon as that is done the "
         "film renders with each segment opening on its panel; up to 40 shots (rendered in parts and joined). "
         "shots: one per line, in order (pose, place, clothing). identity_asset_ids: the character's identity "
         "picture(s), ideally full body on a plain background. Returns the board: poll get_storyboard "
@@ -424,7 +425,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
                                                        character=character))
 
     @mcp.tool(description=(
-        "Storyboard board without rendering: draws the shots (Seedream Flash, $0.018 per 8) and cuts the panels, then "
+        "Storyboard board without rendering: draws the shots (Seedream Flash, $0.018 per 4) and cuts the panels, then "
         "waits so they can be checked; fix any with redo_storyboard_panel, then render_storyboard_board. The board "
         "also shows on the Studio Storyboard page. panel_asset_ids: the user's own images as the panels (nothing drawn); "
         "sheet_asset_id: a ready-made sheet, cut into its panels."))
@@ -520,7 +521,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
     if manhwa is not None:
         @mcp.tool(description=(
             "A manhwa chapter as a live-action film through the film engine: its panels (blank, repeated and "
-            "under-18 ones left out) turned into live-action stills eight at a time on Seedream Flash ($0.018 per 8) "
+            "under-18 ones left out) turned into live-action stills four at a time on Seedream Flash ($0.018 per 4) "
             "with the cast's portraits for their faces, checked, then filmed with each panel's lines word for word. "
             "review ask (default) stops for approval: show the user the panels (get_storyboard) and call "
             "approve_film. Needs the cast's portraits (make_manhwa_cast). tile_ids: only these tiles, to leave scenes "
@@ -825,7 +826,7 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
             return await run(_sync(lambda: stories.make_video(story_id, chapter_id, redo=redo)))
 
         @mcp.tool(description=(
-            "Draw a story chapter's scenes as a storyboard (one $0.018 Seedream Flash sheet per 8 scenes) with the "
+            "Draw a story chapter's scenes as a storyboard (one $0.018 Seedream Flash sheet per 4 scenes) with the "
             "cast's pictures keeping their faces. Once drawn, make_story_chapter_video opens each scene on its panel. "
             "Fix panels with redo_storyboard_panel on the returned storyboard id."))
         async def storyboard_story_chapter(story_id: str, chapter_id: str) -> dict:

@@ -33,6 +33,7 @@ from .jobs import NotFound, RequestError, Unavailable
 from .manhwa import (CONTEXT_MAX, build_srt, concat_videos, film_to_drive, is_minor, media_seconds, parse_json,
                      rendered_file, shot_seconds, vet_face_image)
 from .schemas import PlanRequest, ReferenceIn, RenderSettings, VideoRequest
+from .storyboard import strip_relations
 
 log = logging.getLogger("hawk_api.story")
 
@@ -128,9 +129,21 @@ Reply with only JSON:
 "chapters": [{{"title": "", "beats": ""}}]}}
 """
 
-PORTRAIT_PROMPT = ("A photorealistic portrait photograph of {name}, an adult: {description}. Head and shoulders, "
+PORTRAIT_PROMPT = ("A photorealistic portrait photograph of {name}: {description}. Head and shoulders, "
                    "facing the camera, natural expression, soft even light, plain background, 85mm lens. Only one "
                    "person, no text.")
+
+def scene_frame(scene: dict, story: dict) -> dict:
+    """A chapter scene as one frame in full -- who is in it, what they wear, where, the camera, the action -- for its
+    storyboard panel."""
+    names = [n for n in scene.get("characters") or [] if n]
+    known = {c["name"]: c for c in story.get("characters") or []}
+    wearing = "; ".join(f"{n}: {known[n]['description'].strip().rstrip('.')}" for n in names
+                        if (known.get(n) or {}).get("description"))
+    return {"characters": ", ".join(names) or "nobody -- the place only", "wearing": wearing[:600],
+            "setting": (scene.get("setting") or "").strip()[:400], "camera": (scene.get("camera") or "").strip()[:200]
+            or "medium shot at eye level", "action": (scene.get("description") or "a scene").strip()[:600]}
+
 
 _CHAPTER_PREFIX = re.compile(r"^\s*(?:chapter|ch\.?)\s*\d+\s*[:.\-\u2013\u2014]\s*", re.I)
 
@@ -770,7 +783,7 @@ class StoryManager:
                 and any(self.service.store.get_asset(i) for i in c["image_asset_ids"])]
 
     def make_storyboard(self, story_id: str, chapter_id: str) -> dict:
-        """The chapter's scenes drawn as a storyboard (one $0.018 Seedream Flash sheet per 8 scenes), with the cast's
+        """The chapter's scenes drawn as a storyboard (one $0.018 Seedream Flash sheet per 4 scenes), with the cast's
         pictures keeping their faces. Once drawn, Make video opens each scene on its panel."""
         if self.boards is None:
             raise Unavailable("Storyboards aren't available on this server.")
@@ -785,13 +798,10 @@ class StoryManager:
             raise RequestError("Give this chapter's characters a picture first: the storyboard keeps their faces from it.")
         identity = [next(i for i in c["image_asset_ids"] if self.service.store.get_asset(i)) for c in cast]
         people = "; ".join(f"{c['name']}" + (f" -- {c['description']}" if c.get("description") else "") for c in cast)
-        character = (f"The people, in the order of the reference images: {people}. All are adults."
-                     if len(cast) > 1 else f"{people}. An adult.")
+        character = (f"The people, in the order of the reference images: {people}." if len(cast) > 1 else f"{people}.")
         shots = []
         for scene in chapter["scenes"]:
-            who = ", ".join(scene.get("characters") or [])
-            shot = (f"{scene['setting']}: " if scene.get("setting") else "") + (scene.get("description") or "")
-            shots.append((shot + (f" ({who})" if who else "")).strip()[:600] or "a scene")
+            shots.append(scene_frame(scene, story))
         settings = {**SETTINGS_DEFAULTS, **(story.get("settings") or {})}
         board = self.boards.create(title=f"{story['title']} - ch {chapter['idx'] + 1}"[:120], character=character,
                                    identity_asset_ids=identity, shots=shots, aspect_ratio=settings["aspect_ratio"],
@@ -1021,7 +1031,8 @@ class StoryManager:
             if (character.get("role") != "cast" or character.get("image_asset_ids")
                     or is_minor(character["name"], {"appearance": character.get("description")})):
                 continue
-            prompt = PORTRAIT_PROMPT.format(name=character["name"], description=character.get("description") or "as described")
+            prompt = strip_relations(PORTRAIT_PROMPT.format(name=character["name"],
+                                                            description=character.get("description") or "as described"))
             try:
                 result = await self._generate(prompt)
             except Exception as exc:  # the chapters still get made, just without this face
@@ -1078,13 +1089,11 @@ class StoryManager:
         cast = self._chapter_cast(story, chapter)[:3]
         identity = [next(i for i in c["image_asset_ids"] if self.service.store.get_asset(i)) for c in cast]
         people = "; ".join(f"{c['name']}" + (f" -- {c['description']}" if c.get("description") else "") for c in cast)
-        character = (f"The people, in the order of the reference images: {people}. All are adults."
-                     if len(cast) > 1 else f"{people}. An adult.")
+        character = (f"The people, in the order of the reference images: {people}." if len(cast) > 1 else f"{people}.")
         shots, motions, dialogue = [], [], []
         for scene in chapter["scenes"]:
-            who = ", ".join(scene.get("characters") or [])
             shot = (f"{scene['setting']}: " if scene.get("setting") else "") + (scene.get("description") or "")
-            shots.append((shot + (f" ({who})" if who else "")).strip()[:600] or "a scene")
+            shots.append(scene_frame(scene, story))
             motions.append((scene.get("description") or shot)[:600])
             dialogue.append([f'{"Narration (voice-over)" if d["speaker"].lower() == "narration" else d["speaker"]}: "{d["text"]}"'
                              for d in scene.get("dialogue") or []])

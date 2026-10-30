@@ -219,8 +219,8 @@ Every character is an adult. If anyone in either image looks like a child or a t
 Reply with only JSON: {{"score": 0, "problems": [], "minor": false, "revised_prompt": ""}}
 """
 
-CAST_PROMPT = ("Make a photorealistic head-and-shoulders portrait photograph of {name}, the person in <image1>: a real "
-               "adult, {appearance}. Keep their face shape, eyes, hair style and colour, and skin tone exactly as drawn. "
+CAST_PROMPT = ("Make a photorealistic head-and-shoulders portrait photograph of {name}, the person in <image1>: "
+               "{appearance}. Keep their face shape, eyes, hair style and colour, and skin tone exactly as drawn. "
                "Facing the camera, calm expression, fully clothed in their usual clothes, plain light-grey studio "
                "background, soft even light, 85mm lens. Only {name} in the picture, no text.")
 CAST_REF_LINE = "<image{n}> is a photograph of {name}: give {name} exactly that face and hair."
@@ -966,6 +966,38 @@ def parse_json(text: str) -> dict | None:
 
 
 # --------------------------------------------------------------------------- runs
+
+
+def strip_relations(text: str) -> str:
+    """Relationship words out of an image prompt (storyboard.strip_relations; imported late, storyboard imports this)."""
+    from .storyboard import strip_relations as strip
+
+    return strip(text)
+
+
+#: Shot sizes a tile's scene text may name, for a frame's camera.
+_CAMERA = re.compile(r"\b(extreme close-up|close-up|closeup|medium close-up|medium shot|wide shot|long shot|full shot|"
+                     r"over-the-shoulder|low angle|low-angle|high angle|high-angle|bird's-eye|from behind|from below|"
+                     r"from above|side view|profile|point of view|pov)\b", re.IGNORECASE)
+
+
+def film_frame(tile: dict, roster: dict) -> dict:
+    """A tile as one frame in full -- who is in it, what they wear, where, the camera, the action -- for its
+    live-action panel and its shot."""
+    people = [p for p in tile.get("characters") or [] if p.get("name")]
+    wearing = []
+    for person in people:
+        look = (person.get("appearance") or (roster.get(person["name"]) or {}).get("appearance") or "").strip()
+        if look:
+            wearing.append(f"{person['name']}: {look.rstrip('.')}")
+    scene = (tile.get("scene") or "").strip()
+    cameras = list(dict.fromkeys(m.lower() for m in _CAMERA.findall(scene)))
+    acting = "; ".join(f"{p['name']} {p['action'].strip().rstrip('.')}" for p in people if (p.get("action") or "").strip())
+    return {"characters": ", ".join(p["name"] for p in people) or "nobody -- the place only",
+            "wearing": "; ".join(wearing)[:600],
+            "setting": (tile.get("setting") or "").strip()[:400] or "as in the panel",
+            "camera": ", ".join(cameras) or "as framed in the panel",
+            "action": (acting or scene)[:600]}
 
 
 class ManhwaManager:
@@ -2144,13 +2176,14 @@ class ManhwaManager:
         identity = list(dict.fromkeys(portraits[n] for n in cast))
         people = "; ".join(f"{n} -- {(roster.get(n) or {}).get('appearance', '')}".strip(" -") for n in cast)
         title = f"{series} ch {chapter['chapter']}"[:120]
+        frames = [film_frame(tile, roster) for _, tile in work]
         made = await live_action_sheets(self.service, [jpeg for jpeg, _ in work], identity, aspect_ratio, style, people,
-                                        title, collection=f"manhwa/{series}/live")
+                                        title, collection=f"manhwa/{series}/live", frames=frames)
         shots, motions, dialogue, spoken = [], [], [], set()
-        for _, tile in work:
+        for (_, tile), frame in zip(work, frames):
             acting = "; ".join(f"{p.get('name')}: {p.get('action')}" for p in tile.get("characters") or [] if p.get("action"))
             scene = " ".join(x for x in (tile.get("setting", ""), tile.get("scene", "")) if x).strip() or "the panel's moment"
-            shots.append(scene[:600])
+            shots.append(frame)
             motions.append(f"{scene}. {acting}".strip()[:600])
             lines = []
             if tile.get("id") not in spoken:
@@ -2159,7 +2192,7 @@ class ManhwaManager:
                          for d in tile.get("dialogue") or [] if (d.get("text_en") or d.get("text"))]
             dialogue.append(lines)
         board = self.boards.create(
-            title=title, character=f"The people: {people}. All are adults.", identity_asset_ids=identity, shots=shots,
+            title=title, character=f"The people: {people}.", identity_asset_ids=identity, shots=shots,
             motions=motions, dialogue=dialogue, aspect_ratio=aspect_ratio, style=style, platform=platform,
             quality=quality, review=review, music_prompt=music_prompt, from_sheets=made["sheets"],
             link={"manhwa_chapter_id": chapter_id},
@@ -2289,7 +2322,7 @@ class ManhwaManager:
                     ref_id = ref["id"]
             try:
                 if ref_id:
-                    result = await self._convert_panel(ref_id, CAST_PROMPT.format(name=name, appearance=appearance),
+                    result = await self._convert_panel(ref_id, strip_relations(CAST_PROMPT.format(name=name, appearance=appearance)),
                                                        loras, REAL_NEGATIVE, steps=conf["steps"], cfg=conf["cfg"])
                 else:  # the user's description alone: a text-to-image portrait
                     result = await self._portrait_from_text(name, appearance, conf)
@@ -2305,9 +2338,9 @@ class ManhwaManager:
             state["done"].append({"name": name, "asset_id": ids[0]})
 
     async def _portrait_from_text(self, name: str, appearance: str, conf: dict) -> dict:
-        prompt = (f"A photorealistic head-and-shoulders portrait photograph of {name}, a real adult: {appearance}. "
-                  "Facing the camera, calm expression, fully clothed, plain light-grey studio background, soft even "
-                  "light, 85mm lens. Only one person, no text.")
+        prompt = strip_relations(f"A photorealistic head-and-shoulders portrait photograph of {name}: {appearance}. "
+                                 "Facing the camera, calm expression, fully clothed, plain light-grey studio background, "
+                                 "soft even light, 85mm lens. Only one person, no text.")
         for attempt in range(BUSY_RETRIES + 1):
             try:
                 return await self.service.generate_images(prompt, engine="qwen21", steps=conf["steps"], cfg=conf["cfg"],

@@ -140,11 +140,10 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         boards.characters = CharacterManager(service)
         return boards
 
-    async def test_a_character_board_checks_redraws_a_rejected_panel_and_films_by_model(self):
+    async def test_a_character_board_drops_a_rejected_panel_and_films_by_model(self):
         service = EngineService(sheet_png(4, 1, 2048, 1152, border=40), verdicts=[
             {"panels": [{"shot": 1, "ok": True}, {"shot": 2, "ok": False, "issues": "six fingers"}, {"shot": 3, "ok": True}]},
             {"panels": [{"shot": 4, "ok": True}]},
-            {"panels": [{"shot": 2, "ok": True}]},
         ])
         boards = self.manager(service)
         boards.characters.create("Rebel", "fair-skinned Indian woman, 45", ["face"], platform="instagram")
@@ -162,9 +161,11 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(board["status"], "done", board.get("error"))
         sheet_prompt = service.image_calls[0][0]
         self.assertIn("fully and modestly clothed", sheet_prompt, "the platform rule is drawn in")
-        redo_prompt = service.image_calls[1][0]
-        self.assertIn("Fix: six fingers", redo_prompt, "the rejected panel is drawn again with what was wrong")
-        self.assertTrue(board["checks"]["1"]["ok"], "and passes the second look")
+        self.assertEqual(len(service.image_calls), 1, "a rejected panel is not drawn again")
+        self.assertEqual(board["checks"]["1"], {"ok": False, "issues": "six fingers", "dropped": True, "mode_was": "frame"})
+        self.assertEqual(board["modes"], ["frame", "none", "look", "frame"], "it is left out of the video")
+        self.assertIn("this segment has no picture of its own", service.videos[1].story.story,
+                      "its segment is built from the identity pictures")
         self.assertIn("Platform rule:", service.chats[0][1]["content"][0]["text"])
         units = [v.settings.unet_name for v in service.videos]
         self.assertEqual(units, [B5, B7, B5], "frames on beta5, the dance on beta7, in film order")
@@ -305,7 +306,11 @@ class ManhwaFilm(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(drawn["source"]["type"], "composed")
         made = self.boards.made
         self.assertEqual(made["identity_asset_ids"], [self.portrait])
-        self.assertEqual(made["shots"], ["a rooftop Mina waits on the rooftop."])
+        self.assertEqual(made["shots"], [{"characters": "Mina", "wearing": "Mina: short black hair", "setting": "a rooftop",
+                                          "camera": "as framed in the panel", "action": "Mina leans on the railing"}],
+                         "the panel as one frame in full")
+        self.assertIn("Panel 1 -- Characters: Mina · Wearing: Mina: short black hair · Setting: a rooftop", call["prompt"])
+        self.assertNotIn("adult", call["prompt"])
         self.assertEqual(made["dialogue"], [["Mina: \"You're late.\""]], "the English line, word for word")
         self.assertEqual(len(made["from_sheets"]), 1)
         self.assertEqual(made["from_sheets"][0]["panels"], 1)

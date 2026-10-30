@@ -33,8 +33,8 @@ def sheet_png(columns: int, rows: int, width: int = 800, height: int = 800, bord
 
 
 class Grid(unittest.TestCase):
-    def test_eight_tall_panels_go_four_across_on_a_square_sheet(self):
-        self.assertEqual(sb.grid_for(8, "9:16"), (4, 2, (2048, 2048)), "the layout the villa sheet used")
+    def test_four_tall_panels_go_two_by_two_on_a_tall_sheet(self):
+        self.assertEqual(sb.grid_for(4, "9:16"), (2, 2, (1584, 2816)))
 
     def test_wide_panels_stack_instead(self):
         columns, rows, (width, height) = sb.grid_for(4, "16:9")
@@ -43,7 +43,7 @@ class Grid(unittest.TestCase):
 
     def test_limits(self):
         with self.assertRaises(sb.StoryboardError):
-            sb.grid_for(9, "9:16")  # with the identity picture that is ten, past a render's nine
+            sb.grid_for(5, "9:16")  # past four panels the image model drifts
         with self.assertRaises(sb.StoryboardError):
             sb.grid_for(4, "5:4")
 
@@ -51,8 +51,24 @@ class Grid(unittest.TestCase):
         prompt = sb.sheet_prompt(["she wakes", "she showers"], "Rebel, petite.", 2, 1)
         self.assertIn("grid of 2 columns and 1 row", prompt)
         self.assertIn("No text", prompt)
-        self.assertIn("Panel 1: she wakes.", prompt)
-        self.assertIn("Panel 2: she showers.", prompt)
+        self.assertIn("Panel 1 -- she wakes.", prompt)
+        self.assertIn("Panel 2 -- she showers.", prompt)
+
+    def test_a_frame_is_described_in_full(self):
+        frame = {"characters": ["Mi-ah", "Dae-ho"], "wearing": "white bikini; black swim shorts",
+                 "setting": "sunny beach", "camera": "low-angle wide shot", "action": "she spikes the ball"}
+        prompt = sb.sheet_prompt([frame], "", 1, 1)
+        self.assertIn("Panel 1 -- Characters: Mi-ah, Dae-ho · Wearing: white bikini; black swim shorts · Setting: "
+                      "sunny beach · Camera: low-angle wide shot · Action: she spikes the ball.", prompt)
+
+    def test_image_prompts_name_no_relationships_and_add_no_ages(self):
+        prompt = sb.sheet_prompt(["Ronny hugs his stepmother in the kitchen", "Mrs. Cha, Dae-ho's friend's mom, laughs",
+                                  "Riya (Didi) and her sisters wave"], "Ronny; Riya.", 3, 1)
+        for word in ("stepmother", "mom", "Didi", "sisters", "adult"):
+            self.assertNotIn(word, prompt)
+        self.assertIn("Ronny hugs the woman in the kitchen.", prompt)
+        self.assertIn("Mrs. Cha laughs.", prompt)
+        self.assertIn("Riya and the women wave.", prompt)
 
 
 class Cut(unittest.TestCase):
@@ -157,26 +173,26 @@ class FakeService:
 
 class Steps(unittest.TestCase):
     def test_sheet_then_panels_then_a_film_that_opens_on_each(self):
-        service = FakeService(sheet_png(4, 2, 2048, 2048, border=40))
-        beats = [f"shot {n}" for n in range(1, 9)]
+        service = FakeService(sheet_png(2, 2, 1584, 2816, border=40))
+        beats = [f"shot {n}" for n in range(1, 5)]
 
         made = asyncio.run(sb.make_sheet(service, beats, "Rebel, petite.", ["face"], "9:16"))
         prompt, kwargs = service.image_calls[0]
         self.assertEqual((kwargs["engine"], kwargs["size"], kwargs["reference_asset_ids"]),
-                         ("seedream-flash", "2048x2048", ["face"]))
-        self.assertEqual(made["grid"], {"columns": 4, "rows": 2, "panels": 8, "aspect_ratio": "9:16"})
+                         ("seedream-flash", "1584x2816", ["face"]))
+        self.assertEqual(made["grid"], {"columns": 2, "rows": 2, "panels": 4, "aspect_ratio": "9:16"})
         self.assertIn("storyboard-sheet", service.tags["sheet1"])
 
-        cut = asyncio.run(sb.split_sheet(service, "sheet1", 4, 2, 8))
+        cut = asyncio.run(sb.split_sheet(service, "sheet1", 2, 2, 4))
         self.assertTrue(cut["borders_found"])
-        self.assertEqual([p["source"]["panel"] for p in cut["panels"]], list(range(1, 9)))
+        self.assertEqual([p["source"]["panel"] for p in cut["panels"]], list(range(1, 5)))
         self.assertEqual(cut["panels"][0]["source"]["sheet"], "sheet1")
 
         asyncio.run(sb.render_film(service, [p["id"] for p in cut["panels"]], "face", beats, "Rebel."))
         request = service.videos[0]
-        self.assertEqual(len(request.references), 9, "8 panels and the identity picture: a render's limit")
+        self.assertEqual(len(request.references), 5, "4 panels and the identity picture")
         self.assertEqual(request.references[-1].asset_id, "face")
-        self.assertEqual(request.story.segment_count, 8)
+        self.assertEqual(request.story.segment_count, 4)
         self.assertIn("keyframe completion", request.story.story)
 
     def test_mismatched_beats_and_missing_identity_are_refused(self):
@@ -279,8 +295,8 @@ class Boards(unittest.IsolatedAsyncioTestCase):
         self.assertIn("composed-sheet", out["sheet"]["tags"])
         self.assertEqual(service.image_calls, [])
 
-    async def test_ten_shots_are_two_sheets_two_renders_and_one_film(self):
-        service = FakeService(sheet_png(4, 2, 2048, 2048, border=40))
+    async def test_ten_shots_are_three_sheets_two_renders_and_one_film(self):
+        service = FakeService(sheet_png(2, 2, 1584, 2816, border=40))
         boards = sb.StoryboardManager(service)
         boards.poll = 0.01
         joined = []
@@ -299,9 +315,9 @@ class Boards(unittest.IsolatedAsyncioTestCase):
         await boards._tasks[board["id"]]
         board = boards.board(board["id"])
         self.assertEqual(board["status"], "ready", board.get("error"))
-        self.assertEqual(len(board["sheets"]), 2, "eight shots to a sheet")
+        self.assertEqual([len(s["shots"]) for s in board["sheets"]], [4, 4, 2], "four shots to a sheet")
         self.assertTrue(all(board["panels"]))
-        self.assertEqual(board["cost_usd"], 0.036)
+        self.assertEqual(board["cost_usd"], 0.054)
 
         redone = await boards.redo_panel(board["id"], 3, shot="shot three, laughing")
         prompt, kwargs = service.image_calls[-1]

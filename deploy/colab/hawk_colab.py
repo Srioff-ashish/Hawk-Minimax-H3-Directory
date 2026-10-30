@@ -667,6 +667,10 @@ def _start_api(session: Session) -> None:
 DRIVE_ROOT = "/content/drive/MyDrive"
 SNAPSHOT_FOLDER = "Hawk H3/Backups"
 SNAPSHOT_NAME = "jobs.sqlite3"
+#: The JSON stores the API copies beside the database (hawk_api/snapshot.py STATE_FILES; the notebook runs this file
+#: before the package is importable, so the list is repeated here).
+STATE_FILES = ("storyboards.json", "characters.json", "prompts.json", "render_models.json", "image_engines.json",
+               "drive_export.json")
 
 
 DRIVE_MOUNT_TIMEOUT_MS = 300_000  # Colab's default (120 s) is too short for a large Drive on a busy runtime
@@ -731,6 +735,16 @@ def restore_snapshot(data_dir: str, drive_root: str = DRIVE_ROOT, folder: str = 
         return f"Keeping the chats already in {target}"
     if not os.path.isdir(drive_root):
         return "No Google Drive mounted, so this session's chats stay in this runtime only."
+    restored = []
+    for name in STATE_FILES:  # storyboards, characters, prompts ...: copied beside the database by the API
+        source = os.path.join(drive_root, folder, name)
+        try:
+            if os.path.isfile(source) and os.path.getsize(source) > 0 and not os.path.exists(os.path.join(data_dir, name)):
+                os.makedirs(data_dir, exist_ok=True)
+                shutil.copyfile(source, os.path.join(data_dir, name))
+                restored.append(name)
+        except OSError:
+            pass
     live = os.path.join(drive_root, folder, SNAPSHOT_NAME)
     # .prev covers the one moment a copy is being rotated into place, and a copy that arrived truncated.
     for candidate in (live, live + ".prev"):
@@ -739,7 +753,8 @@ def restore_snapshot(data_dir: str, drive_root: str = DRIVE_ROOT, folder: str = 
                 os.makedirs(data_dir, exist_ok=True)
                 shutil.copyfile(candidate, target)
                 megabytes = os.path.getsize(target) / 1_000_000
-                return f"Restored {megabytes:.1f} MB of chats and jobs from Drive ({os.path.basename(candidate)})."
+                extra = f", plus {', '.join(restored)}" if restored else ""
+                return f"Restored {megabytes:.1f} MB of chats and jobs from Drive ({os.path.basename(candidate)}){extra}."
         except OSError as exc:
             return f"Could not restore the chats from Drive ({exc}); starting fresh."
     return "No earlier chats in Drive yet; starting fresh."

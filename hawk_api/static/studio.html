@@ -1320,7 +1320,7 @@
                 <div class="sb-ids" id="sbOwn"><span class="hint">None: the shots are drawn on Seedream Flash.</span></div>
                 <div class="row"><button class="btn btn-sm" type="button" id="sbOwnPick">Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" id="sbOwnUpload" multiple hidden></label></div>
                 <div class="mh-picker" id="sbOwnPicker" hidden></div></div>
-              <label class="field"><span class="label">Shots <span class="hint">one per line, in order: pose, place, clothing · 8 per $0.018 sheet</span></span><textarea class="textarea" id="sbShots" rows="8" placeholder="morning: she wakes in white silk sheets and stretches&#10;at the tall window in an open sheer robe, looking at the sea&#10;…"></textarea></label>
+              <label class="field"><span class="label">Shots <span class="hint">one per line: who, what they wear, where, camera, action · 4 per $0.018 sheet</span></span><textarea class="textarea" id="sbShots" rows="8" placeholder="morning: she wakes in white silk sheets and stretches&#10;at the tall window in an open sheer robe, looking at the sea&#10;…"></textarea></label>
               <label class="field"><span class="label">Motion per shot <span class="hint">optional, one per line; blank lines use the shot text</span></span><textarea class="textarea" id="sbMotions" rows="3" placeholder="she slowly stretches her arms up and smiles&#10;she turns her head to the camera"></textarea></label>
               <div class="row"><button class="btn btn-sm btn-danger" type="button" id="sbDelete">Delete board</button><span class="hint" id="sbCost"></span><div class="spacer"></div><button class="btn btn-sm" type="submit">Save</button><button class="btn btn-sm btn-primary" type="button" id="sbDraw">Draw sheets</button></div>
             </form>
@@ -2117,7 +2117,7 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm btn-primary" type="button" data-film-chapter="${esc(chapter.id)}" title="The chapter as a live-action film: panels to live-action Seedream Flash sheets ($0.018 per 8) with the cast's portraits, checked, then filmed after you approve the panels on the Storyboard page">Live-action film</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm btn-primary" type="button" data-film-chapter="${esc(chapter.id)}" title="The chapter as a live-action film: panels to live-action Seedream Flash sheets ($0.018 per 4) with the cast's portraits, checked, then filmed after you approve the panels on the Storyboard page">Live-action film</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
         + chapter.pages.map(mhPage).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
@@ -2460,7 +2460,7 @@
           <div class="row"><button class="btn btn-sm" type="button" data-st-chpick>Choose from Media</button><label class="btn btn-sm">Upload<input type="file" accept="image/*" data-st-chupload hidden></label></div>
           <div class="mh-picker" hidden></div></div>
         <div class="row">${c.storyboard_id ? `<a class="btn btn-sm" href="#storyboard" data-st-board="${esc(c.storyboard_id)}" title="Check or fix the panels; Make video opens each scene on its panel">Storyboard ✓</a><button class="btn btn-sm" type="button" data-st-unboard${busy ? " disabled" : ""} title="Plan the video from the text alone again">Drop</button>`
-            : `<button class="btn btn-sm" type="button" data-st-boardmake${busy ? " disabled" : ""} title="Draw the scenes as one $0.018 sheet per 8 scenes with the cast's pictures; the video then opens each scene on its panel">Storyboard</button>`}
+            : `<button class="btn btn-sm" type="button" data-st-boardmake${busy ? " disabled" : ""} title="Draw the scenes as one $0.018 sheet per 4 scenes with the cast's pictures; the video then opens each scene on its panel">Storyboard</button>`}
           ${c.video_url ? `<a class="btn btn-sm" href="${esc(c.video_url)}" target="_blank" rel="noopener">▶ Chapter video</a>` : ""}${(c.history || []).length ? `<span class="hint">${c.history.length} earlier version${c.history.length === 1 ? "" : "s"}</span>` : ""}<div class="spacer"></div>
           <button class="btn btn-sm btn-danger" type="button" data-st-chdel${busy ? " disabled" : ""}>Delete</button>
           <button class="btn btn-sm" type="submit"${busy ? " disabled" : ""}>Save</button>
@@ -2820,7 +2820,11 @@
   function sbCheckBadge(v, n) {
     const c = (v.checks || {})[String(n)];
     if (!c) return "";
-    return c.ok ? `<span class="badge done" title="Passed the check">✓</span>` : `<span class="badge failed" title="${esc(c.issues || "rejected")}">⚠ ${esc((c.issues || "rejected").slice(0, 28))}</span>`;
+    if (c.ok) return `<span class="badge done" title="Passed the check">✓</span>`;
+    const why = c.issues || "rejected";
+    return c.dropped
+      ? `<span class="badge failed" title="Left out of the video: ${esc(why)}. This segment is built from the identity pictures. Redo, New or Media puts a panel back.">dropped: ${esc(why.slice(0, 24))}</span>`
+      : `<span class="badge failed" title="${esc(why)}">⚠ ${esc(why.slice(0, 28))}</span>`;
   }
 
   function sbFilmPaint(v) {
@@ -2871,7 +2875,7 @@
   $("sbNew").onclick = () => { board.id = ""; storage.set("hawkH3Board", ""); sbEmpty(); $("sbTitle").focus(); };
   $("sbForm").onsubmit = sbWrap(async (e) => { e.preventDefault(); await sbSave(false); toast("Board saved"); document.activeElement.blur(); }, "Could not save");
   $("sbDraw").onclick = sbWrap(async () => {
-    if (board.view && board.view.panels.some(Boolean) && !await confirmAction("Draw every shot again?", "New sheets replace all the panels ($0.018 per 8 shots). To fix one shot, use its Redo button instead.", "Draw again")) return;
+    if (board.view && board.view.panels.some(Boolean) && !await confirmAction("Draw every shot again?", "New sheets replace all the panels ($0.018 per 4 shots). To fix one shot, use its Redo button instead.", "Draw again")) return;
     await sbSave(true); toast("Drawing the sheets", "Seedream Flash, about 30 seconds.");
   }, "Could not draw");
   $("sbDrawMissing").onclick = sbWrap(async () => { if (!board.id) return; await post(sbPath("/draw?missing_only=true"), {}); await sbShow(); }, "Could not draw");

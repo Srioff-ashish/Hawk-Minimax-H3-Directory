@@ -443,6 +443,15 @@ class Snapshots(unittest.TestCase):
         self.assertIn("Restored", said, said)
         self.assertEqual(self.titles(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME)), ["Diwali shoot"])
 
+    def test_the_boards_and_characters_come_back_with_it(self):
+        self.write_db(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME), "Diwali shoot")
+        with open(os.path.join(self.backups, "storyboards.json"), "w") as handle:
+            handle.write('{"b1": {}}')
+        said = hawk_colab.restore_snapshot(self.data, self.drive)
+        self.assertIn("storyboards.json", said, said)
+        with open(os.path.join(self.data, "storyboards.json")) as handle:
+            self.assertEqual(handle.read(), '{"b1": {}}')
+
     def test_a_database_already_here_is_never_replaced(self):
         self.write_db(os.path.join(self.backups, hawk_colab.SNAPSHOT_NAME), "older")
         self.write_db(os.path.join(self.data, hawk_colab.SNAPSHOT_NAME), "the live one")
