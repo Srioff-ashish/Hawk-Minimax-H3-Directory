@@ -27,7 +27,7 @@ EVERYDAY = frozenset({"butterfly", "candle", "carry", "riding", "cowgirl", "dogg
                       "man on top", "missionary", "half folded", "carrying", "69", "sixty nine",
                       "piledriver", "pile driver", "anvil", "deep impact", "knees to chest", "knees out",
                       "standing split", "standing face to face", "standing against the wall", "frog legs",
-                      "closed leg", "legs on shoulders", "on his lap"})
+                      "closed leg", "legs on shoulders", "on his lap", "bullseye", "bull s eye", "bulls eye"})
 #: An everyday name followed by one of these describes a thing, not a position: "candle-lit", "butterfly tattoo".
 NOT_A_POSE = re.compile(r"^(?:-|\s+)(?:lit|light|lights|tattoo|tattoos|print|necklace|earrings?|stand|shop|wings?|"
                         r"clip|sleeves?|garden|holder|flame|wax|race|hat|boots?)\b", re.IGNORECASE)

@@ -280,7 +280,7 @@ watch: He ends up beside her instead of behind; say "directly behind her, his kn
 prompt: She is on her hands and knees on the bed, back arched, knees apart and hips raised, looking back over her shoulder. He kneels upright directly behind her, his knees between hers and his hands gripping her hips, penetrating her from behind.
 
 ## standing-doggy — Standing doggy / bent over
-aliases: standing doggy, bent over
+aliases: standing doggy, bent over, standing rear, standing rear entry, standing lear
 tags: standing doggystyle, bent over, from behind
 her: Standing and bent forward at the hips, feet apart and on the floor, back arched, hips pushed back.
 him: Standing behind her, close.
@@ -655,3 +655,30 @@ pov: From his eyes under her, looking up at her body above, her thighs either si
 motion: She grinds slowly on his mouth.
 watch: She sits on his chest; say her knees either side of his head and her vulva on his mouth.
 prompt: He lies on his back. She kneels astride his face, knees either side of his head, sitting upright with her hands on the headboard, grinding slowly on his mouth. Tag: oral sex, cunnilingus, face sitting.
+
+## straddle-all-fours — Squatting straddle on all fours
+aliases: straddle on all fours, straddle on all four, squatting doggy, crouching doggy
+tags: doggystyle, all fours, from behind, squatting, from above
+her: On her hands and knees on the floor, facing away from the camera, back arched, knees apart, hips raised higher than her shoulders.
+him: Squatting over her hips from behind, his feet planted on the floor either side of her knees, knees bent deep, his hips above and behind hers so he enters downward.
+hands: His hands rest on her lower back or grip her hips for balance; her hands are flat on the floor.
+faces: She looks forward or back over her shoulder toward him; he looks down at her back.
+camera: From behind and slightly to one side at floor level, full figure, her back to the camera; side profile to show his squat and the downward angle.
+pov: From his eyes squatting above her, looking steeply down her arched back to her face turned over her shoulder; his hands on her hips at the bottom corners.
+motion: He drops his hips downward into her from the squat and rises again; her body rocks forward on her hands.
+watch: He ends up kneeling behind her (plain doggy); say he squats with his feet on the floor either side of her, entering from above. State vaginal or anal in the same sentence.
+prompt: She is on her hands and knees on the floor with her back to the camera, back arched and hips raised. He squats over her hips from behind with his feet planted on the floor either side of her knees, his hands on her hips, entering her vagina (or anus) downward from above.
+
+## bullseye — Bullseye (seated oral)
+aliases: bullseye, bull's eye, bulls eye
+tags: oral sex, cunnilingus (or fellatio), seated giver, standing receiver
+her: (Receiving) Standing in front of him with her feet apart and her legs spread, her hips pushed toward his face, one hand on the wall above his head or in his hair.
+him: (Giving) Sitting on the floor or bed leaning back against a wall, relaxed, his face level with her hips, his mouth on her clitoris.
+hands: His hands hold the backs of her thighs or her buttocks, drawing her in; her hand braces on the wall above him or rests on his head.
+faces: She looks down at him, head tipped back or eyes closed; his face is between her thighs.
+camera: Side profile at hip height, full figure for her; or three-quarter from beside her hips.
+pov: From his eyes sitting against the wall, looking up at her body above, her spread thighs either side of the frame.
+motion: She rocks her hips slowly against his mouth; his head moves little.
+watch: He ends up kneeling; say he sits leaning back against the wall. Roles can swap: the receiver stands, the giver sits leaning back, and with a man receiving it is fellatio with her mouth on the tip of his penis.
+prompt: He sits on the floor leaning back against the wall. She stands in front of him with her feet apart and legs spread, her hips pushed toward his face and one hand on the wall above his head, while his mouth is on her clitoris and his hands hold the backs of her thighs. Tag: oral sex, cunnilingus.
+

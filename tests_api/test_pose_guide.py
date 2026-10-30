@@ -50,7 +50,7 @@ class PoseGuide(unittest.TestCase):
     def test_everyday_words_are_not_positions(self):
         for brief in ("She has a pink butterfly tattoo on her thigh", "A candle-lit dinner on the terrace",
                       "A cowgirl at a rodeo", "He walks the doggy in the park", "The wrestler hits a piledriver",
-                      "Dick Grayson patrols Gotham", "The rooster's cock crows", "Route 69", "A pretzel stand"):
+                      "Dick Grayson patrols Gotham", "The rooster's cock crows", "Route 69", "A pretzel stand", "Hit the bullseye"):
             self.assertEqual(pose_guide.planner_note(brief), "", brief)
 
     def test_in_a_sexual_brief_they_count_unless_they_name_a_thing(self):
@@ -68,7 +68,9 @@ class PoseGuide(unittest.TestCase):
                            ("lotus face to face, sex", "lotus"), ("Seated Wheelbarrow", "seated-wheelbarrow"),
                            ("cowgirl helper", "cowgirls-helper"), ("rider on fire", "rider-on-fire"),
                            ("69, oral sex", "sixty-nine"), ("Face-Sitting", "face-sitting"),
-                           ("Butter Churner", "butter-churner"), ("Stand And Deliver, sex", "stand-and-deliver")):
+                           ("Butter Churner", "butter-churner"), ("Stand And Deliver, sex", "stand-and-deliver"),
+                           ("standing rear entry", "standing-doggy"), ("straddle on all four", "straddle-all-fours"),
+                           ("bullseye, oral sex", "bullseye")):
             self.assertEqual(keys(brief), [key], brief)
 
 
