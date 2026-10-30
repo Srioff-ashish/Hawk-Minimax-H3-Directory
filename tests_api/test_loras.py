@@ -168,7 +168,9 @@ class ShippedCatalogue(unittest.TestCase):
         names = [(spec.name, spec.strength, spec.required) for spec in config.defaults]
         self.assertEqual(names, [("minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", 1.0, True),
                                  ("H3_Motion_BoosterV2.safetensors", 1.0, False),
-                                 ("HMNSFW_AIO_V25.safetensors", 0.8, False)])
+                                 ("HMNSFW_AIO_V25.safetensors", 0.8, False),
+                                 ("MysticXXX_MMH3-V4-ref2va.safetensors", 0.0, False)],
+                         "Mystic XXX is an option: listed, off until given a strength")
         self.assertTrue(all(not spec.name.lower().startswith("krea2") for spec in config.defaults),
                         "image LoRAs never belong in the video defaults")
 
@@ -179,9 +181,21 @@ class ShippedCatalogue(unittest.TestCase):
                                           "required": True, "turbo": True}], "presets": {}}, handle)
         names = [spec.name for spec in load_config(self.path).defaults]
         self.assertEqual(names, ["minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors",
-                                 "H3_Motion_BoosterV2.safetensors", "HMNSFW_AIO_V25.safetensors"])
+                                 "H3_Motion_BoosterV2.safetensors", "HMNSFW_AIO_V25.safetensors",
+                                 "MysticXXX_MMH3-V4-ref2va.safetensors"])
         with open(self.path, "r", encoding="utf-8") as handle:
             self.assertEqual(len(self.json.load(handle)["defaults"]), 1, "the pod's own file is never rewritten")
+
+    def test_an_option_left_off_is_not_used_or_warned_about(self):
+        from hawk_api.loras import LoraConfig, LoraSpec, resolve_request
+        config = LoraConfig([LoraSpec("turbo.safetensors", 1.0, True), LoraSpec("MysticXXX_MMH3-V4-ref2va.safetensors", 0.0)], {})
+        chosen, warnings = resolve_request(config, ["turbo.safetensors"])
+        self.assertEqual(([c.file for c in chosen], warnings), (["turbo.safetensors"], []),
+                         "off, and not on this pod: no LoRA and no warning")
+        config.defaults[1] = LoraSpec("MysticXXX_MMH3-V4-ref2va.safetensors", 0.7)
+        chosen, _ = resolve_request(config, ["turbo.safetensors", "h3/MysticXXX_MMH3-V4-ref2va.safetensors"])
+        self.assertEqual([(c.file, c.strength) for c in chosen],
+                         [("turbo.safetensors", 1.0), ("h3/MysticXXX_MMH3-V4-ref2va.safetensors", 0.7)], "switched on in Settings")
 
     def test_the_pods_own_settings_win(self):
         from hawk_api.loras import load_config

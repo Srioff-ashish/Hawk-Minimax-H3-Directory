@@ -212,6 +212,8 @@ def resolve_request(
 
     if use_defaults:
         for spec in config.defaults:
+            if spec.strength == 0.0 and not spec.required:
+                continue  # an option switched off: no lookup, so a pod without the file gets no warning for it
             try:
                 add(spec, "default")
             except LoraError as exc:

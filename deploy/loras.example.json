@@ -3,6 +3,7 @@
     "Copied to $DATA_DIR/loras.json on first start. Edit that copy; changes apply to the next request.",
     "New defaults shipped here later are merged into that copy when it is read; the copy is never rewritten.",
     "To switch a shipped default off on a pod, keep its line in loras.json with strength 0.",
+    "A default shipped at strength 0 is an option: listed in Settings, off until given a strength there.",
     "defaults: added to every render. required=true refuses renders when the file is missing on the pod;",
     "required=false skips it with a warning, so a pod without that file still renders.",
     "turbo=true (or 'turbo' in the file name) makes renders default to 8 steps instead of 30.",
@@ -14,7 +15,8 @@
   "defaults": [
     {"name": "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors", "strength": 1.0, "required": true, "turbo": true},
     {"name": "H3_Motion_BoosterV2.safetensors", "strength": 1.0, "required": false},
-    {"name": "HMNSFW_AIO_V25.safetensors", "strength": 0.8, "required": false}
+    {"name": "HMNSFW_AIO_V25.safetensors", "strength": 0.8, "required": false},
+    {"name": "MysticXXX_MMH3-V4-ref2va.safetensors", "strength": 0.0, "required": false}
   ],
   "presets": {
     "realism": [

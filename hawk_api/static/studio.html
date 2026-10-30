@@ -5713,6 +5713,26 @@
       host.appendChild(line);
     });
     if (!rows.length) host.innerHTML = '<span class="hint">No video LoRA defaults configured.</span>';
+    // Any installed H3 LoRA can join the defaults: it is added here, and saved with Save like the rest
+    const stem = (n) => String(n).split("/").pop().replace(/\.(safetensors|pt|pth|ckpt|bin)$/i, "").toLowerCase();
+    const listed = new Set(engineState.video.map((r) => stem(r.name)));
+    const extra = (engineState.videoAvailable || []).filter((f) => !listed.has(stem(f)));
+    if (extra.length) {
+      const add = document.createElement("div");
+      add.className = "row";
+      add.style.marginTop = "6px";
+      add.innerHTML = `<select class="select" style="flex:1;min-width:0"><option value="">Add a LoRA…</option>${
+        extra.map((f) => `<option value="${esc(f)}">${esc(f.split("/").pop())}</option>`).join("")}</select>
+        <button class="btn btn-sm" type="button">Add</button>`;
+      add.querySelector("button").onclick = () => {
+        const file = add.querySelector("select").value;
+        if (!file) return;
+        paintVideoDefaults([...engineState.video.map((r) => ({ ...r, present: true })),
+          { name: file.split("/").pop(), strength: 0.8, required: false, present: true }]);
+        toast("Added", "Set its strength, then Save");
+      };
+      host.appendChild(add);
+    }
   }
   function paintImageEngines(data) {
     engineState.engines = Object.fromEntries((data.engines || []).map((e) => [e.id, e]));
@@ -5743,6 +5763,8 @@
       });
       const engineView = await api("/v1/images/engines");
       paintEngineDefaults({ families: engineView.families || {}, base: engineView.base || {} });
+      const renderOptions = state.options || await api("/v1/options").catch(() => ({}));
+      engineState.videoAvailable = renderOptions.available_loras || [];
       paintVideoDefaults(((await api("/v1/loras/defaults").catch(() => ({}))).defaults) || []);
       const sys = options.system || {};
       const chip = $("engineHostChip");
