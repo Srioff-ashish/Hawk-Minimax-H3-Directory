@@ -1273,6 +1273,13 @@ class HawkService:
             folder = exporter.settings()["image_folder"]
         except Exception:
             return None
+        # A record brought back from Drive (the "Restored" collections) has a new id but says where its file
+        # is: the export named after the *old* id, which the search by id below can never find.
+        source = asset.get("source") or {}
+        if source.get("type") == "drive" and source.get("path"):
+            recorded = os.path.normpath(os.path.join(exporter.browser.root, source["path"]))
+            if recorded.startswith(os.path.normpath(exporter.browser.root) + os.sep) and os.path.isfile(recorded):
+                return recorded
         stamp = asset.get("created_at") or time.time()
         root = os.path.join(exporter.browser.root, folder)
         # The export folder is dated, and a restore can land either side of midnight.

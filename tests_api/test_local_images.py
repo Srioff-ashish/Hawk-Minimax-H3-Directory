@@ -917,6 +917,19 @@ class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
                          "with an export to hand, the render should just work")
         self.assertEqual(refs[0].path, self.asset["path"], "and still load by the recorded path")
 
+    async def test_a_record_restored_from_drive_finds_its_file_by_the_recorded_path(self):
+        # A "Restored" record has a new id, and its file is the export named after the old one: only the path
+        # the record keeps can find it, so without it the library shows a blank card.
+        old = "534793c0"
+        self.export(f"gen_rias_1_{old}.png")
+        day = time.strftime("%Y-%m-%d", time.localtime(self.asset["created_at"]))
+        self.asset["source"] = {"type": "drive", "path": f"Images/{day}/gen_rias_1_{old}.png"}
+        self.assertTrue(await self.service.ensure_asset_on_disk(self.asset))
+        self.assertEqual(open(self.on_disk(), "rb").read(), b"exported pixels")
+
+        self.asset["source"] = {"type": "drive", "path": "../../etc/passwd"}
+        self.assertIsNone(self.service.drive_asset_path(self.asset), "never a path outside Drive")
+
     async def test_a_retried_job_gets_its_references_back_before_it_is_resubmitted(self):
         # A render that failed when the runtime restarted keeps its graph, which loads the references from the
         # emptied input folder: the retry must restore them first, or ComfyUI answers "Invalid image file".
