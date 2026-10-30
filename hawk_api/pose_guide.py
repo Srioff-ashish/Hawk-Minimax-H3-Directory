@@ -12,9 +12,36 @@ import re
 from dataclasses import dataclass
 
 PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides", "poses.md")
-#: A brief that says any of these is a sex scene even when it names no position.
-SEXUAL = re.compile(r"\b(sex|sexual|fuck\w*|penetrat\w*|anal|vagina\w*|pussy|cock|penis|dick|blowjob|nsfw|porn\w*|"
-                    r"thrust\w*|orgasm\w*|cum|cumming|creampie|intercourse)\b", re.IGNORECASE)
+#: A brief that says any of these is a sex scene even when it names no position. Words with an everyday meaning
+#: ("cock" the bird, "Dick" the name, "cum laude", a plot that "thrusts") are left out.
+SEXUAL = re.compile(r"\b(sex|sexual|having sex|\w*fuck\w*|penetrat\w*|anal|vagina\w*|vulva|pussy|penis|his cock|"
+                    r"his dick|blowjob|handjob|titjob|oral sex|cunnilingus|fellatio|nsfw|porn\w*|orgasm\w*|cumming|"
+                    r"cumshot|creampie|intercourse|rides him|riding him|sucks him)\b", re.IGNORECASE)
+#: Position names that are also everyday words: a butterfly tattoo, a candle-lit room, a cowgirl at a rodeo, a doggy
+#: in the park. They pick a position only in a brief that is already sexual; on their own they mean nothing here.
+EVERYDAY = frozenset({"butterfly", "candle", "carry", "riding", "cowgirl", "doggy", "pretzel", "flatiron", "face down",
+                      "bent over", "legs up", "one leg up", "lotus", "ballerina", "bellarina", "bridge", "the bridge",
+                      "chairman", "the chairman", "caboose", "seashell", "sea shell", "tabletop", "table top",
+                      "on the table", "corkscrew", "wheelbarrow", "leap frog", "leapfrog", "valedictorian",
+                      "pinball wizard", "upstanding citizen", "stand and deliver", "on all fours", "woman on top",
+                      "man on top", "missionary", "half folded", "carrying", "69", "sixty nine",
+                      "piledriver", "pile driver", "anvil", "deep impact", "knees to chest", "knees out",
+                      "standing split", "standing face to face", "standing against the wall", "frog legs",
+                      "closed leg", "legs on shoulders", "on his lap"})
+#: An everyday name followed by one of these describes a thing, not a position: "candle-lit", "butterfly tattoo".
+NOT_A_POSE = re.compile(r"^(?:-|\s+)(?:lit|light|lights|tattoo|tattoos|print|necklace|earrings?|stand|shop|wings?|"
+                        r"clip|sleeves?|garden|holder|flame|wax|race|hat|boots?)\b", re.IGNORECASE)
+
+
+def _as_pose(text: str, name: str) -> bool:
+    """Whether an everyday name is used as a position somewhere in the text, not only as a thing."""
+    pattern = r"\b" + r"[\s\-]+".join(map(re.escape, name.split())) + r"\b"
+    return any(not NOT_A_POSE.match(text[m.end():]) for m in re.finditer(pattern, text, re.IGNORECASE))
+
+
+#: When a sexual brief names no position, the planner gets these in full and only the names of the rest:
+#: the whole guide is too long to send with every plan.
+CORE = ("missionary", "doggy", "cowgirl", "reverse-cowgirl", "prone-bone", "standing-doggy", "wall-lift", "lotus")
 
 
 #: Words too common in position names to pick one out by themselves.
@@ -70,9 +97,13 @@ def mentioned(text: str) -> list[Pose]:
     full nelson" picks the standing entry rather than every full nelson."""
     _, poses = load()
     haystack = f" {_norm(text)} "
+    found = {pose.key: [n for n in {_norm(pose.key), *(_norm(a) for a in pose.aliases)} if n and f" {n} " in haystack]
+             for pose in poses}
+    # A brief is sexual when it says so, or when it names a position by a name nothing else means ("mating press").
+    sexual = bool(SEXUAL.search(text or "")) or any(n not in EVERYDAY for names in found.values() for n in names)
     matched: dict[str, str] = {}  # pose key -> the longest of its names found in the text
     for pose in poses:
-        names = [n for n in {_norm(pose.key), *(_norm(a) for a in pose.aliases)} if n and f" {n} " in haystack]
+        names = [n for n in found[pose.key] if n not in EVERYDAY or (sexual and _as_pose(text, n))]
         if names:
             matched[pose.key] = max(names, key=len)
     # A name found only inside a longer found name does not count: "full nelson" inside "standing full nelson".
@@ -104,15 +135,19 @@ def _field(pose: Pose, name: str) -> str:
 
 
 def planner_note(brief: str) -> str:
-    """What the planner gets beside a sexual brief: the shared rules plus the positions it names, or every position
-    when it names none (the planner then chooses one and still has the geometry). "" for any other brief."""
+    """What the planner gets beside a sexual brief: the shared rules plus the positions it names, or the core
+    positions (and the rest by name) when it names none. "" for any other brief -- a butterfly tattoo or a
+    candle-lit room is not a position."""
     found = mentioned(brief)
     if not found and not SEXUAL.search(brief or ""):
         return ""
     rules, poses = load()
     if found:
         body = "\n\n".join(f"{p.name}\n{p.text}" for p in found)
-    else:  # no position named: every one, but only its ready sentence and its pitfall, to keep the brief short
-        body = "\n\n".join(f"{p.name}\n{_field(p, 'prompt')}\nTags: {_field(p, 'tags')}\nWatch: {_field(p, 'watch')}" for p in poses)
+    else:  # no position named: the core ones' ready sentence and pitfall, and the rest by name to keep the brief short
+        core = [p for p in poses if p.key in CORE]
+        body = "\n\n".join(f"{p.name}\n{_field(p, 'prompt')}\nTags: {_field(p, 'tags')}\nWatch: {_field(p, 'watch')}" for p in core)
+        body += ("\n\nOther positions (name one in the brief to get its full geometry): "
+                 + ", ".join(p.name for p in poses if p.key not in CORE) + ".")
     return ("POSITION GUIDE (the video model knows no position names: write each position as this geometry, one "
             f"position per segment):\n{rules}\n\n{body}")

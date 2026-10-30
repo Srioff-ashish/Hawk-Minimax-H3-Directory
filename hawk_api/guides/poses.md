@@ -19,8 +19,8 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - With picture references, say which <Picture N> is which person before describing the pose, and keep each person's face, skin and build tied to their own reference. A pose reference (<Pose N>) shows the bodies' positions only; still describe them in words.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
-## missionary-pillow — Missionary with a pillow under her hips
-aliases: missionary, pillow missionary, raised hips missionary
+## missionary-pillow — Elevated missionary (pillow under her hips)
+aliases: elevated missionary, pillow missionary, raised hips missionary
 tags: missionary, on back, spread legs, pillow under hips
 her: On her back with her head low on the bed and a firm pillow under her hips, so her pelvis is tilted up. Her thighs are spread and her knees bent, feet flat on the bed or lifted off it.
 him: Kneeling upright between her thighs, knees on the bed, torso upright or leaning slightly over her.
@@ -241,7 +241,7 @@ watch: It becomes a seated lotus; say "lying on her back".
 prompt: She lies on her back with her legs crossed in a lotus position, each foot resting on the opposite thigh, her pelvis tilted up. He lies over her on his forearms, penetrating her with slow grinding thrusts.
 
 ## standing-face-to-face — Standing face to face
-aliases: standing face to face, standing against the wall
+aliases: standing face to face, standing against the wall, standing congress
 tags: standing sex, against wall, leg up, face to face
 her: Standing with her back against a wall, facing him, one leg raised and hooked around his hip, the other foot on the floor.
 him: Standing facing her, knees slightly bent to bring his hips under hers.
@@ -254,7 +254,7 @@ watch: Both her feet stay on the floor and there is no contact; say which leg is
 prompt: She stands with her back against the wall facing him, her right leg lifted and hooked around his hip, her left foot on the floor, her arms around his neck. He stands pressed against her with his knees slightly bent, his left hand under her raised thigh and his right on the wall, penetrating her from below.
 
 ## wall-lift — Standing carry / Wall lift
-aliases: standing carry, wall lift, carry
+aliases: standing carry, wall lift, carry, upstanding citizen
 tags: standing sex, carrying, legs around waist, suspended congress, face to face
 her: Lifted off the floor, face to face with him, her thighs gripping his waist and her feet pushing against the wall behind him.
 him: Standing with his back against the wall, legs braced, taking her whole weight.
@@ -318,8 +318,8 @@ motion: The rhythm is the variation. Name it explicitly.
 watch: "Like a tiger" means nothing to the model; describe the movement itself.
 prompt: Pick the rear-entry body position from doggy, standing-doggy or prone-bone, then describe his rhythm explicitly (fast and shallow, slow and heavy, mounting from above).
 
-## cowgirl — Cowgirl / Reverse cowgirl
-aliases: cowgirl, reverse cowgirl, woman on top, riding
+## cowgirl — Cowgirl
+aliases: cowgirl, woman on top, riding
 tags: cowgirl position, woman on top, straddling; reverse: reverse cowgirl position
 her: Kneeling astride his hips: her knees on the bed on either side of his waist, her shins flat on the bed behind her, sitting upright, controlling the rhythm. Facing his head (cowgirl) or facing his feet (reverse cowgirl).
 him: Lying on his back, legs straight.
@@ -330,3 +330,328 @@ pov: From his eyes lying on his back, looking up at her above him; the man is ou
 motion: She rides up and down or grinds forward and back; her breasts and hair move with her, his hips lift to meet her.
 watch: She ends up sitting beside him; say "astride his hips, one knee either side of him".
 prompt: He lies on his back with his legs straight. She kneels astride his hips, her knees on the bed on either side of his waist and her shins flat behind her, sitting upright with her hands on his chest, riding him up and down and setting the rhythm herself. (Reverse: she faces his feet, hands on his thighs, her face toward the camera.)
+
+## reverse-cowgirl — Reverse cowgirl
+aliases: reverse cowgirl, reverse riding
+tags: reverse cowgirl position, woman on top, straddling, facing away
+her: Kneeling astride his hips facing his feet: her knees on the bed on either side of his waist, her shins flat behind her, sitting upright, her back to his face.
+him: Lying on his back, legs straight, head on the pillow.
+hands: Her hands rest on his thighs or knees; his hands hold her buttocks or her waist.
+faces: She faces the camera (and his feet), eyes half closed or looking back over her shoulder; he looks at her back.
+camera: From in front of her at bed height, past his feet, so her face, body and the contact are seen; or a low three-quarter front.
+pov: From his eyes lying on his back, looking along his body at her back and buttocks; the man is out of frame except his hands on her hips and his penis in the foreground; her face turned back over her shoulder.
+motion: She rides up and down or grinds forward and back, leaning on his thighs; her hair swings across her back.
+watch: She turns to face him and it becomes cowgirl; say "facing his feet, her back to his face" every time.
+prompt: He lies on his back with his legs straight. She kneels astride his hips facing his feet, her knees either side of his waist and her shins flat on the bed, her back to his face and her hands on his thighs, riding him up and down while she looks toward the camera.
+
+## arched-cowgirl — Arched cowgirl (leaning back)
+aliases: arched cowgirl, leaning back cowgirl
+tags: cowgirl position, woman on top, arched back, leaning back
+her: Kneeling astride his hips facing his head, her torso leaning far back in an arch, her hands planted on the bed behind her (beside his legs) or on his shins, her chest pushed up and her head tipped back.
+him: Lying on his back, knees slightly bent to give her shins something to lean on.
+hands: Her hands on the bed behind her or on his knees, carrying her weight; his hands on her hips or her waist.
+faces: Her head tips back, throat exposed, eyes closed; he looks up along her arched body.
+camera: Side profile at bed height (the arch reads best from the side), or low from the foot of the bed.
+pov: From his eyes on his back, looking up at her arched body, her chin tipped to the ceiling; only his hands on her hips show.
+motion: She rocks her hips forward and back in slow grinding strokes; her arched torso stays still.
+watch: She sits upright and it becomes plain cowgirl; name the backward lean and that her hands behind her take the weight.
+prompt: He lies on his back with his knees slightly bent. She kneels astride his hips facing him, leaning far back in an arch with her hands planted on the bed behind her, chest pushed up and head tipped back, grinding her hips forward and back on him.
+
+## cowgirls-helper — Cowgirl's helper
+aliases: cowgirl helper, cowgirls helper, cowgirl's helper
+tags: cowgirl position, woman on top, squatting, lifted hips
+her: Squatting over his hips facing him, feet flat on the bed either side of his waist, knees wide, her hands on his chest.
+him: Lying on his back, his hands under her buttocks lifting and lowering her.
+hands: His hands cup her buttocks and do the lifting; her hands on his chest for balance.
+faces: Face to face, she looks down at him, mouth open; he looks up at her.
+camera: Low angle from the foot of the bed between his feet, or three-quarter front.
+pov: From his eyes on his back, her squatting body above, his hands under her buttocks at the bottom corners.
+motion: He lifts her up and drops her down on him in a steady rhythm; her breasts bounce.
+watch: Without his hands under her she just squats; say whose hands carry her weight.
+prompt: He lies on his back. She squats over his hips facing him, feet flat on the bed either side of his waist and her hands on his chest, while his hands cup her buttocks and lift and lower her on him.
+
+## rider-on-fire — Rider on fire
+aliases: rider on fire
+tags: reverse cowgirl, woman on top, lying forward, facing away
+her: On top of him facing his feet, her torso lying forward along his legs, her knees on the bed either side of his hips, her chest close to his shins.
+him: Lying on his back, legs straight and together.
+hands: Her hands hold his ankles or the bed beside his feet; his hands are on her buttocks or her lower back.
+faces: Her face is down by his knees, turned toward the camera; he looks down at her back.
+camera: Side profile at bed height, full length of both bodies.
+pov: From his eyes on his back, looking along his body at her back and buttocks lying forward over his legs; only his hands on her hips show.
+motion: She slides her body forward and back along his legs; small deep strokes.
+watch: She sits upright (plain reverse cowgirl); say her chest lies forward along his legs.
+prompt: He lies on his back with his legs straight together. She is on top of him facing his feet, her knees either side of his hips and her torso lying forward along his legs, hands holding his ankles, sliding forward and back on him.
+
+## missionary — Missionary
+aliases: missionary, classic missionary, man on top
+tags: missionary, on back, spread legs, man on top, face to face
+her: On her back on the bed, head on the pillow, thighs apart and knees bent, feet flat on the bed or around his legs.
+him: Lying over her between her thighs, propped on his forearms or straight arms, his legs straight behind him.
+hands: His forearms on the bed either side of her head; her hands on his back or shoulders.
+faces: Face to face, close; she looks up at him or closes her eyes, he looks down at her.
+camera: Side profile at bed height, hip-to-head framing; or high over his shoulder onto her face.
+pov: From his eyes above her, looking down at her face on the pillow and her body; the man is out of frame except his forearms either side and his penis at the bottom; her bent knees at the bottom corners.
+motion: Steady thrusts from his hips; her knees rise and her body shifts up the bed with each one.
+watch: His body hides hers entirely; use side profile or his forearms propped so the space between them shows.
+prompt: She lies on her back with her head on the pillow, thighs apart and knees bent. He lies over her between her thighs, propped on his forearms either side of her head, penetrating her with steady thrusts while they look at each other.
+
+## lifted-missionary — Lifted missionary
+aliases: lifted missionary, hips lifted missionary
+tags: missionary, on back, lifted hips, kneeling
+her: On her back with only her shoulders and head on the bed; her hips are lifted off the bed in his hands, her legs resting on his thighs or wrapped around his waist.
+him: Kneeling upright between her thighs, sitting slightly back on his heels.
+hands: His hands under her lower back or buttocks hold her hips up off the bed; her hands grip the sheets above her head.
+faces: She looks up at him, head back on the pillow; he looks down at her.
+camera: Side profile at bed height so the gap under her lifted hips shows.
+pov: From his eyes kneeling, looking down at her lifted hips in his hands and her face on the pillow; the man is out of frame except his hands and penis.
+motion: He pulls her hips onto him and back; her body arcs.
+watch: Her hips sink back to the bed; name his hands holding her hips up and the gap beneath them.
+prompt: She lies on her back with only her shoulders on the bed, her hips lifted off it in his hands and her legs resting on his thighs. He kneels upright between her thighs, holding her raised hips and pulling her onto him.
+
+## mating-press — Mating press
+aliases: mating press
+tags: mating press, legs up, folded, deep penetration, man on top
+her: On her back, her legs folded up with her knees near her shoulders and her calves resting on his shoulders or her feet pointing to the ceiling.
+him: On top of her, his legs straight behind him and his toes on the bed, his weight pressing down onto her through his arms planted either side of her.
+hands: His hands planted on the bed beside her shoulders, or pinning her ankles back; her hands on his back or the backs of her own thighs.
+faces: Face to face, close; she looks up, mouth open.
+camera: Side profile at bed height, or low from behind his feet so the contact shows under him.
+pov: From his eyes above her, looking down past her raised legs at her face; only his arms planted either side show.
+motion: Heavy downward thrusts from above, his whole weight dropping into her; slow and deep.
+watch: Her legs drop flat; name her knees by her shoulders and that his weight holds them there.
+prompt: She lies on her back with her legs folded up, knees near her shoulders and calves on his shoulders. He is on top of her, legs straight behind him and arms planted either side of her, pressing his weight down and thrusting deep from above.
+
+## piledriver — Piledriver
+aliases: piledriver, pile driver
+tags: piledriver, legs over head, upside down, from above
+her: Upper back and shoulders on the bed, her hips raised high above her head with her legs folded over her so her knees are near her face; her pelvis points at the ceiling.
+him: Standing (on the bed or floor) or squatting over her raised hips, facing the same way she faces, his feet either side of her shoulders.
+hands: His hands hold her hips or ankles; her hands support her lower back or hold her knees.
+faces: Her face looks up between her knees; he looks down at her.
+camera: Side profile, full figure; the vertical line of her legs and his body should read clearly.
+pov: From his eyes above, looking straight down at her upturned hips and her face between her knees; the man is out of frame except his hands and penis.
+motion: He drops straight down into her from above; slow, heavy and vertical.
+watch: Her hips sink and it becomes mating press; say her hips are raised above her head and her weight rests on her shoulders.
+prompt: She rests on her shoulders and upper back with her hips raised high above her head and her legs folded over her, knees by her face. He squats over her raised hips with his feet either side of her shoulders, holding her hips and penetrating her from straight above.
+
+## butter-churner — Butter churner
+aliases: butter churner
+tags: legs over head, upside down, squatting, from above
+her: Upper back and shoulders on the bed, hips lifted above her head, legs open and folded back so her feet are near her head.
+him: Squatting over her raised pelvis facing her face (the opposite of piledriver), knees bent, his feet either side of her ribs.
+hands: His hands hold the backs of her thighs; her hands hold her own ankles or brace her lower back.
+faces: She looks up at him between her spread legs; he looks down at her face.
+camera: Side profile, full figure.
+pov: From his eyes squatting, looking down at her upturned hips and her face beyond them; only his hands on her thighs show.
+motion: He moves straight up and down from his squat, like churning; slow and deep.
+watch: He ends up kneeling; say squatting and facing her face.
+prompt: She rests on her shoulders with her hips lifted above her head and her legs spread and folded back. He squats over her raised pelvis facing her, hands on the backs of her thighs, moving straight up and down into her.
+
+## wheelbarrow — Standing wheelbarrow
+aliases: wheelbarrow, standing wheelbarrow
+tags: wheelbarrow, standing, from behind, legs held, hands on floor
+her: Hands flat on the floor, arms straight, her body held horizontal off the floor, her legs held up by him around his waist.
+him: Standing behind her, legs apart, holding her thighs at his hips.
+hands: His hands grip her thighs at his waist; her hands are flat on the floor carrying her upper body.
+faces: She looks at the floor or forward toward the camera, hair hanging down; he looks down at her back.
+camera: Side profile, full figure, low.
+pov: From his eyes standing behind her, looking down along her horizontal back to her hands on the floor; his hands on her thighs at the bottom.
+motion: He thrusts from behind while holding her legs; her arms brace against each thrust.
+watch: Her knees end up on the floor (doggy); say her legs are off the floor in his hands and only her hands touch the floor.
+prompt: She holds herself up on straight arms with her hands flat on the floor, her body horizontal and her legs lifted around his waist. He stands behind her gripping her thighs at his hips, penetrating her from behind.
+
+## seated-wheelbarrow — Seated wheelbarrow
+aliases: seated wheelbarrow
+tags: wheelbarrow, seated, from behind, hands on floor
+her: Hands on the floor in front of the bed, her legs bent around his waist, her hips on his lap, facing away from him.
+him: Sitting on the edge of the bed, feet on the floor, holding her hips on his lap.
+hands: His hands hold her hips or waist; her hands are flat on the floor.
+faces: She faces the floor or forward; he looks down at her back.
+camera: Side profile, full figure.
+pov: From his eyes sitting, looking down along her back to her hands on the floor; his hands on her hips.
+motion: He rocks her hips on his lap; small strokes.
+watch: She falls off his lap; say her hips rest on his lap and her legs wrap his waist.
+prompt: He sits on the edge of the bed with his feet on the floor. She faces away from him with her hips on his lap and her legs bent around his waist, her hands flat on the floor in front, while he holds her hips and rocks her on him.
+
+## lotus — Lotus (seated, face to face)
+aliases: lotus, lotus face to face, seated lotus, yab yum
+tags: lotus position, seated, face to face, legs wrapped, intimate
+her: Sitting in his lap facing him, her legs wrapped around his back with her ankles crossed behind him, her arms around his neck.
+him: Sitting cross-legged on the bed, upright.
+hands: His hands on her lower back pulling her close; her arms around his neck.
+faces: Face to face, foreheads touching or kissing.
+camera: Side profile at bed level, full figure.
+pov: From his eyes, her face close in front of his, her arms over his shoulders; nothing else of him shows.
+motion: Slow rocking together, hips grinding rather than thrusting.
+watch: The models separate them; say her legs wrap his back and she sits in his lap.
+prompt: He sits cross-legged and upright on the bed. She sits in his lap facing him, her legs wrapped around his back with her ankles crossed behind him and her arms around his neck, their foreheads together as they rock slowly.
+
+## ballerina — Ballerina (standing, one leg high)
+aliases: ballerina, bellarina, standing split
+tags: standing sex, leg up, flexible, face to face
+her: Standing on one foot, her other leg raised straight up and resting on his shoulder, her back against a wall.
+him: Standing facing her, close, his knees slightly bent.
+hands: He holds her raised leg against his shoulder; her hands hold his shoulders or the wall.
+faces: Face to face, close.
+camera: Side profile, full figure, so the raised leg reads as a vertical line.
+pov: From his eyes, her face in front of him and her raised calf beside his face.
+motion: Upward thrusts; she balances on her standing foot.
+watch: The raised leg drops to his hip (standing face to face); say her leg is straight up on his shoulder.
+prompt: She stands with her back to the wall on her left foot, her right leg raised straight up and resting on his shoulder. He stands facing her with his knees slightly bent, holding her raised leg, penetrating her from below.
+
+## leap-frog — Leap frog
+aliases: leap frog, leapfrog, face down ass up
+tags: doggystyle, face down, ass up, from behind
+her: Knees on the bed, chest, shoulders and cheek down flat on the bed, arms stretched forward or by her sides, hips high.
+him: Kneeling or crouching behind her, his knees between hers.
+hands: His hands on her hips; hers grip the sheets in front of her.
+faces: Her cheek is on the bed turned toward the camera; he looks down at her back.
+camera: Side profile at bed height (the steep slope of her back reads best), or three-quarter rear.
+pov: From his eyes behind her, looking down the steep slope of her back to her face on the bed; his hands on her hips.
+motion: Deep thrusts from behind; her body slides forward on the sheet.
+watch: She rises onto her hands (doggy); say her chest and shoulders are flat on the bed.
+prompt: She kneels on the bed with her chest, shoulders and cheek pressed flat to the sheet and her hips raised high, arms stretched forward. He kneels directly behind her with his hands on her hips, penetrating her from behind.
+
+## bridge — Bridge
+aliases: the bridge, bridge position
+tags: woman on top, straddling, him arched, flexible
+her: Straddling his raised hips facing him, her feet on the floor or bed either side of him, knees bent, lowering herself onto him.
+him: Arched up in a back bridge, his hands and feet on the floor, his belly up and hips lifted.
+hands: His hands on the floor behind his head (or his shoulders on the bed edge); her hands on his chest or her own knees.
+faces: She looks down at him; his head is tipped back.
+camera: Side profile, full figure.
+pov: No real POV; use the side view.
+motion: She moves up and down on his raised hips; he holds the bridge still.
+watch: His hips sink to the floor; say he holds himself up on his hands and feet.
+prompt: He arches up in a back bridge with his hands and feet on the floor and his hips raised. She stands astride his raised hips facing him, knees bent, lowering herself onto him and moving up and down.
+
+## chairman — The chairman
+aliases: the chairman, chairman
+tags: seated, reverse, facing away, edge of bed
+her: Sitting on his lap facing away from him, her feet on the floor between his feet, leaning slightly forward with her hands on his knees.
+him: Sitting on the edge of a bed or chair, feet on the floor apart.
+hands: His hands on her waist guiding her; her hands on his knees.
+faces: She faces the camera; he looks over her shoulder or at her back.
+camera: From in front of her at chair height, full figure.
+pov: From his eyes seated behind her, looking at her back and over her shoulder; his hands on her waist.
+motion: She bounces and grinds on his lap, using her feet on the floor.
+watch: She sits beside him; say on his lap between his knees, facing away.
+prompt: He sits on the edge of the bed with his feet apart on the floor. She sits on his lap facing away from him, her feet on the floor between his, hands on his knees, moving up and down on him while he guides her waist.
+
+## caboose — Caboose
+aliases: caboose
+tags: seated, spooning, facing away, intimate
+her: Sitting between his legs on his lap, facing away from him, leaning back against his chest, her legs over his thighs.
+him: Sitting up on the bed, leaning back on one hand or against the headboard, legs out in front.
+hands: His free hand around her waist or on her breast; her hands on his thighs.
+faces: Her head leans back on his shoulder, face toward the camera; his face beside hers.
+camera: From the front at bed level, both faces in frame.
+pov: From his eyes over her shoulder, looking down her body; his arm around her waist.
+motion: Slow rocking, her back sliding against his chest.
+watch: She sits upright away from him; say her back rests against his chest.
+prompt: He sits up on the bed leaning back against the headboard with his legs out in front. She sits on his lap facing away, leaning back against his chest with her head on his shoulder, rocking slowly on him while his arm holds her waist.
+
+## seashell — Seashell
+aliases: seashell, sea shell
+tags: missionary, legs up, folded, ankles crossed, flexible
+her: On her back with her legs raised and folded back, ankles crossed behind or above her head (or as far back as possible), her body curled like a shell.
+him: Lying or kneeling on top of her, leaning his weight onto her folded legs.
+hands: His hands on the bed either side of her; hers holding her crossed ankles.
+faces: Face to face, very close, because she is folded up toward him.
+camera: Side profile at bed height.
+pov: From his eyes above her, her face framed by her crossed legs; only his arms either side show.
+motion: Small deep thrusts; her folded body rocks with each.
+watch: Her legs uncross and spread (mating press); say ankles crossed and legs folded back.
+prompt: She lies on her back curled up with her legs folded back and ankles crossed above her head, holding her ankles. He leans over her onto her folded legs, hands on the bed either side, thrusting deep and close.
+
+## pinball-wizard — Pinball wizard
+aliases: pinball wizard
+tags: missionary, bridge, raised hips, kneeling
+her: On her back with her feet flat on the bed and her hips pushed up into a bridge, her shoulders on the bed.
+him: Kneeling between her feet, hips level with her raised hips.
+hands: His hands support her lower back and hips; her hands flat on the bed beside her.
+faces: She looks up at him, head back; he looks down at her.
+camera: Side profile at bed height, so her raised bridge reads.
+pov: From his eyes kneeling, looking down at her bridged hips in his hands and her face beyond; only his hands and penis show.
+motion: He thrusts while she holds the bridge; her hips push up to meet him.
+watch: Her hips drop; say her feet push her hips up into a bridge and his hands support them.
+prompt: She lies on her back with her feet flat on the bed and pushes her hips up into a bridge. He kneels between her feet, his hands supporting her raised hips, penetrating her while she holds the arch.
+
+## valedictorian — Valedictorian
+aliases: valedictorian
+tags: missionary, legs up, spread legs, holding ankles
+her: On her back with both legs raised straight and spread wide in a V, holding her own ankles (or he holds them).
+him: Kneeling upright between her spread legs.
+hands: Her hands (or his) hold her ankles wide apart; his other hand on her hip.
+faces: She looks up at him between her raised legs.
+camera: Side profile, or from behind his shoulder looking down between her legs.
+pov: From his eyes kneeling, her raised legs spread in a V either side of the frame, her face between them; the man is out of frame except his penis.
+motion: Steady thrusts; her held legs stay wide.
+watch: Her legs drop or close; say both legs straight up and spread, ankles held.
+prompt: She lies on her back with both legs raised straight up and spread wide in a V, holding her ankles. He kneels upright between her legs, penetrating her with steady thrusts.
+
+## tabletop — Tabletop
+aliases: tabletop, table top, on the table
+tags: edge of table, standing, missionary, legs spread
+her: Lying back on a table with her hips at its edge, legs spread and raised around his waist or resting on his arms.
+him: Standing at the table's edge between her legs, hips level with hers.
+hands: His hands grip her hips or thighs; her hands grip the table edges.
+faces: She looks up at him or tips her head back over the table; he looks down at her.
+camera: Side profile at table height, full figure for him.
+pov: From his eyes standing, looking down along her body on the table; his hands on her thighs.
+motion: He thrusts standing; the table shakes.
+watch: She sits up; say she lies back on the table, hips at the edge.
+prompt: She lies back on a sturdy table with her hips at its edge and her legs spread around his waist. He stands at the edge between her legs, gripping her hips, penetrating her.
+
+## corkscrew — Corkscrew
+aliases: corkscrew
+tags: side, edge of bed, legs together, standing
+her: Lying on her side at the edge of the bed, legs together and bent at the knees, hips at the edge.
+him: Standing or kneeling at the edge of the bed behind her hips.
+hands: His hands on her top hip and thigh; her hands under the pillow or gripping the cover.
+faces: She looks back at him over her shoulder or toward the camera.
+camera: From the end of the bed at hip height, or above.
+pov: From his eyes standing, looking down at her side-lying body, her face turned back; his hand on her hip.
+motion: He thrusts from standing; her closed legs keep it tight.
+watch: She rolls onto her back; say on her side, legs together.
+prompt: She lies on her side at the edge of the bed with her legs together and bent, hips at the edge. He stands at the bedside behind her hips, one hand on her top thigh, penetrating her.
+
+## stand-and-deliver — Stand and deliver
+aliases: stand and deliver
+tags: standing, edge of table, legs on shoulders
+her: Lying back on a high table or counter with her hips at the edge and her legs straight up resting on his shoulders.
+him: Standing at the edge, her calves on his shoulders.
+hands: His hands hold her thighs against him; hers grip the edge.
+faces: She looks up at him between her legs; he looks down.
+camera: Side profile at table height.
+pov: From his eyes standing, her calves beside his face and her body beyond on the table.
+motion: Deep standing thrusts.
+watch: Her legs slip down; say her calves rest on his shoulders.
+prompt: She lies back on a high counter with her hips at the edge and her legs straight up on his shoulders. He stands at the edge holding her thighs, penetrating her deep.
+
+## sixty-nine — 69
+aliases: 69, sixty nine, sixty-nine
+tags: 69, mutual oral sex, cunnilingus, fellatio
+her: Lying on top of him, reversed (her head at his hips), her knees either side of his head, her mouth on his penis.
+him: Lying on his back, his face between her thighs, his mouth on her vulva.
+hands: His hands on her buttocks pulling her hips down; hers hold his penis or his thighs.
+faces: Her face over his hips; his face under her hips; neither looks at the camera unless asked.
+camera: Side profile at bed height, both bodies in full.
+pov: From his eyes under her, looking up at her hips above his face, her body stretched toward his feet.
+motion: Both heads move; slow rhythm.
+watch: Bodies end up side by side or the same way round; say reversed, her head at his hips and his head between her thighs.
+prompt: He lies on his back. She lies on top of him reversed, her knees either side of his head and her mouth on his penis, while his face is between her thighs and his mouth on her vulva, his hands on her buttocks. Tag: oral sex, cunnilingus, fellatio.
+
+## face-sitting — Face-sitting
+aliases: face sitting, facesitting, sitting on his face
+tags: face sitting, cunnilingus, oral sex, woman on top
+her: Kneeling astride his face, her knees either side of his head, facing his body or the headboard, sitting upright.
+him: Lying on his back, his mouth on her vulva.
+hands: Her hands on the headboard or his chest; his hands on her thighs or buttocks.
+faces: She looks down or tips her head back, eyes closed; his face under her.
+camera: Side profile at bed height, or three-quarter front on her.
+pov: From his eyes under her, looking up at her body above, her thighs either side of the frame.
+motion: She grinds slowly on his mouth.
+watch: She sits on his chest; say her knees either side of his head and her vulva on his mouth.
+prompt: He lies on his back. She kneels astride his face, knees either side of his head, sitting upright with her hands on the headboard, grinding slowly on his mouth. Tag: oral sex, cunnilingus, face sitting.

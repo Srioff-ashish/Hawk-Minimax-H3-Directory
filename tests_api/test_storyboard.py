@@ -402,6 +402,11 @@ class Writer(unittest.IsolatedAsyncioTestCase):
         self.assertIn("exactly 4", user["content"][0]["text"])
         await sb.suggest_shots(service, "a villa morning", ["face"], 4, character="Rebel, fair-skinned Indian, 45, petite")
         self.assertIn("Rebel, fair-skinned Indian, 45, petite", calls[-1][1][1]["content"][0]["text"], "the user's facts go in as fixed")
+        self.assertNotIn("POSITION GUIDE", calls[-1][1][0]["content"], "a villa morning is not a sex scene")
+        await sb.suggest_shots(service, "a hotel night: mating press, then prone bone", ["face"], 4, platform="fanvue")
+        self.assertIn("Mating press", calls[-1][1][0]["content"], "the positions it names are spelled out for it")
+        await sb.suggest_shots(service, "a hotel night: mating press", ["face"], 4, platform="instagram")
+        self.assertNotIn("POSITION GUIDE", calls[-1][1][0]["content"], "never on Instagram")
         with self.assertRaises(sb.StoryboardError):
             await sb.suggest_shots(service, "", ["face"], 4)
 

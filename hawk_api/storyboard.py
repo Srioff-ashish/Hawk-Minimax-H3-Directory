@@ -1343,6 +1343,7 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
     from . import models_llm
     from .atlas import AtlasError
     from .manhwa import parse_json
+    from . import pose_guide
     from .prompts import PLATFORM_RULES
 
     idea = (idea or "").strip()
@@ -1365,7 +1366,13 @@ async def suggest_shots(service, idea: str, reference_asset_ids: list[str] | Non
               f"pictures show beyond them: {character.strip()}\n" if character.strip() else "")
            + (f"The first {len(parts)} attached image{'s are' if len(parts) > 1 else ' is'} the character's reference."
               if parts else "No reference image: describe the character from the idea."))
-    messages = [{"role": "system", "content": f"{service.prompts.get('storyboard').rstrip()}\n\n{PLATFORM_RULES}"},
+    system = f"{service.prompts.get('storyboard').rstrip()}\n\n{PLATFORM_RULES}"
+    # A sexual idea gets the position guide, so a look shot's motion line spells the position out as the guide does
+    # instead of naming it (the video model knows no position names). Never on Instagram.
+    guide = pose_guide.planner_note(idea) if (platform or "general") != "instagram" else ""
+    if guide:
+        system = f"{system}\n\n{guide}"
+    messages = [{"role": "system", "content": system},
                 {"role": "user", "content": [{"type": "text", "text": ask}, *parts] if parts else ask}]
     failures = []
     for model in chain:
