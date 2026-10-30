@@ -20,7 +20,7 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - Facing away is the hardest thing to get (tested on Krea 2): chairman, caboose and rider on fire all came back face to face. Say it three ways: "facing away from him", "her back against his chest" (or "her head toward his feet"), and that they both face the same direction, toward the camera. Reversed bodies (69) likewise: say their bodies point in opposite directions, her head at his hips and his head between her thighs. If that still fails, place them in the frame: where the camera stands and where each head is ("his head on the pillow at the left of the frame, hers at the right near his feet"; "seen from the foot of the bed, her face toward the camera, his just behind her shoulder"). Tested: that fixed rider on fire and caboose when the wording alone did not.
 - Describe one woman and one position. A prompt that also mentions a variant ("or reverse: she faces his feet") drew two women (tested, cowgirl). Use a portrait frame for her-on-top positions.
 - A tag that is also an object gets drawn as the object: tested on Krea 2, "wheelbarrow" in the tag line put a garden wheelbarrow in the room. Keep such names (wheelbarrow, bridge, table, chair) out of the tag line and describe the bodies instead.
-- Threesomes (the dp- entries: one woman and two men, all consenting adults): three bodies merge even more easily than two. Make the two men look different and name them by that look every time ("the dark-haired man", "the blond man") or by place ("the man beneath her", "the man behind her"); never "he" once there are two. Give each body its own sentence and account for every limb. Say which man is in her vagina and which in her anus, in the same sentence as the position. Prefer a side profile so all three bodies and both points of contact are in view, and a wide frame (16:9) so nobody is cut off.
+- Threesomes (the dp- entries: always exactly one woman and two men, all consenting adults): three bodies merge even more easily than two. Make the two men look different and name them by that look every time ("the dark-haired man", "the blond man") or by place ("the man beneath her", "the man behind her"); never "he" once there are two. Give each body its own sentence and account for every limb. Say which man is in her vagina and which in her anus, in the same sentence as the position. Prefer a side profile so all three bodies and both points of contact are in view, and a wide frame (16:9) so nobody is cut off.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
 ## missionary-pillow — Elevated missionary (pillow under her hips)
@@ -779,16 +779,16 @@ prompt: She is lifted off the floor between two standing men, facing the dark-ha
 
 ## dp-piledriver — Piledriver DP
 aliases: piledriver dp, dp piledriver, double piledriver
-tags: double penetration, foursome, piledriver, legs over head, oral
-her: On her shoulders with her hips raised high above her head, legs spread over her.
-him: Three men: one (bald) kneels by her head with his penis in her mouth; one (dark-haired) stands over her raised hips facing away from her face, in her vagina; one (blond) stands over her facing the dark-haired man, in her anus.
-hands: The two standing men brace on each other's shoulders or on her thighs; the kneeling man holds her head.
-faces: Her face is up toward the kneeling man; the two standing men face each other.
-camera: Side profile, full figure, wide; the stack of bodies reads vertically.
+tags: double penetration, threesome, piledriver, legs over head, from above
+her: Upside down on her shoulders: shoulders and head on the bed, back vertical, hips lifted straight up above her head, legs spread and folded over toward the bed beyond her head.
+him: Two men stand astride her upturned hips facing each other, both squatting downward into her: one (dark-haired) in her vagina, one (blond) in her anus.
+hands: The men steady themselves on each other's shoulders or on her thighs; her hands brace her lower back.
+faces: She looks up between her legs at them; the two men face each other.
+camera: Side profile, full figure, wide; the vertical line of her body and the two men either side should read.
 pov: No real POV.
-motion: The two standing men drop into her in turn; the kneeling man moves gently.
-watch: Tested on Krea 2: she came back flat on her back with three men standing around. Say she is upside down on her shoulders with her back vertical and hips straight up. Four bodies is the limit of what the models hold; name each man by his look.
-prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head toward the ceiling and her spread legs folded over toward the bed beyond her head. A bald man kneels on the bed by her head with his penis in her mouth. A dark-haired man stands astride her upturned hips facing away from her face, squatting down into her vagina, and a blond man stands astride her hips facing him, squatting down into her anus.
+motion: The two men drop into her in turn, slow and vertical.
+watch: Tested on Krea 2: she came back flat on her back. Say she is upside down on her shoulders with her back vertical and hips straight up. Exactly two men.
+prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head toward the ceiling and her spread legs folded over toward the bed beyond her head. Two men stand astride her upturned hips facing each other, squatting down into her: the dark-haired man in her vagina and the blond man in her anus, steadying themselves on each other's shoulders.
 
 ## dp-reverse-piledriver — Reverse piledriver DP
 aliases: reverse piledriver dp, dp reverse piledriver, ass to ass dp
