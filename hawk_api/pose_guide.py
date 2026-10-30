@@ -92,7 +92,7 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
-def mentioned(text: str) -> list[Pose]:
+def mentioned(text: str, asked: bool = False) -> list[Pose]:
     """Positions a brief names, by key or alias. The longest name wins where one contains another, so "standing
     full nelson" picks the standing entry rather than every full nelson."""
     _, poses = load()
@@ -100,10 +100,11 @@ def mentioned(text: str) -> list[Pose]:
     found = {pose.key: [n for n in {_norm(pose.key), *(_norm(a) for a in pose.aliases)} if n and f" {n} " in haystack]
              for pose in poses}
     # A brief is sexual when it says so, or when it names a position by a name nothing else means ("mating press").
-    sexual = bool(SEXUAL.search(text or "")) or any(n not in EVERYDAY for names in found.values() for n in names)
+    # asked: the text is a position lookup (the pose_guide tool), so every name means the position.
+    sexual = asked or bool(SEXUAL.search(text or "")) or any(n not in EVERYDAY for names in found.values() for n in names)
     matched: dict[str, str] = {}  # pose key -> the longest of its names found in the text
     for pose in poses:
-        names = [n for n in found[pose.key] if n not in EVERYDAY or (sexual and _as_pose(text, n))]
+        names = [n for n in found[pose.key] if n not in EVERYDAY or asked or (sexual and _as_pose(text, n))]
         if names:
             matched[pose.key] = max(names, key=len)
     # A name found only inside a longer found name does not count: "full nelson" inside "standing full nelson".
@@ -120,7 +121,7 @@ def lookup(query: str | None = None) -> dict:
         return {"rules": rules,
                 "positions": [{"key": p.key, "name": p.name, "aliases": list(p.aliases)} for p in poses],
                 "note": "Call pose_guide again with a position's name for its full description."}
-    found = mentioned(query)
+    found = mentioned(query, asked=True)
     if not found:  # a partial word: "nelson", "cowgirl"
         words = {w for w in _norm(query).split() if len(w) > 3 and w not in FILLER}
         found = [p for p in poses if words & set(_norm(" ".join((p.key, p.name, *p.aliases))).split())]

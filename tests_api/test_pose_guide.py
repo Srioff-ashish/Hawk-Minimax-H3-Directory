@@ -47,6 +47,13 @@ class PoseGuide(unittest.TestCase):
         self.assertIn("Butterfly", unnamed, "and the rest by name")
         self.assertLess(len(unnamed), 12000, "but not every entry in full")
 
+    def test_a_lookup_by_name_finds_exactly_that_position(self):
+        # The tool is asked for a position, so everyday names count there and the loose word search is not needed.
+        for query, key in (("missionary", "missionary"), ("69", "sixty-nine"), ("leap frog", "leap-frog"),
+                           ("lotus", "lotus"), ("wheelbarrow", "wheelbarrow"), ("candle", "candle"),
+                           ("full nelson", "full-nelson-standing"), ("bullseye", "bullseye")):
+            self.assertEqual([p["key"] for p in pose_guide.lookup(query)["positions"]], [key], query)
+
     def test_everyday_words_are_not_positions(self):
         for brief in ("She has a pink butterfly tattoo on her thigh", "A candle-lit dinner on the terrace",
                       "A cowgirl at a rodeo", "He walks the doggy in the park", "The wrestler hits a piledriver",
