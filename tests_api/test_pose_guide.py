@@ -54,6 +54,14 @@ class PoseGuide(unittest.TestCase):
                            ("full nelson", "full-nelson-standing"), ("bullseye", "bullseye")):
             self.assertEqual([p["key"] for p in pose_guide.lookup(query)["positions"]], [key], query)
 
+    def test_an_image_prompt_gets_the_geometry_of_the_position_it_names(self):
+        note = pose_guide.image_note("Explicit photo of a couple in the mating press, hotel room")
+        self.assertIn("Mating press:", note)
+        self.assertIn("Camera:", note)
+        self.assertEqual(pose_guide.image_note("A woman with a butterfly tattoo at a candle-lit dinner"), "")
+        sentence = pose_guide.lookup("mating press")["positions"][0]["guide"].split("prompt: ")[1]
+        self.assertEqual(pose_guide.image_note(f"Mating press. {sentence}"), "", "not repeated when already written out")
+
     def test_everyday_words_are_not_positions(self):
         for brief in ("She has a pink butterfly tattoo on her thigh", "A candle-lit dinner on the terrace",
                       "A cowgirl at a rodeo", "He walks the doggy in the park", "The wrestler hits a piledriver",

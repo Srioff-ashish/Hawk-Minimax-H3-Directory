@@ -1442,11 +1442,16 @@ class HawkService:
             if asset["kind"] != "image":
                 raise RequestError(f"{asset['filename']} is {asset['kind']}; image edits need image assets.")
             sources.append(asset)
-        if any(local_images.from_upload(asset, self.store.lineage) for asset in sources):
+        uploaded = any(local_images.from_upload(asset, self.store.lineage) for asset in sources)
+        if uploaded:
             # Each upload behind these references is checked once for an identifiable person, before the rules
             # read the request: a faceless garment shot then stops counting as a photo of someone.
             await self._check_upload_roots(sources)
             sources = [self.store.get_asset(asset["id"]) or asset for asset in sources]
+        else:
+            # A named sex position reaches the image model as geometry and a camera, not a bare name it does not
+            # know (the planner does the same for videos). Never for anything made from an uploaded photo.
+            prompt = prompt + pose_guide.image_note(prompt)
 
         model = (model or "").strip()
         raw = (engine or "").strip().lower()

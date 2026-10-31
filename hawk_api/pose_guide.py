@@ -154,3 +154,15 @@ def planner_note(brief: str) -> str:
                  + ", ".join(p.name for p in poses if p.key not in CORE) + ".")
     return ("POSITION GUIDE (the video model knows no position names: write each position as this geometry, one "
             f"position per segment):\n{rules}\n\n{body}")
+
+
+def image_note(prompt: str, limit: int = 3) -> str:
+    """The geometry an image prompt needs when it names a position: each named position's ready sentence and its
+    camera, so "mating press" reaches the image model as bodies and an angle instead of a name it does not know.
+    "" when no position is named (the same rules as the planner: an everyday word alone is not a position), and
+    a position whose sentence is already in the prompt is not repeated."""
+    found = [p for p in mentioned(prompt) if _field(p, "prompt")[:60] not in (prompt or "")][:limit]
+    if not found:
+        return ""
+    return " Position geometry (follow it exactly): " + " ".join(
+        f"{p.name}: {_field(p, 'prompt')} Camera: {_field(p, 'camera')}" for p in found)

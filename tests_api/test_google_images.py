@@ -191,6 +191,12 @@ class TheLadder(ServiceCase):
         self.assertEqual(sizes, [(ie.GOOGLE_LITE_IMAGE_MODEL, "2048x2048", "1K")])
         self.assertIn("1K", result["note"])
 
+    async def test_a_named_position_reaches_the_engine_as_geometry(self):
+        await self.service.generate_images("Explicit photo, two adults in the prone bone position", engine="seedream")
+        sent = " ".join(str(a) for a in self.atlas.await_args.args) + " ".join(str(v) for v in self.atlas.await_args.kwargs.values())
+        self.assertIn("Position geometry", sent)
+        self.assertIn("lies flat face down", sent)
+
     async def test_no_key_skips_google_without_a_check(self):
         google = self.use(FakeGoogle(sfw=True, configured=False))
         result = await self.service.generate_images("a cat")
