@@ -45,7 +45,7 @@ class PoseGuide(unittest.TestCase):
         unnamed = pose_guide.planner_note("They have sex on the sofa")
         self.assertIn("Doggy style", unnamed, "no position named: the core ones in full to choose from")
         self.assertIn("Butterfly", unnamed, "and the rest by name")
-        self.assertLess(len(unnamed), 12000, "but not every entry in full")
+        self.assertLess(len(unnamed), 13500, "but not every entry in full")
 
     def test_a_lookup_by_name_finds_exactly_that_position(self):
         # The tool is asked for a position, so everyday names count there and the loose word search is not needed.

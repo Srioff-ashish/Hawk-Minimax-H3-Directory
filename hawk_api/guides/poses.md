@@ -20,7 +20,7 @@ For explicit scenes between consenting adults. Both people are always adults; th
 - Facing away is the hardest thing to get (tested on Krea 2): chairman, caboose and rider on fire all came back face to face. Say it three ways: "facing away from him", "her back against his chest" (or "her head toward his feet"), and that they both face the same direction, toward the camera. Reversed bodies (69) likewise: say their bodies point in opposite directions, her head at his hips and his head between her thighs. If that still fails, place them in the frame: where the camera stands and where each head is ("his head on the pillow at the left of the frame, hers at the right near his feet"; "seen from the foot of the bed, her face toward the camera, his just behind her shoulder"). Tested: that fixed rider on fire and caboose when the wording alone did not.
 - Describe one woman and one position. A prompt that also mentions a variant ("or reverse: she faces his feet") drew two women (tested, cowgirl). Use a portrait frame for her-on-top positions.
 - A tag that is also an object gets drawn as the object: tested on Krea 2, "wheelbarrow" in the tag line put a garden wheelbarrow in the room. Keep such names (wheelbarrow, bridge, table, chair) out of the tag line and describe the bodies instead.
-- Threesomes (the dp- entries: always exactly one woman and two men, all consenting adults): say "exactly two men and one woman, nobody else in the room" -- tested on Krea 2, doggy DP and amazon DP came back with a third man standing at the side. If it persists (doggy DP did), open with the full head count and where each one is: "exactly three people in the whole picture and no one else: the woman, the dark-haired man lying under her and the blond man crouching behind her; no other man anywhere, nobody standing at the side" -- that fixed it. three bodies merge even more easily than two. Make the two men look different and name them by that look every time ("the dark-haired man", "the blond man") or by place ("the man beneath her", "the man behind her"); never "he" once there are two. Give each body its own sentence and account for every limb. Say which man is in her vagina and which in her anus, in the same sentence as the position. Prefer a side profile so all three bodies and both points of contact are in view, and a wide frame (16:9) so nobody is cut off.
+- Threesomes (the dp- entries: always exactly one woman and two men, all consenting adults): say "exactly two men and one woman, nobody else in the room" -- tested on Krea 2, doggy DP and amazon DP came back with a third man standing at the side. If it persists (doggy DP did), open with the full head count and where each one is: "exactly three people in the whole picture and no one else: the woman, the dark-haired man lying under her and the blond man crouching behind her; no other man anywhere, nobody standing at the side" -- that fixed it. three bodies merge even more easily than two. Make the two men look different and name them by that look every time ("the dark-haired man", "the blond man") or by place ("the man beneath her", "the man behind her"); never "he" once there are two. Give each body its own sentence and account for every limb. Say which man is in her vagina and which in her anus, in the same sentence as the position. Camera is what makes or breaks DP: from the side, one man always hides the other's contact point and the model guesses it (tested: wrong anatomy, a man not inside her, a stray penis). Put the camera where both contact points are seen at once -- low behind or in front of her at hip height looking between her legs, or overhead -- frame close on the hips (faces beyond them), and open the prompt with the head count ("exactly three people and no one else"), then the camera sentence, then the bodies -- with the camera first and the count later, a third man came back (tested). The camera that works differs by position: stacked ones (one man under her, one behind or above) want a low camera behind her; the others keep the side view their entry gives.
 - Not every item in a sex manual can be shown. A pelvic-floor squeeze (pompoir) happens inside the body: show its effect on faces and breath, not as a position. A full-body rotation without withdrawing (the classical "acrobatic turn") cannot be shown in one shot either: cut between two positions instead.
 
 ## missionary-pillow — Elevated missionary (pillow under her hips)
@@ -371,8 +371,8 @@ faces: Face to face, she looks down at him, mouth open; he looks up at her.
 camera: Low angle from the foot of the bed between his feet, or three-quarter front.
 pov: From his eyes on his back, her squatting body above, his hands under her buttocks at the bottom corners.
 motion: He lifts her up and drops her down on him in a steady rhythm; her breasts bounce.
-watch: Without his hands under her she just squats; say whose hands carry her weight.
-prompt: He lies on his back. She squats over his hips facing him, feet flat on the bed either side of his waist and her hands on his chest, while his hands cup her buttocks and lift and lower her on him.
+watch: Without his hands under her she just squats; say whose hands carry her weight. Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin.
+prompt: Side view of the bed at hip height. He lies flat on his back along the bed, his head on the pillow at the left of the frame and his legs toward the right. She squats astride his hips facing his head, her feet flat on the bed on either side of his hips, knees wide, her hands on his chest. His penis, attached at his groin under her, is inside her vagina; it is his only penis and nothing else lies on his body. His hands cup her buttocks, lifting and lowering her.
 
 ## rider-on-fire — Rider on fire
 aliases: rider on fire
@@ -706,10 +706,10 @@ her: Lying back on top of the first man with her back on his chest, facing up an
 him: The first man (dark-haired) lies on his back beneath her, in her anus from below. The second man (blond) kneels between her spread knees facing her, in her vagina from the front.
 hands: One of her hands rubs her clitoris, the other holds the second man's arm; the first man's hands hold her waist or breasts from below; the second man's hands on her thighs.
 faces: She faces up and toward the second man, head back on the first man's shoulder; the second man looks down at her; the first man's face is beside her head.
-camera: Side profile at bed height, wide, all three in view.
+camera: Front low angle: the camera on the bed between her spread knees, at hip height, looking straight at both contact points (the blond man's penis in her vagina, the dark-haired man's in her anus just below it); framed from both men's hips up to her face.
 pov: From the second man's eyes kneeling, looking down at her spread on top of the first man; only the second man's hands on her thighs show.
 motion: Both men thrust in turn; she lies back between them.
-watch: She sits upright facing the first man (plain cowgirl); say her back lies on his chest and she faces the second man.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-northern-exposure instead, or open the video on the closest working position and let the motion change it. She sits upright facing the first man (plain cowgirl); say her back lies on his chest and she faces the second man.
 prompt: The dark-haired man lies on his back. She lies back on top of him with her back on his chest, facing away from him toward the foot of the bed, knees bent and spread, and he is in her anus from below. The blond man kneels between her spread knees facing her, hands on her thighs, in her vagina from the front, while she rubs her clitoris.
 
 ## dp-doggy — Doggy DP
@@ -719,10 +719,10 @@ her: On her hands and knees, or with her chest lowered, straddling the first man
 him: The first man (dark-haired) lies on his back under her, in her vagina from below. The second man (blond) crouches over her from behind, feet planted either side, in her anus from above.
 hands: Her hands on the bed beside the first man's head; the first man's hands on her waist; the second man's hands on her hips or lower back.
 faces: She looks forward or down at the first man; the second man looks down at her back.
-camera: Side profile at bed height, wide; three-quarter rear shows both points of contact.
+camera: Low rear angle: the camera on the bed behind her, at hip height, looking up at both contact points stacked (the dark-haired man below in her vagina, the blond man crouching above in her anus); her face looking back over her shoulder.
 pov: From the second man's eyes crouching above her, looking down her back; his hands on her hips.
 motion: The crouching man drives down; the man below thrusts up; she braces on her hands.
-watch: The crouching man ends up kneeling beside; say he crouches directly over her hips from behind with his feet either side.
+watch: The crouching man ends up kneeling beside; say he crouches directly over her hips from behind with his feet either side. Tested on Krea 2: this low rear camera drew both penetrations stacked and correct; the wide side view did not.
 prompt: The dark-haired man lies on his back. She is on all fours over him, straddling his hips, and he is in her vagina from below. The blond man crouches over her from behind with his feet planted either side of her knees and his hands on her hips, in her anus from above.
 
 ## dp-missionary — Missionary DP
@@ -758,10 +758,10 @@ her: Lying on her side between the two men, her top leg lifted and hooked over t
 him: The front man (dark-haired) lies on his side facing her, in her vagina. The back man (blond) lies on his side behind her, his chest to her back, in her anus.
 hands: The front man's hand on her lifted thigh; the back man's arm around her waist; her hands on the front man's chest.
 faces: She faces the front man, eyes closed; the back man's face is at her neck.
-camera: From above or at bed height from the side of the front man, all three in a line.
+camera: Rear low angle: the camera behind the three of them at hip height, looking at her buttocks and both contact points (the front man in her vagina, the back man in her anus); her lifted top leg opening the view.
 pov: From the front man's eyes, her face close, the back man's face behind her shoulder.
 motion: Both men thrust from the side, short strokes.
-watch: The back man ends up beside rather than behind; say his chest is against her back.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-northern-exposure instead, or open the video on the closest working position and let the motion change it. The back man ends up beside rather than behind; say his chest is against her back.
 prompt: Three people lie on their sides in a line. She is in the middle, her top leg hooked over the front man's hip. The dark-haired man lies facing her, in her vagina; the blond man lies behind her, his chest against her back and his arm around her waist, in her anus.
 
 ## dp-standing — Standing DP
@@ -771,10 +771,10 @@ her: Lifted off the floor between the two men, facing the front man, her legs wr
 him: The front man (dark-haired) stands facing her, holding her legs up, in her vagina. The back man (blond) stands behind her, hands under her buttocks, in her anus.
 hands: The front man's hands under her thighs; the back man's hands on her buttocks; her arms around the back man's neck.
 faces: Her head leans back on the back man's shoulder; the front man looks at her.
-camera: Side profile, full figure, wide.
+camera: Low angle from below and to the side, at the height of her hips, so both contact points under her are in view; her face above, between the two men's heads.
 pov: No real POV; use the side view.
 motion: Both men lift and thrust; she is held between them.
-watch: Her feet end up on the floor; say she is lifted off the floor, held between them.
+watch: Her feet end up on the floor; say she is lifted off the floor, held between them. Tested on Krea 2: this low camera drew both men entering her from below, correctly.
 prompt: She is lifted off the floor between two standing men, facing the dark-haired man in front with her legs wrapped around his waist; he holds her thighs and is in her vagina. The blond man stands behind her with his hands under her buttocks, in her anus, and her arms reach back around his neck.
 
 ## dp-piledriver — Piledriver DP
@@ -784,11 +784,11 @@ her: Upside down on her shoulders: shoulders and head on the bed, back vertical,
 him: Two men stand astride her upturned hips facing each other, both squatting downward into her: one (dark-haired) in her vagina, one (blond) in her anus.
 hands: The men steady themselves on each other's shoulders or on her thighs; her hands brace her lower back.
 faces: She looks up between her legs at them; the two men face each other.
-camera: Side profile, full figure, wide; the vertical line of her body and the two men either side should read.
+camera: Side view at the height of her raised buttocks, close enough that her upturned pelvis and both men's hips fill the middle of the frame and both contact points (vagina and anus, both entered from above) are in plain view; her face upside down at the bottom of the frame.
 pov: No real POV.
 motion: The two men drop into her in turn, slow and vertical.
-watch: Tested on Krea 2: she came back flat on her back. Say she is upside down on her shoulders with her back vertical and hips straight up. Exactly two men.
-prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head toward the ceiling and her spread legs folded over toward the bed beyond her head. Two men stand astride her upturned hips facing each other, squatting down into her: the dark-haired man in her vagina and the blond man in her anus, steadying themselves on each other's shoulders.
+watch: Tested on Krea 2: she came back flat on her back. Say she is upside down on her shoulders with her back vertical and hips straight up. Exactly two men. Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin. Tested on Krea 2: this close side view at her raised hips drew her upside down with both men entering; expect to need two or three takes.
+prompt: Side view of the bed. She is upside down on her shoulders: her head and shoulders on the mattress at the bottom of the frame, her back vertical, her buttocks pointing straight up at the ceiling and her legs spread wide in a V above her. The two men stand on the bed astride her, facing each other, squatting so their hips are at the height of her raised buttocks: the dark-haired man's penis enters her vagina from above and the blond man's penis enters her anus from above. Each man has one penis, at his own groin.
 
 ## dp-reverse-piledriver — Reverse piledriver DP
 aliases: reverse piledriver dp, dp reverse piledriver, ass to ass dp
@@ -797,10 +797,10 @@ her: On her shoulders with her hips raised above her head, legs spread.
 him: The two men stand over her raised hips back to back, their buttocks touching, both squatting downward: one (dark-haired) in her vagina, one (blond) in her anus.
 hands: Each man's hands on her thighs or his own knees.
 faces: She looks up between her legs; the men face away from each other.
-camera: Side profile, full figure, wide.
+camera: Side view at the height of her raised buttocks, close on her upturned pelvis between the two men's backs-to-each-other hips, both contact points in plain view; her face upside down at the bottom of the frame.
 pov: No real POV.
 motion: They squat down into her in turns, their buttocks bumping.
-watch: Tested on Krea 2: she came back flat on her back and the men faced each other. Say she is upside down on her shoulders with her hips straight up, and the men stand back to back facing opposite ends of the bed.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-piledriver instead, or open the video on the closest working position and let the motion change it. Tested on Krea 2: she came back flat on her back and the men faced each other. Say she is upside down on her shoulders with her hips straight up, and the men stand back to back facing opposite ends of the bed.
 prompt: She is upside down on her shoulders: her shoulders and head on the bed, her back vertical, her hips lifted straight up above her head and her legs spread wide apart. Two men stand astride her upturned hips back to back, facing away from each other toward opposite ends of the bed, their buttocks touching, both squatting downward: the dark-haired man in her vagina and the blond man in her anus.
 
 ## dp-sidesaddle — Sidesaddle DP
@@ -810,11 +810,11 @@ her: Lying on her side facing the first man, her top leg lifted over his hip.
 him: The first man (dark-haired) lies on his side facing her, in her vagina. The second man (blond) kneels over them from above and behind her, straddling her lower leg, in her anus.
 hands: The second man's hands on her top hip; the first man's hand on her back.
 faces: She faces the first man; the second man looks down.
-camera: From above at an angle, or side profile, wide.
+camera: Rear angle at hip height, from behind her, looking at her buttocks with her top leg lifted: the blond man's penis in her anus from behind and the dark-haired man's penis in her vagina from the front, both in plain view.
 pov: From the second man's eyes above, looking down at her side and the first man beyond.
 motion: The man above drives down; the man beside thrusts sideways.
-watch: The second man ends up lying beside (spooning DP); say he kneels over them from above.
-prompt: She lies on her side facing the dark-haired man, her top leg over his hip, and he lies facing her, in her vagina. The blond man kneels over them from above and behind her, straddling her lower leg with his hands on her top hip, in her anus.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-doggy instead, or open the video on the closest working position and let the motion change it. The second man ends up lying beside (spooning DP); say he kneels over them from above. Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin.
+prompt: Side view of the bed. She lies on her left side facing the camera. The dark-haired man lies on his right side facing her, chest to chest, her top leg hooked over his hip, his penis in her vagina. The blond man kneels upright directly behind her, straddling her lower leg, his hips pressed against her buttocks, his penis in her anus. Each man has one penis, at his own groin, and both are inside her.
 
 ## dp-wishbone — Wishbone DP
 aliases: wishbone dp, dp wishbone, wishbone
@@ -823,11 +823,11 @@ her: On her back at the edge of the bed, both legs raised and spread wide apart 
 him: Two men stand side by side at the edge of the bed between her raised legs, each holding one of her legs; one (dark-haired) in her vagina, one (blond) in her anus.
 hands: Each man holds one of her ankles; her hands grip the bedcover.
 faces: She looks up at them; they look down at her.
-camera: From behind and above the men's shoulders, or side profile, wide.
+camera: Overhead angle from above her chest, looking down along her body between her raised legs to both men's hips at the edge of the bed, so both contact points (vagina and anus, one above the other) are in plain view; her face at the bottom of the frame.
 pov: From one man's eyes standing, her raised leg in his hand, the other man beside him.
 motion: They alternate: one goes in as the other comes out.
-watch: One man is dropped; say two men stand side by side, each holding one leg.
-prompt: She lies on her back at the edge of the bed with both legs raised and spread wide. Two men stand side by side between her legs, each holding one of her ankles: the dark-haired man in her vagina and the blond man in her anus, thrusting in turn.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-missionary instead, or open the video on the closest working position and let the motion change it. One man is dropped; say two men stand side by side, each holding one leg. Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin.
+prompt: She lies on her back with her buttocks right at the edge of the bed and both legs raised straight up and spread wide in a V. Two men stand on the floor at the edge of the bed, pressed side by side between her raised legs and facing her, their hips touching hers: the dark-haired man on the left holds her left ankle and his penis is in her vagina; the blond man on the right holds her right ankle and his penis is in her anus, just below. Each man has one penis, at his own groin, and both are inside her.
 
 ## dp-northern-exposure — Northern exposure DP
 aliases: northern exposure dp, dp northern exposure, northern exposure
@@ -862,11 +862,11 @@ her: Lying on her back with her legs open.
 him: The first man (dark-haired) lies on his side at a right angle to her, his hips to hers, in her vagina. The second man (blond) crouches or sits over her hips at the other angle, in her anus.
 hands: The second man's hands on her knees; the first man's hand on her thigh.
 faces: She looks up; the men look down at her.
-camera: From above, so the right angle between the bodies reads.
+camera: Overhead angle looking straight down at her hips, so the right angle between the two men's bodies and both contact points are in plain view.
 pov: From above.
 motion: Both thrust at their angles; short strokes.
-watch: The angle collapses into a line; shoot from above and say "at a right angle to her".
-prompt: She lies on her back with her legs open. The dark-haired man lies on his side at a right angle to her body, his hips against hers, in her vagina. The blond man crouches over her hips, in her anus.
+watch: UNRELIABLE AS A STILL: tested on Krea 2 and Seedream Flash from side, low and overhead cameras, and neither model drew both penetrations (one man left out or his penis beside her). For a first frame use dp-reverse-right-angle instead, or open the video on the closest working position and let the motion change it. The angle collapses into a line; shoot from above and say "at a right angle to her". Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin.
+prompt: Side view of the bed. She lies on her back across the middle of the bed with her legs spread and bent. The dark-haired man kneels upright between her thighs facing her, holding her knees, his penis in her vagina. The blond man lies on his side behind and under her hips, his body at a right angle to the dark-haired man's, his hips pressed against her buttocks, his penis in her anus from below. Each man has one penis, at his own groin, and both are inside her.
 
 ## dp-reverse-right-angle — Reverse right angle DP
 aliases: reverse right angle dp, dp reverse right angle, reverse right angle
@@ -875,11 +875,11 @@ her: Lying on her back, legs raised.
 him: Both men crouch over her hips facing each other, one (dark-haired) in her vagina and one (blond) in her anus.
 hands: The men's hands on her thighs and on each other's shoulders for balance.
 faces: The men face each other; she looks up at both.
-camera: Side profile, wide.
+camera: Overhead angle looking straight down at her hips between the two men, both contact points in plain view.
 pov: No real POV.
 motion: They thrust in turn while facing each other.
-watch: Looks like the piledriver DP; keep her lying flat on her back rather than on her shoulders.
-prompt: She lies on her back with her legs raised. Two men crouch over her hips facing each other, steadying themselves on each other's shoulders: the dark-haired man in her vagina and the blond man in her anus.
+watch: Looks like the piledriver DP; keep her lying flat on her back rather than on her shoulders. Tested on Krea 2 with abstract geometry: wrong anatomy (a stray penis, a man not inside her, bodies in impossible positions). Describe the picture concretely: the camera, where each body lies in the frame, which penis is in which opening, one penis per man at his own groin. Tested on Krea 2: the overhead camera drew both men at her correctly; side views left one man out.
+prompt: Side view of the bed. She lies on her back with her hips at the middle of the bed and her legs lifted and spread. The two men kneel close against her hips from opposite sides, facing each other across her body, leaning in until their hips meet hers: the dark-haired man, on her left, has his penis in her vagina; the blond man, on her right, has his penis in her anus, just below. Each man has one penis, at his own groin, and both are inside her.
 
 ## dp-amazon — Amazon DP
 aliases: amazon dp, dp amazon
