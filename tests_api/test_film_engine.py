@@ -131,6 +131,8 @@ class Characters(unittest.TestCase):
         self.assertIn("Rebel: Indian woman, 45", both["character"])
         self.assertIn("Blaze: Korean woman, 45", both["character"])
         self.assertEqual(both["platform"], "fanvue")
+        self.assertEqual(both["identity_people"], ["Rebel", "Blaze", "Rebel"], "whose each picture is")
+        self.assertEqual(both["unpictured"], [])
 
 
 class Engine(unittest.IsolatedAsyncioTestCase):
@@ -186,6 +188,20 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         self.assertIn("matches NONE of the identity references", system["content"])
         self.assertIn("first 2 images", user["content"][0]["text"])
         self.assertIn("Jun, a man; Mina, a woman.", user["content"][0]["text"])
+
+    async def test_people_without_a_picture_are_not_failed_for_matching_none(self):
+        service = EngineService(sheet_png(2, 1, 2048, 2048, border=40))
+        boards = self.manager(service)
+        boards.characters.create("Rebel", "Indian woman, 45", ["face"])
+        boards.characters.create("Arjun", "Indian man, 35, beard", [])
+        board = boards.create(title="Three", characters=["Rebel", "Arjun"], shots=["Rebel waits", "Arjun arrives"],
+                              draw=False)
+        self.assertEqual((board["identity_people"], board["unpictured"]), (["Rebel"], ["Arjun"]))
+        await sb.check_panels(service, dict(boards.board(board["id"]), panels=["face", "face"]), [0, 1])
+        system, user = service.chats[-1]
+        self.assertIn("first 1 image -- image 1: Rebel", user["content"][0]["text"])
+        self.assertIn("No picture (judge by description only): Arjun.", user["content"][0]["text"])
+        self.assertIn("never fail a panel because they match no reference", system["content"])
 
     async def test_review_stops_before_the_film_until_approved(self):
         service = EngineService(sheet_png(2, 1, 2048, 2048, border=40))

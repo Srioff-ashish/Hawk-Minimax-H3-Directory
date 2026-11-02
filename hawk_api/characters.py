@@ -114,13 +114,16 @@ class CharacterManager:
         for person in people:
             ids = [a for a in person.get("identity_asset_ids") or [] if self.service.store.get_asset(a)]
             if ids:
-                identity.append(ids[0])
-                rest.extend(ids[1:])
+                identity.append((ids[0], person["name"]))
+                rest.extend((a, person["name"]) for a in ids[1:])
         identity = (identity + rest)[:MAX_IDENTITY]
+        shown = [name for _, name in identity]
+        identity = [asset_id for asset_id, _ in identity]
         if not identity:
             raise RequestError(f"{', '.join(p['name'] for p in people)} ha{'ve' if len(people) > 1 else 's'} no identity picture yet.")
         platform = next((p.get("platform") for p in people if p.get("platform") not in (None, "", "general")), "general")
         return {"names": [p["name"] for p in people], "character": " ".join(lines), "identity_asset_ids": identity,
+                "identity_people": shown, "unpictured": [p["name"] for p in people if p["name"] not in shown],
                 "platform": platform, "people": len(people)}
 
     # ---- writing

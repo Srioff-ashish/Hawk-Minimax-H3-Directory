@@ -556,11 +556,12 @@ def plan_parts(modes: list[str], identities: int, models: dict) -> list[dict]:
 
 
 CHECK_PROMPT = """You check storyboard panels before they are animated. The first images are the identity references --
-how many is said below, one image per person in the story (they may be different people: a man and a woman, a group).
+how many is said below, and whose each one is when known (they may be different people: a man and a woman, a group).
 The images after them are panels, in the order listed. A panel may show any one or several of these people, or
 nobody. For each panel decide whether it is usable, and say briefly what is wrong if it is not. A panel fails when:
 - a person in it matches NONE of the identity references (a face, hair, skin tone or build that belongs to nobody in
-  the references). Showing only one of the people, or a different one of them, is fine;
+  the references). Showing only one of the people, or a different one of them, is fine. People listed below as
+  having no picture are judged by their description only: never fail a panel because they match no reference;
 - anatomy is broken: extra or missing fingers, limbs or nipples, twisted joints, a melted or doubled face;
 - there are artifacts: garbled text, a watermark, a duplicated person, a cut-off head where a face matters;
 - it breaks the platform rule given below, when one is given.
@@ -577,13 +578,16 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
     from .atlas import AtlasError
     from .manhwa import parse_json
 
-    references = []
-    for asset_id in board["identity_asset_ids"][:3]:  # every person, not only the first
+    references, whose = [], []
+    pictured = board.get("identity_people") or []
+    for n, asset_id in enumerate(board["identity_asset_ids"][:3]):  # every person, not only the first
         try:
             data, kind = await service.asset_file(asset_id, 640)
         except Exception:
             continue
         references.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
+        if n < len(pictured):
+            whose.append(f"image {len(references)}: {pictured[n]}")
     if not references:
         return {}
     chain = models_llm.resolve_many("vision", None, await service.model_catalogue(), vision=True)
@@ -601,8 +605,11 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
                 continue
             parts.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
         ask = (f"Identity references: the first {len(references)} image{'s' if len(references) > 1 else ''}"
-               + (f" ({board['character'][:400]})" if board.get("character") else "") + ".\n"
-               "Panels, in order: " + ", ".join(f"shot {i + 1} ({board['shots'][i][:120]})" for i in batch) + "."
+               + (" -- " + ", ".join(whose) if len(whose) == len(references) else "")
+               + (f" ({board['character'][:600]})" if board.get("character") else "") + ".\n"
+               + (f"No picture (judge by description only): {', '.join(board['unpictured'])}.\n"
+                  if board.get("unpictured") else "")
+               + "Panels, in order: " + ", ".join(f"shot {i + 1} ({board['shots'][i][:120]})" for i in batch) + "."
                + (f"\nPlatform rule: {rule}" if rule else "\nNo platform rule."))
         messages = [{"role": "system", "content": CHECK_PROMPT},
                     {"role": "user", "content": [{"type": "text", "text": ask}, *parts]}]
@@ -776,13 +783,18 @@ class StoryboardManager:
         shots = [s for s in (describe_frame(s) for s in shots or []) if s]
         identity_asset_ids = list(identity_asset_ids or [])
         names: list[str] = []
+        pictured: list[str] = []  # whose each identity picture is, when the library says
+        unpictured: list[str] = []  # people in the film with no identity picture
         if characters:
             if self.characters is None:
                 raise StoryboardError("The character library isn't available on this server.")
             people = self.characters.resolve(characters)
             names = people["names"]
             character = f"{people['character']} {character.strip()}".strip()
-            identity_asset_ids = identity_asset_ids or people["identity_asset_ids"]
+            if not identity_asset_ids:
+                identity_asset_ids = people["identity_asset_ids"]
+                pictured = people.get("identity_people") or []
+            unpictured = people.get("unpictured") or []
             platform = platform or people["platform"]
         platform = platform or "general"
         if platform not in PLATFORMS:
@@ -834,6 +846,7 @@ class StoryboardManager:
         modes = [m if m in MODES else "frame" for m in (modes or [])]
         board = {"id": uuid.uuid4().hex[:12], "title": (title or "Storyboard").strip()[:120],
                  "character": character.strip(), "characters": names, "identity_asset_ids": identity_asset_ids,
+                 "identity_people": pictured, "unpictured": unpictured,
                  "aspect_ratio": aspect_ratio, "style": style.strip(), "shots": shots,
                  "motions": [m.strip() for m in motions] if motions else [], "modes": modes,
                  "dialogue": [list(d or []) for d in dialogue] if dialogue else [],
