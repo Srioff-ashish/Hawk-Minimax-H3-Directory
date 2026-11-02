@@ -172,6 +172,15 @@ def strip_relations(text: str) -> str:
     return re.sub(r"\s{2,}", " ", out).strip()
 
 
+def drawn_frame(shot) -> str:
+    """A frame as the image model gets it: the full description, plus the pose guide's geometry and camera when it
+    names a sex position (the picture model knows no position names; one position per panel)."""
+    from . import pose_guide
+
+    line = describe_frame(shot).rstrip(".")
+    return f"{line}.{pose_guide.image_note(line, limit=1)}" if line else ""
+
+
 def sheet_prompt(beats: list[str], character: str, columns: int, rows: int, style: str = "") -> str:
     """The Seedream prompt for one sheet: the grid, the rules that keep it cuttable, the people, every frame in full."""
     panels = len(beats)
@@ -185,7 +194,7 @@ def sheet_prompt(beats: list[str], character: str, columns: int, rows: int, styl
         f"camera. {character.strip()} "
         f"{(style.strip() + ' ') if style.strip() else ''}"
         "One continuous story in panel order, left to right, top to bottom. "
-        + " ".join(f"Panel {number} -- {describe_frame(beat).rstrip('.')}." for number, beat in enumerate(beats, 1))
+        + " ".join(f"Panel {number} -- {drawn_frame(beat)}" for number, beat in enumerate(beats, 1))
     )
 
 
@@ -458,7 +467,7 @@ async def redo_panel(service, beat: str, character: str, identity_asset_ids: lis
         f"A single photo, full frame, no borders, no text. The people are the ones in the reference images -- keep "
         f"each one's face, hair, skin tone and exact body; show exactly the characters listed, wearing exactly what it "
         f"says. {character.strip()} {(style.strip() + ' ') if style.strip() else ''}"
-        f"{describe_frame(beat).rstrip('.')}.{keep}")
+        f"{drawn_frame(beat)}{keep}")
     result = await draw(service, prompt, refs, panel_size(aspect_ratio), engine)
     made = result["assets"][0]
     asset = service.store.get_asset(made["id"]) or made
@@ -1486,8 +1495,8 @@ async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: l
 
     async def one(number: int, group: list[bytes]) -> dict:
         first = (number - 1) * MAX_PANELS
-        said = [describe_frame(f) for f in frames[first:first + len(group)]]
-        each = (" Each panel in full: " + " ".join(f"Panel {n} -- {line.rstrip('.')}." for n, line in enumerate(said, 1) if line)
+        said = [drawn_frame(f) for f in frames[first:first + len(group)]]
+        each = (" Each panel in full: " + " ".join(f"Panel {n} -- {line}" for n, line in enumerate(said, 1) if line)
                 if any(said) else "")
         data, grid = await asyncio.to_thread(compose_grid, group, 0, aspect_ratio, "contain", 24, "black")
         merged = await service.add_asset(

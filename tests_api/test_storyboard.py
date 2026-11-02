@@ -61,6 +61,22 @@ class Grid(unittest.TestCase):
         self.assertIn("Panel 1 -- Characters: Mi-ah, Dae-ho · Wearing: white bikini; black swim shorts · Setting: "
                       "sunny beach · Camera: low-angle wide shot · Action: she spikes the ball.", prompt)
 
+    def test_a_named_position_is_drawn_from_the_pose_guide(self):
+        from hawk_api import pose_guide
+
+        dp = {"characters": "Rebel, Arjun, Luke", "wearing": "all three nude", "setting": "villa bed",
+              "camera": "low rear", "action": "doggy DP: Rebel on all fours over Arjun, his penis in her vagina, "
+                                              "Luke crouching behind her in her anus"}
+        prompt = sb.sheet_prompt(["Rebel sips wine on the terrace", dp], "Rebel.", 2, 1)
+        doggy_dp = next(p for p in pose_guide.load()[1] if p.key == "dp-doggy")
+        doggy = next(p for p in pose_guide.load()[1] if p.key == "doggy")
+        self.assertIn("Panel 1 -- Rebel sips wine on the terrace. Panel 2", prompt, "a story panel gets no geometry")
+        self.assertIn(pose_guide._field(doggy_dp, "prompt"), prompt)
+        self.assertIn(pose_guide._field(doggy_dp, "camera"), prompt)
+        self.assertNotIn(pose_guide._field(doggy, "prompt"), prompt, "the DP entry, not plain doggy as well")
+        redo = sb.drawn_frame(dp)
+        self.assertIn("Position geometry", redo)
+
     def test_image_prompts_name_no_relationships_and_add_no_ages(self):
         prompt = sb.sheet_prompt(["Ronny hugs his stepmother in the kitchen", "Mrs. Cha, Dae-ho's friend's mom, laughs",
                                   "Riya (Didi) and her sisters wave"], "Ronny; Riya.", 3, 1)

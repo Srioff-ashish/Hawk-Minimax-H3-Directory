@@ -160,8 +160,12 @@ def image_note(prompt: str, limit: int = 3) -> str:
     """The geometry an image prompt needs when it names a position: each named position's ready sentence and its
     camera, so "mating press" reaches the image model as bodies and an angle instead of a name it does not know.
     "" when no position is named (the same rules as the planner: an everyday word alone is not a position), and
-    a position whose sentence is already in the prompt is not repeated."""
-    found = [p for p in mentioned(prompt) if _field(p, "prompt")[:60] not in (prompt or "")][:limit]
+    a position whose sentence is already in the prompt is not repeated. A DP entry wins over the two-person one
+    it builds on ("doggy DP ... on all fours" is the DP position, not plain doggy as well)."""
+    found = mentioned(prompt)
+    if any(p.key.startswith("dp-") for p in found):
+        found = [p for p in found if p.key.startswith("dp-")]
+    found = [p for p in found if _field(p, "prompt")[:60] not in (prompt or "")][:limit]
     if not found:
         return ""
     return " Position geometry (follow it exactly): " + " ".join(
