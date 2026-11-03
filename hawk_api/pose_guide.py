@@ -156,7 +156,7 @@ def planner_note(brief: str) -> str:
             f"position per segment):\n{rules}\n\n{body}")
 
 
-def image_note(prompt: str, limit: int = 3) -> str:
+def image_note(prompt: str, limit: int = 3, motion: bool = False) -> str:
     """The geometry an image prompt needs when it names a position: each named position's ready sentence and its
     camera, so "mating press" reaches the image model as bodies and an angle instead of a name it does not know.
     "" when no position is named (the same rules as the planner: an everyday word alone is not a position), and
@@ -169,4 +169,21 @@ def image_note(prompt: str, limit: int = 3) -> str:
     if not found:
         return ""
     return " Position geometry (follow it exactly): " + " ".join(
-        f"{p.name}: {_field(p, 'prompt')} Camera: {_field(p, 'camera')}" for p in found)
+        f"{p.name}: {_field(p, 'prompt')} Camera: {_field(p, 'camera')}"
+        + (f" Motion: {_field(p, 'motion')}" if motion else "") for p in found)
+
+
+_SEGMENT_BREAK = re.compile(r"(^\s*-{3,}\s*$)", re.MULTILINE)
+
+
+def script_note(script: str) -> str:
+    """A hand-written script (Studio's Generate video, render_film script=) with the geometry, camera and motion
+    of the one position each segment names added at the segment's end. The writer's text is kept as written;
+    a segment naming no position, or already carrying the guide's sentence, is left alone."""
+    blocks = _SEGMENT_BREAK.split(script or "")
+    for index, block in enumerate(blocks):
+        if index % 2 == 0 and block.strip():  # the separators sit at the odd indices
+            note = image_note(block, limit=1, motion=True).strip()
+            if note:
+                blocks[index] = f"{block.rstrip()}\n{note}\n"
+    return "".join(blocks)

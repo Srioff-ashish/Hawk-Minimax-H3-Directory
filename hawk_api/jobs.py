@@ -2424,7 +2424,9 @@ class HawkService:
             if not references:
                 references = [ReferenceIn(**item) for item in plan["request"].get("references", [])]
         elif request.script is not None:
-            script_text = request.script if isinstance(request.script, str) else json.dumps(request.script)
+            # A hand-written script gets the pose guide's geometry for each position it names; a plan has it already.
+            script_text = (pose_guide.script_note(request.script) if isinstance(request.script, str)
+                           else json.dumps(request.script))
 
         refs = await self._refs(references)
         # The base model first: a TURBO checkpoint decides both which LoRAs are left off and the step count.

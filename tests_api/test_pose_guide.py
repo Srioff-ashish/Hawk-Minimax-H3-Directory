@@ -93,5 +93,17 @@ class PoseGuide(unittest.TestCase):
             self.assertEqual(keys(brief), [key], brief)
 
 
+    def test_a_hand_written_script_gets_the_geometry_per_segment(self):
+        script = ("duration: 10\nRebel and two men, doggy DP on the bed, his penis in her vagina\n---\n"
+                  "duration: 10\nRebel sips wine on the terrace\n")
+        out = pose_guide.script_note(script)
+        first, second = out.split("\n---\n")
+        self.assertIn("crouches over her from behind", first)
+        self.assertIn("Motion:", first)
+        self.assertNotIn("Position geometry", second, "a story segment is left alone")
+        self.assertTrue(first.startswith("duration: 10\nRebel and two men"), "the writer's text is kept")
+        self.assertEqual(pose_guide.script_note(out), out, "added once")
+
+
 if __name__ == "__main__":
     unittest.main()
