@@ -336,6 +336,27 @@ class HiddenShots(AgentHarness):
         listed = (await self.http.get(f"/v1/agent/sessions/{chat}/hidden-shots")).json()
         self.assertEqual([a["id"] for a in listed["images"]], [shot["id"]])
 
+    async def test_a_persona_traced_to_an_upload_is_refused(self):
+        uploaded = await self.http.post("/v1/assets", files={"files": ("face.png", PNG, "image/png")})
+        upload = uploaded.json()["assets"][0]["id"]
+        chat = await self.hidden_on()
+        patched = await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": upload})
+        self.assertEqual(patched.status_code, 200, patched.text)
+        response = await self.shoot(chat)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("agent-created", response.text)
+        await self.avatar(chat, source={"references": [upload]})
+        laundered = await self.shoot(chat)
+        self.assertEqual(laundered.status_code, 422, "a generated image made from an upload still counts")
+        self.assertIn(upload, laundered.text)
+
+    async def test_no_avatar_and_under_18_are_refused(self):
+        chat = await self.hidden_on()
+        self.assertIn("no avatar", (await self.shoot(chat)).text)
+        await self.avatar(chat)
+        response = await self.shoot(chat, "a schoolgirl dancing")
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("under 18", response.text)
 
     async def test_no_character_or_tool_ever_sees_a_shot(self):
         chat = await self.hidden_on()

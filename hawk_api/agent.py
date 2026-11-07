@@ -1173,6 +1173,12 @@ class AgentService:
         subject = cast[index]
         name = display_name(subject, index, len(cast))
         avatar = str(subject.get("avatar_asset_id") or "")
+        if not avatar or self.service.store.get_asset(avatar) is None:
+            raise RequestError(f"{name} has no avatar: hidden shots need an agent-created picture of them to keep the face.")
+        history = self.service.provenance(avatar)
+        if history["from_upload"]:
+            raise RequestError(f"Hidden shots are only for agent-created characters. {name}'s avatar traces back to an "
+                               f"upload ({', '.join(history['upload_roots']) or avatar}), which may be a real person.")
         if is_minor(name, {"appearance": f"{subject.get('persona', '')} {description}"}):
             raise RequestError(f"{name} or this description reads as under 18: hidden shots are for adults only.")
         return {"name": name, "avatar": avatar}
