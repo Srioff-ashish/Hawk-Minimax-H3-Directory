@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -268,6 +269,129 @@ class AgentHarness(unittest.IsolatedAsyncioTestCase):
         planner_calls = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])]
         self.assertTrue(planner_calls, "the gateway should have made a planner call")
         return planner_calls[-1]["messages"][0]["content"]
+
+
+class HiddenShots(AgentHarness):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.made = 0
+
+        def unique_png():  # a new picture each time: identical bytes come back as the asset already stored
+            from PIL import Image
+
+            self.made += 1
+            buffer = io.BytesIO()
+            Image.new("RGB", (8, 8), (self.made * 7 % 256, self.made * 13 % 256, self.made % 256)).save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        patcher = mock.patch.object(sys.modules[__name__], "tiny_png", unique_png)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    async def test_identical_bytes_never_move_the_avatar_into_hidden_shots(self):
+        chat = await self.hidden_on()
+        avatar = await self.avatar(chat)
+        same = self.agent.service.store.get_asset(avatar)
+        with mock.patch.object(self.agent.service, "generate_images", mock.AsyncMock(return_value={"assets": [{**same, "duplicate": True}]})):
+            response = await self.shoot(chat)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertNotEqual(self.agent.service.store.get_asset(avatar)["collection"], "Hidden shots")
+
+    async def avatar(self, chat, source=None):
+        made = (await self.http.post("/v1/images", json={"prompt": "Maya, a dancer"})).json()["assets"][0]["id"]
+        if source is not None:
+            asset = self.agent.service.store.get_asset(made)
+            asset["source"] = {**asset["source"], **source}
+            self.agent.service.store.add_asset(asset)
+        patched = await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": made})
+        self.assertEqual(patched.status_code, 200, patched.text)
+        return made
+
+    async def hidden_on(self, **chat):
+        chat = await self.new_chat(persona="Maya, a 28 year old dancer", name="Maya", model="xai/grok-4.6", **chat)
+        await self.http.patch(f"/v1/agent/sessions/{chat}", json={"hidden_mode": True})
+        return chat
+
+    async def shoot(self, chat, description="Dancing on a rooftop at dusk", **body):
+        return await self.http.post(f"/v1/agent/sessions/{chat}/hidden-shots", json={"description": description, **body})
+
+    async def test_it_is_off_in_every_new_chat_and_refused_while_off(self):
+        chat = await self.new_chat(persona="Maya", model="xai/grok-4.6", hidden_mode=True)
+        self.assertFalse((await self.http.get(f"/v1/agent/sessions/{chat}")).json()["session"]["hidden_mode"],
+                         "a new chat can't start in hidden mode")
+        await self.avatar(chat)
+        before = len(self.agent.service.store.all_assets())
+        response = await self.shoot(chat)
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(len(self.agent.service.store.all_assets()), before, "nothing is made")
+
+    async def test_an_agent_created_character_gets_a_shot_in_its_own_collection(self):
+        chat = await self.hidden_on()
+        avatar = await self.avatar(chat)
+        response = await self.shoot(chat)
+        self.assertEqual(response.status_code, 201, response.text)
+        shot = response.json()["assets"][0]
+        self.assertEqual((shot["collection"], shot["source"]["references"]), ("Hidden shots", [avatar]))
+        self.assertIn("hidden-shot", shot["tags"])
+        listed = (await self.http.get(f"/v1/agent/sessions/{chat}/hidden-shots")).json()
+        self.assertEqual([a["id"] for a in listed["images"]], [shot["id"]])
+
+    async def test_a_persona_traced_to_an_upload_is_refused(self):
+        uploaded = await self.http.post("/v1/assets", files={"files": ("face.png", PNG, "image/png")})
+        upload = uploaded.json()["assets"][0]["id"]
+        chat = await self.hidden_on()
+        patched = await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": upload})
+        self.assertEqual(patched.status_code, 200, patched.text)
+        response = await self.shoot(chat)
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("agent-created", response.text)
+        await self.avatar(chat, source={"references": [upload]})
+        laundered = await self.shoot(chat)
+        self.assertEqual(laundered.status_code, 422, "a generated image made from an upload still counts")
+        self.assertIn(upload, laundered.text)
+
+    async def test_no_avatar_and_under_18_are_refused(self):
+        chat = await self.hidden_on()
+        self.assertIn("no avatar", (await self.shoot(chat)).text)
+        await self.avatar(chat)
+        response = await self.shoot(chat, "a schoolgirl dancing")
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("under 18", response.text)
+
+    async def test_no_character_or_tool_ever_sees_a_shot(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        secret = "Rooftop dusk zebrawood"
+        shot = (await self.shoot(chat, secret)).json()["assets"][0]
+        session = self.agent.get_session(chat)
+        prompt = json.dumps(await self.agent._build_messages(session))
+        for trace in (secret, shot["id"], "hidden_mode", "hidden-shot", "Hidden shots"):
+            self.assertNotIn(trace, prompt)
+        self.assertNotIn(secret, self.agent._transcript(session, "main", ["Maya"]))
+        self.assertEqual(self.agent.store.messages(chat), [], "nothing was written to the chat")
+        refs = await self.agent._call_mcp("list_references", {"limit": 200})
+        self.assertIn(shot["id"], [a["id"] for a in refs["assets"]], "the raw tool does list it")
+        cleaned = self.agent._without_hidden_shots("list_references", refs)
+        self.assertNotIn(shot["id"], [a["id"] for a in cleaned["assets"]])
+        self.assertEqual(cleaned["total"], refs["total"] - 1)
+        kept = self.agent._without_hidden_shots("list_collections", await self.agent._call_mcp("list_collections", {}))
+        self.assertNotIn("Hidden shots", json.dumps(kept))
+        self.assertNotIn("hidden-shot", json.dumps(kept))
+
+    async def test_a_hidden_video_is_kept_from_the_directors_job_tools(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        self.atlas.reply = lambda body: json.dumps({"segments": [{"prompt": "<Picture 1> dances.", "pictures": [1]}]})
+        response = await self.shoot(chat, kind="video")
+        self.assertEqual(response.status_code, 201, response.text)
+        job = response.json()["job"]["id"]
+        listed = (await self.http.get(f"/v1/agent/sessions/{chat}/hidden-shots")).json()
+        self.assertEqual([j["id"] for j in listed["videos"]], [job])
+        jobs = await self.agent._call_mcp("list_jobs", {"limit": 50})
+        self.assertIn(job, [j["id"] for j in jobs["jobs"]])
+        self.assertNotIn(job, [j["id"] for j in self.agent._without_hidden_shots("list_jobs", jobs)["jobs"]])
+        self.assertTrue(self.agent._without_hidden_shots("get_job", {"id": job}).get("_error"))
+        self.assertEqual(self.agent.store.messages(chat), [])
 
 
 class AgentApi(AgentHarness):

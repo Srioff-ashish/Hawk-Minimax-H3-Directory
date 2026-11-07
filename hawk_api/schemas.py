@@ -270,6 +270,13 @@ class AgentSessionIn(BaseModel):
     cast: list[CastMemberIn] | None = Field(None, description="Several characters in one chat (up to 4); the first is the lead.")
     adaptive: bool | None = Field(None, description="Characters adapt: they grow from the conversation with you and with each other.")
     whispers: bool | None = Field(None, description="Group chats: a message starting with @Name is private to that character.")
+    hidden_mode: bool | None = Field(None, description="Hidden shots are available in this chat. Off in every new chat.")
+
+
+class HiddenShotIn(BaseModel):
+    description: str = Field(min_length=1, max_length=4000, description="What the shot shows.")
+    member: str = Field("", description="Who it is of (id or name); empty is the lead character.")
+    kind: Literal["image", "video"] = "image"
 
 
 class AgentMessageIn(BaseModel):

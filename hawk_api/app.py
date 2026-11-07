@@ -38,7 +38,7 @@ from .schemas import (
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
-    CharacterPackIn, FilmIn, ManhwaFilmIn
+    CharacterPackIn, FilmIn, HiddenShotIn, ManhwaFilmIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -1027,7 +1027,17 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                                  prose_model=body.prose_model,
                                                  name=body.name, avatar_asset_id=body.avatar_asset_id,
                                                  cast=[m.model_dump() for m in body.cast] if body.cast is not None else None,
-                                                 adaptive=body.adaptive, whispers=body.whispers))
+                                                 adaptive=body.adaptive, whispers=body.whispers,
+                                                 hidden_mode=body.hidden_mode))
+
+    @app.post("/v1/agent/sessions/{session_id}/hidden-shots", tags=["agent"], status_code=201)
+    async def agent_hidden_shot(session_id: str, body: HiddenShotIn):
+        """An image or video of an agent-created character that no character in the chat ever learns about."""
+        return await agent.hidden_shot(session_id, body.description, member=body.member, kind=body.kind)
+
+    @app.get("/v1/agent/sessions/{session_id}/hidden-shots", tags=["agent"])
+    async def agent_hidden_shots(session_id: str):
+        return agent.hidden_shots(session_id)
 
     @app.get("/v1/agent/sessions/{session_id}/graph", tags=["agent"])
     async def agent_graph(session_id: str):

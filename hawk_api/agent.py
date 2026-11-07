@@ -47,6 +47,8 @@ MAX_TALK_ROUNDS = 10
 MAX_TALK_MAKES = 5  # things any one character may have made during one "let them talk" (default 2)
 MAX_TALK_MAKES_TOTAL = 8  # and across the whole cast, so a big room can't order a dozen renders at once
 MAKE_STEPS = 8  # model steps the director gets to make one thing
+HIDDEN_TAG = "hidden-shot"
+HIDDEN_COLLECTION = "Hidden shots"
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 #: Output caps, reasoning included: a reasoning model (deepseek-v4-pro) thinks against the same cap and, when
 #: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
@@ -868,6 +870,7 @@ class AgentService:
             "prose_model": (prose_model or "").strip(),
             "adaptive": False,
             "whispers": False,
+            "hidden_mode": False,
             "status": "idle",
             "summary": "",
             "summary_upto": 0,
@@ -887,8 +890,10 @@ class AgentService:
         return self.store.list_sessions()
 
     def update_session(self, session_id: str, *, title=None, persona=None, model=None, prose_model=None, name=None,
-                       avatar_asset_id=None, cast=None, adaptive=None, whispers=None) -> dict:
+                       avatar_asset_id=None, cast=None, adaptive=None, whispers=None, hidden_mode=None) -> dict:
         session = self.get_session(session_id)
+        if hidden_mode is not None:
+            session["hidden_mode"] = bool(hidden_mode)
         if adaptive is not None:
             session["adaptive"] = bool(adaptive)
         if whispers is not None:
@@ -1150,6 +1155,95 @@ class AgentService:
             return ""
         index = find_member(cast, match.group(1))
         return cast[index]["id"] if index is not None else ""
+
+    # ------------------------------------------------------------ hidden shots
+
+    def _hidden_shot_subject(self, session: dict, member: str, description: str) -> dict:
+        """The character a hidden shot is of, once they are shown to be made here and an adult.
+
+        A secret picture is only acceptable of someone who doesn't exist, and "the agent created her" isn't proof:
+        generate_image can take an uploaded photo as a reference and an avatar can be any image. So the avatar's
+        recorded history decides, and it is the only reference a hidden shot ever gets."""
+        from .manhwa import is_minor
+
+        cast = cast_of(session)
+        index = find_member(cast, member) if member.strip() else 0
+        if index is None:
+            raise RequestError(f"No character {member!r} in this chat.")
+        subject = cast[index]
+        name = display_name(subject, index, len(cast))
+        avatar = str(subject.get("avatar_asset_id") or "")
+        if not avatar or self.service.store.get_asset(avatar) is None:
+            raise RequestError(f"{name} has no avatar: hidden shots need an agent-created picture of them to keep the face.")
+        history = self.service.provenance(avatar)
+        if history["from_upload"]:
+            raise RequestError(f"Hidden shots are only for agent-created characters. {name}'s avatar traces back to an "
+                               f"upload ({', '.join(history['upload_roots']) or avatar}), which may be a real person.")
+        if is_minor(name, {"appearance": f"{subject.get('persona', '')} {description}"}):
+            raise RequestError(f"{name} or this description reads as under 18: hidden shots are for adults only.")
+        return {"name": name, "avatar": avatar}
+
+    async def hidden_shot(self, session_id: str, description: str, *, member: str = "", kind: str = "image") -> dict:
+        """Made straight on the engines, with no model call as a character and nothing written to the chat, so there
+        is nothing for a character to read, remember or summarise. Only while the chat is in hidden mode."""
+        session = self.get_session(session_id)
+        if not session.get("hidden_mode"):
+            raise Conflict("Turn on hidden mode in this chat first.")
+        description = (description or "").strip()
+        if not description:
+            raise RequestError("Describe the shot.")
+        subject = self._hidden_shot_subject(session, member, description)
+        if kind == "video":
+            from .schemas import PlannerOptions, ReferenceIn, RenderSettings, VideoRequest
+
+            job = await self.service.create_video(VideoRequest(
+                references=[ReferenceIn(asset_id=subject["avatar"], role="picture")],
+                story=PlannerOptions(story=description), settings=RenderSettings()))
+            job = self.service.store.get_job(job["id"]) or job
+            job["hidden_session"] = session_id
+            self.service.store.save_job(job)
+            return {"kind": "video", "of": subject["name"], "job": self.service.job_view(job)}
+        made = await self.service.generate_images(description, reference_asset_ids=[subject["avatar"]], engine="auto")
+        assets = []
+        for view in made["assets"]:
+            if view.get("duplicate"):  # the same bytes as a picture already in the library, perhaps the avatar: leave it be
+                continue
+            asset = self.service.update_asset(view["id"], collection=HIDDEN_COLLECTION, add_tags=[HIDDEN_TAG])
+            asset["source"] = {**(asset.get("source") or {}), "hidden_session": session_id}
+            self.service.store.add_asset(asset)
+            assets.append(self.service.asset_view(asset))
+        if not assets:
+            raise RequestError("The engine returned a picture already in the library, so nothing new was made. Try again.")
+        return {"kind": "image", "of": subject["name"], "assets": assets}
+
+    def hidden_shots(self, session_id: str) -> dict:
+        self.get_session(session_id)
+        service = self.service
+        images = [service.asset_view(a) for a in service.store.all_assets()
+                  if (a.get("source") or {}).get("hidden_session") == session_id]
+        videos = [service.job_view(j) for j in service.store.list_jobs(500) if j.get("hidden_session") == session_id]
+        return {"images": images, "videos": videos}
+
+    def _without_hidden_shots(self, tool: str, result):
+        """What the director's own library tools return, minus hidden shots: it speaks for the characters, so anything
+        it can look up, they can end up mentioning."""
+        if not isinstance(result, dict):
+            return result
+        store = self.service.store
+        if tool == "list_references" and isinstance(result.get("assets"), list):
+            kept = [a for a in result["assets"] if HIDDEN_TAG not in (a.get("tags") or [])]
+            removed = len(result["assets"]) - len(kept)
+            return {**result, "assets": kept, "total": max(0, int(result.get("total") or 0) - removed)}
+        if tool == "list_jobs" and isinstance(result.get("jobs"), list):
+            return {**result, "jobs": [j for j in result["jobs"]
+                                       if not (store.get_job(j.get("id")) or {}).get("hidden_session")]}
+        if tool == "get_job" and (store.get_job(result.get("id")) or {}).get("hidden_session"):
+            return {"_error": "No such job."}
+        if tool == "list_collections":
+            named = lambda row: row.get("name") if isinstance(row, dict) else row
+            return {**result, "collections": [c for c in result.get("collections") or [] if named(c) != HIDDEN_COLLECTION],
+                    "tags": [t for t in result.get("tags") or [] if named(t) != HIDDEN_TAG]}
+        return result
 
     @staticmethod
     def _about_name(cast: list[dict], key: str) -> str:
@@ -2142,7 +2236,7 @@ class AgentService:
                 self.update_session(session_id, title=str(args.get("title") or ""))
                 result = {"title": self.get_session(session_id)["title"]}
             else:
-                result = await self._call_mcp(name, args)
+                result = self._without_hidden_shots(name, await self._call_mcp(name, args))
             ok = not (isinstance(result, dict) and result.get("_error"))
             if ok and name == "generate_image" and isinstance(result, dict) and result.get("sfw_check_failed"):
                 self._not_sfw.add(session_id)
