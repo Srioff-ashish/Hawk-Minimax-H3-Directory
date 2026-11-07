@@ -279,6 +279,11 @@ class HiddenShotIn(BaseModel):
     kind: Literal["image", "video"] = "image"
 
 
+class HiddenMessageIn(BaseModel):
+    text: str = Field(min_length=1, max_length=4000, description="A private instruction to the hidden agent.")
+    member: str = Field("", description="Who the shots are of (id or name); empty is the lead character.")
+
+
 class AgentMessageIn(BaseModel):
     text: str = Field("", description="Your message.")
     attachments: list[str] = Field(default_factory=list, description="Asset ids uploaded with this message.")

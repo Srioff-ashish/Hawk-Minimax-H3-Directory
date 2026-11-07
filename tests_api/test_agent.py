@@ -378,6 +378,89 @@ class HiddenShots(AgentHarness):
         self.assertNotIn("Hidden shots", json.dumps(kept))
         self.assertNotIn("hidden-shot", json.dumps(kept))
 
+    async def hidden_agent_turn(self, chat, text="She's dancing, get a shot", settle=True):
+        response = await self.http.post(f"/v1/agent/sessions/{chat}/hidden-messages", json={"text": text})
+        if settle and response.status_code == 202:
+            for _ in range(200):
+                state = (await self.http.get(f"/v1/agent/sessions/{chat}/hidden-shots")).json()
+                if not state["working"]:
+                    return response, state
+                await asyncio.sleep(0.05)
+            self.fail("the hidden agent never finished")
+        return response, None
+
+    async def test_the_hidden_agent_plans_and_makes_shots_the_chat_never_hears_about(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        secret = "rooftop zebrawood at dusk"
+        self.atlas.reply = lambda body: json.dumps({"say": "Two angles coming.", "actions": [
+            {"tool": "image", "args": {"description": f"Wide shot, {secret}"}},
+            {"tool": "image", "args": {"description": f"Close shot, {secret}"}}]})
+        response, state = await self.hidden_agent_turn(chat)
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(len(state["images"]), 2)
+        self.assertEqual([m["role"] for m in state["messages"]], ["user", "assistant"])
+        self.assertEqual(state["messages"][1]["content"]["text"], "Two angles coming.")
+        self.assertEqual(self.agent.store.messages(chat), [], "nothing reached the chat, not even a note")
+
+        session = self.agent.get_session(chat)
+        prompt = json.dumps(await self.agent._build_messages(session))
+        for trace in (secret, "Two angles", "dancing, get a shot", state["images"][0]["id"]):
+            self.assertNotIn(trace, prompt)
+        self.assertNotIn(secret, self.agent._transcript(session, "main", []))
+
+    async def test_the_hidden_agent_reads_the_chat_but_only_one_way_and_keeps_its_own_history(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        self.agent.store.add_message(chat, "user", {"text": "Show me your new routine", "attachments": []})
+        seen = []
+
+        def reply(body):
+            seen.append(json.dumps(body["messages"]))
+            return json.dumps({"say": "Noted.", "actions": []})
+
+        self.atlas.reply = reply
+        await self.hidden_agent_turn(chat, "first hidden note")
+        await self.hidden_agent_turn(chat, "second hidden note")
+        self.assertIn("Show me your new routine", seen[-1])
+        self.assertIn("first hidden note", seen[-1])
+        self.assertIn("second hidden note", seen[-1])
+
+    async def test_the_hidden_agent_is_held_to_the_same_checks_and_a_cap(self):
+        chat = await self.new_chat(persona="Maya", model="xai/grok-4.6")
+        off, _ = await self.hidden_agent_turn(chat)
+        self.assertEqual(off.status_code, 409, "off by default, and no model is called")
+        chat = await self.hidden_on()
+        uploaded = await self.http.post("/v1/assets", files={"files": ("face.png", PNG, "image/png")})
+        await self.http.patch(f"/v1/agent/sessions/{chat}", json={"avatar_asset_id": uploaded.json()["assets"][0]["id"]})
+        calls = len(self.atlas.requests)
+        refused, _ = await self.hidden_agent_turn(chat)
+        self.assertEqual(refused.status_code, 422, refused.text)
+        self.assertEqual(len(self.atlas.requests), calls, "refused before any model call")
+
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        self.atlas.reply = lambda body: json.dumps({"say": "", "actions": [
+            {"tool": "image", "args": {"description": f"Shot {n}"}} for n in range(9)]})
+        _, state = await self.hidden_agent_turn(chat)
+        self.assertEqual(len(state["images"]), 4, "one instruction makes at most four")
+
+    async def test_an_unusable_reply_is_reported_in_the_hidden_log_only(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        self.atlas.reply = lambda body: "not json at all"
+        _, state = await self.hidden_agent_turn(chat)
+        self.assertTrue(state["messages"][-1]["content"]["errors"])
+        self.assertEqual(self.agent.store.messages(chat), [])
+
+    async def test_deleting_a_chat_removes_its_hidden_log(self):
+        chat = await self.hidden_on()
+        await self.avatar(chat)
+        self.atlas.reply = lambda body: json.dumps({"say": "ok", "actions": []})
+        await self.hidden_agent_turn(chat)
+        await self.http.delete(f"/v1/agent/sessions/{chat}")
+        self.assertEqual(self.agent.store.hidden_messages(chat), [])
+
     async def test_a_hidden_video_is_kept_from_the_directors_job_tools(self):
         chat = await self.hidden_on()
         await self.avatar(chat)

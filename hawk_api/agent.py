@@ -31,6 +31,7 @@ from . import models_llm
 from .atlas import AtlasClient, AtlasError
 from .cast_talk import USER_KEY, clean_feelings, visible_to
 from .jobs import ACTIVE, IMAGE_PRICES, Conflict, HawkService, NotFound, RequestError
+from .jobs import Unavailable as HawkUnavailable
 from .mcp_server import INSTRUCTIONS
 from .prompts import PLATFORM_RULES, render_agent_prompt
 
@@ -49,6 +50,16 @@ MAX_TALK_MAKES_TOTAL = 8  # and across the whole cast, so a big room can't order
 MAKE_STEPS = 8  # model steps the director gets to make one thing
 HIDDEN_TAG = "hidden-shot"
 HIDDEN_COLLECTION = "Hidden shots"
+MAX_HIDDEN_SHOTS = 4  # one instruction can't quietly order a dozen renders
+HIDDEN_HISTORY = 12  # earlier hidden messages the hidden agent reads
+HIDDEN_AGENT_PROMPT = """You are a hidden production assistant working behind a character chat. The user gives you private instructions; you plan and describe images and videos of one character. That character and everyone else in the chat must never learn about this: you never speak as them or to them.
+
+Write each shot's description as a complete visual brief: the setting, what the character is doing and wearing, the framing and the light. Their face comes from their avatar, so don't describe it from scratch. Use the recent chat only for context such as where they are and what they are doing. Everyone shown is an adult, and you never name or imitate a real person.
+
+Make what the instruction asks for, at most {max_shots} shots. If it is unclear, ask a short question and make nothing.
+
+Reply with only one JSON object:
+{{"say": "a short note to the user", "actions": [{{"tool": "image", "args": {{"description": "..."}}}}, {{"tool": "video", "args": {{"description": "..."}}}}]}}"""
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 #: Output caps, reasoning included: a reasoning model (deepseek-v4-pro) thinks against the same cap and, when
 #: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
@@ -334,6 +345,12 @@ class AgentStore:
     /* What a chat knows, as entities and the relations between them, so that "who is Riya to Tiya" does not
        cost a re-read of the whole conversation and survives both a restart and a change of chat model. These
        live in jobs.sqlite3, which the Drive snapshot already copies whole, so they need no new snapshot work. */
+    /* The hidden agent's own conversation, apart from agent_messages so no prompt builder can reach it. */
+    CREATE TABLE IF NOT EXISTS agent_hidden_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, role TEXT NOT NULL,
+        content TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS agent_hidden_messages_session ON agent_hidden_messages(session_id, id);
+
     CREATE TABLE IF NOT EXISTS agent_nodes (
         id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
         owner TEXT NOT NULL DEFAULT '',        -- '' = said aloud, what the director knows; else a cast member id
@@ -391,10 +408,29 @@ class AgentStore:
     def delete_session(self, session_id: str) -> None:
         with self._lock:
             self._db.execute("DELETE FROM agent_messages WHERE session_id = ?", (session_id,))
+            self._db.execute("DELETE FROM agent_hidden_messages WHERE session_id = ?", (session_id,))
             self._db.execute("DELETE FROM agent_edges WHERE session_id = ?", (session_id,))
             self._db.execute("DELETE FROM agent_nodes WHERE session_id = ?", (session_id,))
             self._db.execute("DELETE FROM agent_sessions WHERE id = ?", (session_id,))
             self._db.commit()
+
+    def add_hidden_message(self, session_id: str, role: str, content: dict) -> dict:
+        created = _now()
+        with self._lock:
+            cursor = self._db.execute(
+                "INSERT INTO agent_hidden_messages (session_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+                (session_id, role, json.dumps(content, ensure_ascii=False), created),
+            )
+            self._db.commit()
+        return {"id": cursor.lastrowid, "role": role, "content": content, "created_at": created}
+
+    def hidden_messages(self, session_id: str) -> list[dict]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, role, content, created_at FROM agent_hidden_messages WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            ).fetchall()
+        return [{"id": row[0], "role": row[1], "content": json.loads(row[2]), "created_at": row[3]} for row in rows]
 
     def add_message(self, session_id: str, role: str, content: dict) -> dict:
         created = _now()
@@ -765,6 +801,7 @@ class AgentService:
         self._atlas = atlas
         self.store = store or AgentStore(service.settings.db_path)
         self._tasks: dict[str, asyncio.Task] = {}
+        self._hidden_tasks: dict[str, asyncio.Task] = {}  # per chat: the hidden agent, independent of the chat's own run
         self._stop: set[str] = set()
         self._joining: set[str] = set()  # the user wrote while the characters were talking
         self._failed_engines: dict[str, set[str]] = {}  # per chat, this run: image engines whose takes failed inspection
@@ -988,6 +1025,10 @@ class AgentService:
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        hidden = self._hidden_tasks.get(session_id)
+        if hidden:
+            hidden.cancel()
+            await asyncio.gather(hidden, return_exceptions=True)
         self.store.delete_session(session_id)
 
     # ------------------------------------------------------- forgetting
@@ -1216,13 +1257,93 @@ class AgentService:
             raise RequestError("The engine returned a picture already in the library, so nothing new was made. Try again.")
         return {"kind": "image", "of": subject["name"], "assets": assets}
 
+    def hidden_message(self, session_id: str, text: str, *, member: str = "") -> dict:
+        """A private instruction to the hidden agent, which plans and makes the shots in the background. Beside the
+        chat, not in it: the chat can be mid-turn, and neither ever waits for or hears the other."""
+        session = self.get_session(session_id)
+        if not session.get("hidden_mode"):
+            raise Conflict("Turn on hidden mode in this chat first.")
+        text = (text or "").strip()
+        if not text:
+            raise RequestError("Write the hidden instruction.")
+        if session_id in self._hidden_tasks:
+            raise Conflict("The hidden agent is still working on your last instruction.")
+        subject = self._hidden_shot_subject(session, member, text)  # before any model call: a refusal costs nothing
+        message = self.store.add_hidden_message(session_id, "user", {"text": text, "of": subject["name"]})
+        task = asyncio.create_task(self._hidden_run(session_id, member))
+        self._hidden_tasks[session_id] = task
+        task.add_done_callback(lambda _: self._hidden_tasks.pop(session_id, None))
+        return message
+
+    async def _hidden_messages_for_model(self, session: dict, member: str) -> list[dict]:
+        cast = cast_of(session)
+        index = find_member(cast, member) if member.strip() else 0
+        subject = cast[index or 0]
+        about = f"The character: {display_name(subject, index or 0, len(cast))}. {subject.get('persona', '')}".strip()
+        heard = self._transcript(session, None, [])  # one way: the hidden agent reads the chat, the chat never reads it
+        context = about + (f"\n\nRECENT CHAT, for context only:\n{heard[-3000:]}" if heard else "")
+        messages = [{"role": "system", "content": HIDDEN_AGENT_PROMPT.format(max_shots=MAX_HIDDEN_SHOTS)},
+                    {"role": "system", "content": context}]
+        for row in self.store.hidden_messages(session["id"])[-HIDDEN_HISTORY:]:
+            text = row["content"].get("text", "")
+            if text:
+                messages.append({"role": "user" if row["role"] == "user" else "assistant", "content": text})
+        return messages
+
+    async def _hidden_run(self, session_id: str, member: str) -> None:
+        """Every failure ends as a hidden note, never in the chat: _note and _director_call both write there."""
+        out: dict = {"text": "", "assets": [], "videos": [], "errors": []}
+        try:
+            session = self.get_session(session_id)
+            messages = await self._hidden_messages_for_model(session, member)
+            models = await self.models_for("director", session)
+            reply, failure = None, ""
+            for model in models:
+                try:
+                    text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=DIRECTOR_MAX_TOKENS,
+                                                        temperature=DIRECTOR_TEMPERATURE, purpose="hidden agent")
+                except AtlasError as exc:
+                    failure = str(exc)
+                    continue
+                await self._add_usage(session_id, model, usage or {})
+                reply = parse_reply(text)
+                if reply is not None:
+                    break
+                failure = f"{model} did not answer in the required format."
+            if reply is None:
+                out["errors"].append(failure or "No model could answer.")
+                return
+            out["text"] = str(reply.get("say") or "")[:2000]
+            for action in reply.get("actions", [])[:MAX_HIDDEN_SHOTS]:
+                kind, description = action["tool"], str(action["args"].get("description") or "")
+                if kind not in ("image", "video"):
+                    out["errors"].append(f"Unknown shot type {kind!r}.")
+                    continue
+                try:
+                    made = await self.hidden_shot(session_id, description, member=member, kind=kind)
+                except (RequestError, Conflict, NotFound, HawkUnavailable, AtlasError) as exc:
+                    out["errors"].append(str(exc))
+                    continue
+                out["assets"] += [a["id"] for a in made.get("assets", [])]
+                if made.get("job"):
+                    out["videos"].append(made["job"]["id"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # never leave the hidden agent looking busy for ever
+            log.exception("hidden agent failed")
+            out["errors"].append(str(exc) or type(exc).__name__)
+        finally:
+            if self.store.get_session(session_id) is not None:
+                self.store.add_hidden_message(session_id, "assistant", out)
+
     def hidden_shots(self, session_id: str) -> dict:
         self.get_session(session_id)
         service = self.service
         images = [service.asset_view(a) for a in service.store.all_assets()
                   if (a.get("source") or {}).get("hidden_session") == session_id]
         videos = [service.job_view(j) for j in service.store.list_jobs(500) if j.get("hidden_session") == session_id]
-        return {"images": images, "videos": videos}
+        return {"images": images, "videos": videos, "messages": self.store.hidden_messages(session_id),
+                "working": session_id in self._hidden_tasks}
 
     def _without_hidden_shots(self, tool: str, result):
         """What the director's own library tools return, minus hidden shots: it speaks for the characters, so anything

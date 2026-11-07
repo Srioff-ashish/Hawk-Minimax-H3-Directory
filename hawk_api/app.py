@@ -38,7 +38,7 @@ from .schemas import (
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
-    CharacterPackIn, FilmIn, HiddenShotIn, ManhwaFilmIn
+    CharacterPackIn, FilmIn, HiddenMessageIn, HiddenShotIn, ManhwaFilmIn
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -1034,6 +1034,11 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def agent_hidden_shot(session_id: str, body: HiddenShotIn):
         """An image or video of an agent-created character that no character in the chat ever learns about."""
         return await agent.hidden_shot(session_id, body.description, member=body.member, kind=body.kind)
+
+    @app.post("/v1/agent/sessions/{session_id}/hidden-messages", tags=["agent"], status_code=202)
+    async def agent_hidden_message(session_id: str, body: HiddenMessageIn):
+        """A private instruction to the background agent, which plans and makes the shots."""
+        return agent.hidden_message(session_id, body.text, member=body.member)
 
     @app.get("/v1/agent/sessions/{session_id}/hidden-shots", tags=["agent"])
     async def agent_hidden_shots(session_id: str):

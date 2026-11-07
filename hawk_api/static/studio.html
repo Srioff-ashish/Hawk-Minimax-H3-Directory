@@ -996,10 +996,10 @@
           <div class="agent-thread" id="agentThread" aria-live="polite"></div>
           <div class="agent-composer">
             <div class="grid" id="agentHiddenPanel" hidden style="gap:6px;margin-bottom:6px">
-              <div class="alert">🕶 Hidden mode is on: Send makes a shot here, not a chat message. No character learns about it.</div>
+              <div class="alert">🕶 Hidden mode is on: Send goes to the hidden agent, not the chat. It plans and makes the shots, and no character learns about it. Turn this off to talk in the chat again.</div>
+              <div class="grid" id="agentHiddenThread" style="gap:4px;max-height:200px;overflow:auto"></div>
               <div class="row">
                 <label class="sr-only" for="agentHiddenMember">Who it is of</label><select class="select" id="agentHiddenMember" style="width:auto;height:32px"></select>
-                <label class="sr-only" for="agentHiddenKind">Image or video</label><select class="select" id="agentHiddenKind" style="width:auto;height:32px"><option value="image">Image</option><option value="video">Video</option></select>
               </div>
               <div class="st-imgs" id="agentHiddenShots"></div>
             </div>
@@ -6077,6 +6077,7 @@
     storage.set("hawkH3AgentChat", id);
     renderAgentSessions();
     $("agentHiddenShots").innerHTML = "";  // shots belong to the chat they were made in
+    $("agentHiddenThread").innerHTML = "";
     await pollAgent(true);
     hiddenShotsLoad().catch((error) => toast("Could not load hidden shots", error.message, "bad"));
   }
@@ -6577,7 +6578,17 @@
   }
   async function hiddenShotsLoad() {
     if (!agent.current || $("agentHiddenPanel").hidden) return;
-    const { images, videos } = await api(`/v1/agent/sessions/${agent.current}/hidden-shots`);
+    const chat = agent.current;
+    const { images, videos, messages, working } = await api(`/v1/agent/sessions/${chat}/hidden-shots`);
+    if (chat !== agent.current) return;
+    $("agentHiddenThread").innerHTML = messages.map((m) => {
+      const c = m.content, errors = (c.errors || []).map((e) => `<span class="hint">⚠ ${esc(e)}</span>`).join(" ");
+      return `<div><strong>${m.role === "user" ? "You" : "Hidden agent"}:</strong> ${esc(c.text || "")} ${errors}</div>`;
+    }).join("") + (working ? `<span class="hint">Hidden agent is working…</span>` : "");
+    clearTimeout(agent.hiddenPoll);
+    if (working || videos.some((j) => !j.video_url && !["failed", "cancelled"].includes(j.status))) {
+      agent.hiddenPoll = setTimeout(() => hiddenShotsLoad().catch(() => {}), 4000);
+    }
     $("agentHiddenShots").innerHTML = images.map((a) => `<figure><a href="${esc(a.file_url)}" target="_blank" rel="noopener"><img src="${esc(a.thumb_url)}" alt="" style="width:80px;height:auto"></a></figure>`).join("")
       + videos.map((j) => j.video_url ? `<figure><a href="${esc(j.video_url)}" target="_blank" rel="noopener">▶ Video</a></figure>` : `<figure><span class="hint">Video: ${esc(j.status)}</span></figure>`).join("");
   }
@@ -6585,12 +6596,11 @@
     if (!text) return;
     $("agentSend").disabled = true;
     try {
-      await post(`/v1/agent/sessions/${agent.current}/hidden-shots`, { description: text, member: $("agentHiddenMember").value, kind: $("agentHiddenKind").value });
+      await post(`/v1/agent/sessions/${agent.current}/hidden-messages`, { text, member: $("agentHiddenMember").value });
       $("agentInput").value = ""; autoGrow();
       clearAgentDraft(agent.current);
       await hiddenShotsLoad();
-      toast("Hidden shot made", "It's in Media under Hidden shots.", "ok", 3500);
-    } catch (error) { toast("Could not make it", readableError(error.message).short, "bad", 8000); }
+    } catch (error) { toast("Could not send it", readableError(error.message).short, "bad", 8000); }
     finally { $("agentSend").disabled = false; }
   }
   $("agentHiddenMode").addEventListener("change", async (event) => {
