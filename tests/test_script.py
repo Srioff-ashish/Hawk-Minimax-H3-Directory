@@ -45,6 +45,8 @@ from hawk_h3.script import (  # noqa: E402
     ScriptError,
     build_jobs,
     drop_unavailable_references,
+    add_mentioned_references,
+    repair_planned_script,
     parse_script,
     reference_counts_line,
 )
@@ -287,6 +289,41 @@ class PlannerTolerance(unittest.TestCase):
         self.assertEqual((fixed.segments[0].poses, warnings), ([2], []))
         with self.assertRaisesRegex(ScriptError, "only 0 pose"):
             self.build(fixed)
+
+    def test_a_mentioned_picture_left_off_the_list_is_added(self):
+        # The live failure: "Segment 3 mentions <Picture 1> but its pictures list leaves it out."
+        script = parse_script(json.dumps({"segments": [
+            {"prompt": "<Picture 1> walks in.", "pictures": [1]},
+            {"title": "Outfit 2", "prompt": "<Picture 1> wears what <Picture 2> shows.", "pictures": [2]},
+        ]}))
+        fixed, warnings = add_mentioned_references(script, {"Picture": 2})
+        self.assertIs(fixed.segments[0], script.segments[0])
+        self.assertEqual(fixed.segments[1].pictures, [1, 2])
+        self.assertEqual(warnings, ["Segment 2 (Outfit 2): added picture [1] to its pictures list; its text mentions them."])
+        jobs = build_jobs(fixed, available={"Picture": 2}, video_has_audio=[], default_seconds=5,
+                          continuity="tail_22", base_seed=0)
+        self.assertEqual(jobs[1].prompt, "<Picture 1> wears what <Picture 2> shows.")
+
+    def test_a_style_mention_goes_on_every_list_that_is_written_out(self):
+        script = parse_script(json.dumps({"style": "Keep <Picture 1> lighting", "segments": [
+            {"prompt": "a", "pictures": [2]}, {"prompt": "b"}]}))
+        fixed, _ = add_mentioned_references(script, {"Picture": 2})
+        self.assertEqual((fixed.segments[0].pictures, fixed.segments[1].pictures), ([1, 2], None))
+
+    def test_a_picture_that_is_not_connected_is_not_added(self):
+        script = parse_script('{"segments": [{"prompt": "<Picture 5> waves", "pictures": [1]}]}')
+        fixed, warnings = add_mentioned_references(script, {"Picture": 2})
+        self.assertEqual((fixed.segments[0].pictures, warnings), ([1], []))
+
+    def test_a_clean_plan_comes_back_untouched_and_a_repair_keeps_its_shopping_list(self):
+        clean = '{"segments": [{"prompt": "<Picture 1> waves", "pictures": [1]}]}'
+        self.assertEqual(repair_planned_script(clean, {"Picture": 1}), (clean, []))
+        slipped = ('{"references_to_make": [{"kind": "picture", "prompt": "a room"}], '
+                   '"segments": [{"prompt": "<Picture 1> waves", "pictures": []}]}')
+        text, fixes = repair_planned_script(slipped, {"Picture": 1})
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(parse_script(text).segments[0].pictures, [1])
+        self.assertEqual(json.loads(text)["references_to_make"], [{"kind": "picture", "prompt": "a room"}])
 
     def test_warnings_round_trip_and_counts_line(self):
         script = parse_script('{"segments": [{"prompt": "x"}]}')

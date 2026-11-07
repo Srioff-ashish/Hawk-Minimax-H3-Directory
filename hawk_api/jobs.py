@@ -25,7 +25,7 @@ from pathlib import Path
 
 import httpx
 
-from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line
+from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line, repair_planned_script
 
 from . import billing
 from . import content_credentials
@@ -2273,7 +2273,7 @@ class HawkService:
                     except OSError:
                         pass
 
-    async def plan_text(self, options: PlannerOptions, refs: list) -> tuple[str, str, dict]:
+    async def plan_text(self, options: PlannerOptions, refs: list, render_now: bool = False) -> tuple[str, str, dict]:
         """Write the film's script here in the gateway, on the provider the settings actually name.
 
         The planner used to run inside ComfyUI, where the graph hardcoded Atlas's URL and an empty key, so the
@@ -2284,6 +2284,10 @@ class HawkService:
         """
         # The message is built first because whether it carries photos is what decides which models can serve
         # it: with references this call is multimodal, and a text-only model is rejected outright.
+        try:
+            wiring = graphs.reference_wiring(refs)
+        except graphs.GraphError as exc:
+            raise RequestError(str(exc)) from None
         text, images = await self._planner_message(options, refs)
         models = await self._planner_model_ids(options.model, needs_vision=bool(images))
         if not models:
@@ -2310,10 +2314,19 @@ class HawkService:
                 # a finished one: the job said done with no error, Studio drew a half-written script, and the
                 # first thing to actually parse it was the render, at _validate_script, minutes later. Parsing it
                 # here turns that into a failure the next model in the chain gets to fix.
+                # Parsing alone let a plan through whose lists disagree with its text. When Studio plans and renders in
+                # one call (render_now), that failed at _validate_script before any job existed: nothing saved to fix,
+                # and the next click paid for a new plan. So slips are repaired, and with render_now whatever is left
+                # tries the next model. A saved plan isn't held to it: its references can still come with the render.
                 try:
-                    parse_script(reply)
+                    reply, fixes = repair_planned_script(reply, wiring.available)
+                    if render_now:
+                        build_jobs(parse_script(reply), available=wiring.available, video_has_audio=wiring.video_has_audio,
+                                   default_seconds=options.segment_seconds, continuity="tail_22", base_seed=0)
                 except ScriptError as exc:
-                    raise Unavailable(f"{model} returned a plan that does not parse: {exc}") from None
+                    raise Unavailable(f"{model} returned a plan that can't be used: {exc}") from None
+                for fix in fixes:
+                    log.warning("Planner %s: %s", model, fix)
                 return reply, model, usage or {}
             except (AtlasError, Unavailable) as exc:
                 failures.append(str(exc))
@@ -2507,7 +2520,7 @@ class HawkService:
             # Planned here rather than by a node in the graph, so the provider chosen in Studio is the one that
             # writes the film and its tokens are counted. The render then takes the finished script, which is
             # the path render_graph already had for a plan the user edited by hand.
-            script_text, planner_model, planner_usage = await self.plan_text(request.story, refs)
+            script_text, planner_model, planner_usage = await self.plan_text(request.story, refs, render_now=True)
 
         try:
             built, wiring = graphs.render_graph(refs, models, loras, params, script=script_text)

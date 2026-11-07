@@ -466,6 +466,43 @@ def drop_unavailable_references(script: Script, available: dict[str, int]) -> tu
     return Script(segments, script.style), warnings
 
 
+def add_mentioned_references(script: Script, available: dict[str, int]) -> tuple[Script, list[str]]:
+    """Add connected references a segment or the style mentions but its list leaves out -- the planner's other slip:
+    it writes <Picture 1> into a segment while listing only [2]. The mention is what the writer meant, so the list
+    follows it. Not for hand-written scripts: there build_jobs asks the person which one they meant."""
+    warnings: list[str] = []
+    style_tags = find_tags(script.style)
+    segments = []
+    for index, segment in enumerate(script.segments):
+        mentioned = style_tags + find_tags(segment.prompt)
+        changes: dict[str, list[int]] = {}
+        for name, kind in _LIST_FIELDS:
+            chosen = getattr(segment, name)
+            if chosen is None:
+                continue
+            count = available.get(kind, 0)
+            added = sorted({n for k, n in mentioned if k == kind and 1 <= n <= count and n not in chosen})
+            if added:
+                changes[name] = sorted({*chosen, *added})
+                where = f"Segment {index + 1}" + (f" ({segment.title})" if segment.title else "")
+                warnings.append(f"{where}: added {kind.lower()} {added} to its {name} list; its text mentions them.")
+        segments.append(replace(segment, **changes) if changes else segment)
+    return Script(segments, script.style), warnings
+
+
+def repair_planned_script(text: str, available: dict[str, int]) -> tuple[str, list[str]]:
+    """A planner's reply with its reference lists made to agree with its text and the connected references. The
+    reply comes back untouched when nothing needed fixing; otherwise as JSON, keeping its shopping list of stills."""
+    script, fixes = drop_unavailable_references(parse_script(text), available)
+    script, added = add_mentioned_references(script, available)
+    fixes += added
+    if not fixes:
+        return text, []
+    data = _load_json(text.strip())
+    to_make = data.get("references_to_make") if isinstance(data, dict) else None
+    return script.to_json(fixes, to_make), fixes
+
+
 #: H3's native structured prompts keep their visual body and sound in named fields.
 _BODY_FIELD = re.compile(r"^(detailed_description|integrated_multimodal_description)[ \t]*:[ \t]*", re.MULTILINE)
 _SOUND_FIELD = re.compile(r"^overall_soundscape[ \t]*:", re.MULTILINE)

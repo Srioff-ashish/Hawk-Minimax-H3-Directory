@@ -25,6 +25,9 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise unittest.SkipTest(f"engine dependencies missing: {exc}")
 
+from hawk_api import graph as graphs
+from hawk_api.jobs import HawkService, Unavailable
+from hawk_api.schemas import PlannerOptions, RenderSettings
 from tests_api.test_storyboard import FakeService, png, sheet_png
 
 B5, B7 = "10Eros_Max_h3_TURBO-hybrid_beta5_int8.safetensors", "10Eros_Max_h3_8stepTURBO_beta7.safetensors"
@@ -332,6 +335,64 @@ class ManhwaFilm(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(made["from_sheets"][0]["panels"], 1)
         self.assertEqual((made["review"], made["link"]), ("ask", {"manhwa_chapter_id": "ch1"}))
         self.assertEqual(self.manager.store.get_chapter("ch1")["films"][0]["board_id"], "film1")
+
+
+class PlanReferences(unittest.IsolatedAsyncioTestCase):
+    """Studio plans and renders in one call, so a plan that fails validation there leaves no job to fix."""
+
+    REFS = [graphs.Ref("a", "image", "a.png", "picture"), graphs.Ref("b", "image", "b.png", "picture")]
+    SLIPPED = json.dumps({"segments": [
+        {"prompt": "<Picture 1> walks in.", "pictures": [1]},
+        {"title": "The Studio Session - Outfit 2", "prompt": "<Picture 1> wears what <Picture 2> shows.", "pictures": [2]},
+    ]})
+
+    def service(self, replies, models):
+        calls = []
+
+        async def chat(model, messages, **kwargs):
+            calls.append(model)
+            return replies[model], {}
+
+        async def planner_message(options, refs):
+            return "plan", []
+
+        async def model_ids(requested, needs_vision=False):
+            return models
+
+        service = types.SimpleNamespace(atlas=types.SimpleNamespace(chat=chat), _planner_message=planner_message,
+                                        _planner_model_ids=model_ids, planner_system_prompt=lambda: "system")
+        return service, calls
+
+    async def plan(self, service, refs=None, render_now=True):
+        return await HawkService.plan_text(service, PlannerOptions(story="a walk"), self.REFS if refs is None else refs,
+                                           render_now=render_now)
+
+    async def test_the_plan_that_failed_the_render_now_passes_it(self):
+        service, _ = self.service({"m": self.SLIPPED}, ["m"])
+        with self.assertRaisesRegex(RequestError, "Segment 2 .* leaves it out"):
+            HawkService._validate_script(self.SLIPPED, {"Picture": 2}, [], RenderSettings())
+        script, model, _ = await self.plan(service)
+        self.assertEqual(model, "m")
+        jobs = HawkService._validate_script(script, {"Picture": 2, "Pose": 0, "Video": 0, "Audio": 0}, [], RenderSettings())
+        self.assertEqual([job.pictures for job in jobs], [[1], [1, 2]])
+
+    async def test_a_plan_past_repair_goes_to_the_next_model(self):
+        missing = json.dumps({"segments": [{"prompt": "<Picture 7> walks in."}]})
+        good = json.dumps({"segments": [{"prompt": "<Picture 1> walks in.", "pictures": [1]}]})
+        service, calls = self.service({"bad": missing, "good": good}, ["bad", "good"])
+        script, model, _ = await self.plan(service)
+        self.assertEqual((script, model, calls), (good, "good", ["bad", "good"]))
+
+    async def test_a_saved_plan_may_name_pictures_that_come_with_its_render(self):
+        waiting = json.dumps({"segments": [{"prompt": "<Picture 1> walks in."}]})
+        service, _ = self.service({"m": waiting}, ["m"])
+        self.assertEqual((await self.plan(service, refs=[], render_now=False))[0], waiting)
+
+    async def test_when_no_model_can_fix_it_the_reason_is_said(self):
+        missing = json.dumps({"segments": [{"prompt": "<Picture 7> walks in."}]})
+        service, _ = self.service({"only": missing}, ["only"])
+        with self.assertRaisesRegex(Unavailable, "can't be used.*only 2 picture"):
+            await self.plan(service)
 
 
 class Fallback(unittest.IsolatedAsyncioTestCase):
