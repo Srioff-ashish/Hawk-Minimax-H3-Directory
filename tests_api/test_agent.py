@@ -461,6 +461,64 @@ class HiddenShots(AgentHarness):
         await self.http.delete(f"/v1/agent/sessions/{chat}")
         self.assertEqual(self.agent.store.hidden_messages(chat), [])
 
+    async def group(self):
+        chat = await self.hidden_on()
+        asha, rohan = await self.avatar(chat), await self.avatar(chat)
+        await self.http.patch(f"/v1/agent/sessions/{chat}", json={"cast": [
+            {"name": "Asha", "persona": "Asha, 30", "avatar_asset_id": asha},
+            {"name": "Rohan", "persona": "Rohan, 34", "avatar_asset_id": rohan},
+            {"name": "Meera", "persona": "Meera, 29", "avatar_asset_id": ""}]})
+        return chat, asha, rohan
+
+    async def test_a_direct_group_shot_carries_every_face_by_name(self):
+        chat, asha, rohan = await self.group()
+        response = await self.shoot(chat, "Talking in the studio", members=["Asha", "Rohan"])
+        self.assertEqual(response.status_code, 201, response.text)
+        shot = response.json()["assets"][0]
+        self.assertEqual(shot["source"]["references"], [asha, rohan])
+        self.assertEqual(shot["source"]["hidden_of"], ["Asha", "Rohan"])
+        self.assertIn("<image1> is Asha.", shot["source"]["prompt"])
+        self.assertIn("<image2> is Rohan.", shot["source"]["prompt"])
+
+    async def test_one_person_who_fails_refuses_the_whole_group_shot(self):
+        chat, *_ = await self.group()
+        response = await self.shoot(chat, "All three", members=["Asha", "Meera"])
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("Meera has no avatar", response.text)
+
+    async def test_the_agent_makes_individual_and_group_shots_from_the_people_available(self):
+        chat, asha, rohan = await self.group()
+        seen = []
+
+        def reply(body):
+            seen.append(json.dumps(body["messages"]))
+            return json.dumps({"say": "Both.", "actions": [
+                {"tool": "image", "args": {"description": "Just Rohan", "of": ["rohan"]}},
+                {"tool": "image", "args": {"description": "The two of them", "of": ["Asha", "Rohan"]}}]})
+
+        self.atlas.reply = reply
+        response, state = await self.hidden_agent_turn(chat)  # nobody ticked: it chooses from those who qualify
+        self.assertEqual(response.status_code, 202, response.text)
+        self.assertEqual(state["messages"][0]["content"]["of"], ["Asha", "Rohan"], "Meera has no avatar, so isn't offered")
+        self.assertIn("- Rohan:", seen[0])
+        self.assertNotIn("- Meera:", seen[0])
+        refs = sorted(a["source"]["references"] for a in state["images"])
+        self.assertEqual(refs, sorted([[rohan], [asha, rohan]]))
+
+    async def test_the_agent_cannot_widen_a_shot_past_who_was_ticked(self):
+        chat, asha, rohan = await self.group()
+        self.atlas.reply = lambda body: json.dumps({"say": "", "actions": [
+            {"tool": "image", "args": {"description": "Group", "of": ["Asha", "Rohan"]}}]})
+        response = await self.http.post(f"/v1/agent/sessions/{chat}/hidden-messages", json={"text": "Asha alone", "members": ["Asha"]})
+        self.assertEqual(response.status_code, 202, response.text)
+        for _ in range(200):
+            state = (await self.http.get(f"/v1/agent/sessions/{chat}/hidden-shots")).json()
+            if not state["working"]:
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(state["images"], [])
+        self.assertIn("Rohan", state["messages"][-1]["content"]["errors"][0])
+
     async def test_a_hidden_video_is_kept_from_the_directors_job_tools(self):
         chat = await self.hidden_on()
         await self.avatar(chat)

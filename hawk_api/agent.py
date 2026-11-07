@@ -52,14 +52,14 @@ HIDDEN_TAG = "hidden-shot"
 HIDDEN_COLLECTION = "Hidden shots"
 MAX_HIDDEN_SHOTS = 4  # one instruction can't quietly order a dozen renders
 HIDDEN_HISTORY = 12  # earlier hidden messages the hidden agent reads
-HIDDEN_AGENT_PROMPT = """You are a hidden production assistant working behind a character chat. The user gives you private instructions; you plan and describe images and videos of one character. That character and everyone else in the chat must never learn about this: you never speak as them or to them.
+HIDDEN_AGENT_PROMPT = """You are a hidden production assistant working behind a character chat. The user gives you private instructions; you plan and describe images and videos of one or more characters, alone or together. Those characters must never learn about this: you never speak as them or to them.
 
-Write each shot's description as a complete visual brief: the setting, what the character is doing and wearing, the framing and the light. Their face comes from their avatar, so don't describe it from scratch. Use the recent chat only for context such as where they are and what they are doing. Everyone shown is an adult, and you never name or imitate a real person.
+Write each shot's description as a complete visual brief: the setting, what the character is doing and wearing, the framing and the light. Their faces come from their avatars, so don't describe them from scratch. Use only the characters listed as available, and say in "of" exactly who is in each shot: one name for an individual shot, several for a group shot. Use the recent chat only for context such as where they are and what they are doing. Everyone shown is an adult, and you never name or imitate a real person.
 
 Make what the instruction asks for, at most {max_shots} shots. If it is unclear, ask a short question and make nothing.
 
 Reply with only one JSON object:
-{{"say": "a short note to the user", "actions": [{{"tool": "image", "args": {{"description": "..."}}}}, {{"tool": "video", "args": {{"description": "..."}}}}]}}"""
+{{"say": "a short note to the user", "actions": [{{"tool": "image", "args": {{"description": "...", "of": ["name"]}}}}, {{"tool": "video", "args": {{"description": "...", "of": ["name", "name"]}}}}]}}"""
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 #: Output caps, reasoning included: a reasoning model (deepseek-v4-pro) thinks against the same cap and, when
 #: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
@@ -1224,7 +1224,24 @@ class AgentService:
             raise RequestError(f"{name} or this description reads as under 18: hidden shots are for adults only.")
         return {"name": name, "avatar": avatar}
 
-    async def hidden_shot(self, session_id: str, description: str, *, member: str = "", kind: str = "image") -> dict:
+    def _hidden_shot_pool(self, session: dict, members: list[str], description: str) -> list[dict]:
+        """Who an instruction may show. Named people must all pass; with nobody named, whoever in the chat passes,
+        and the agent picks from them. Nobody is ever shown without passing."""
+        if members:
+            pool = [self._hidden_shot_subject(session, member, description) for member in members]
+        else:
+            pool, refused = [], None
+            for member in cast_of(session):
+                try:
+                    pool.append(self._hidden_shot_subject(session, member.get("id") or "", description))
+                except RequestError as exc:
+                    refused = exc
+            if not pool and refused:
+                raise refused
+        return list({subject["name"]: subject for subject in pool}.values())
+
+    async def hidden_shot(self, session_id: str, description: str, *, members: list[str] | None = None,
+                          kind: str = "image") -> dict:
         """Made straight on the engines, with no model call as a character and nothing written to the chat, so there
         is nothing for a character to read, remember or summarise. Only while the chat is in hidden mode."""
         session = self.get_session(session_id)
@@ -1233,31 +1250,35 @@ class AgentService:
         description = (description or "").strip()
         if not description:
             raise RequestError("Describe the shot.")
-        subject = self._hidden_shot_subject(session, member, description)
+        subjects = self._hidden_shot_pool(session, members or [""], description)
+        names = [subject["name"] for subject in subjects]
+        avatars = list(dict.fromkeys(subject["avatar"] for subject in subjects))
         if kind == "video":
             from .schemas import PlannerOptions, ReferenceIn, RenderSettings, VideoRequest
 
             job = await self.service.create_video(VideoRequest(
-                references=[ReferenceIn(asset_id=subject["avatar"], role="picture")],
+                references=[ReferenceIn(asset_id=s["avatar"], role="picture", label=s["name"]) for s in subjects],
                 story=PlannerOptions(story=description), settings=RenderSettings()))
             job = self.service.store.get_job(job["id"]) or job
             job["hidden_session"] = session_id
             self.service.store.save_job(job)
-            return {"kind": "video", "of": subject["name"], "job": self.service.job_view(job)}
-        made = await self.service.generate_images(description, reference_asset_ids=[subject["avatar"]], engine="auto")
+            return {"kind": "video", "of": names, "job": self.service.job_view(job)}
+        if len(subjects) > 1:  # several references reach the engine unlabelled: name each face, as group shots in chat do
+            description = cast_talk.reference_key(description, [(s["name"], s["avatar"]) for s in subjects], [])
+        made = await self.service.generate_images(description, reference_asset_ids=avatars, engine="auto")
         assets = []
         for view in made["assets"]:
             if view.get("duplicate"):  # the same bytes as a picture already in the library, perhaps the avatar: leave it be
                 continue
             asset = self.service.update_asset(view["id"], collection=HIDDEN_COLLECTION, add_tags=[HIDDEN_TAG])
-            asset["source"] = {**(asset.get("source") or {}), "hidden_session": session_id}
+            asset["source"] = {**(asset.get("source") or {}), "hidden_session": session_id, "hidden_of": names}
             self.service.store.add_asset(asset)
             assets.append(self.service.asset_view(asset))
         if not assets:
             raise RequestError("The engine returned a picture already in the library, so nothing new was made. Try again.")
-        return {"kind": "image", "of": subject["name"], "assets": assets}
+        return {"kind": "image", "of": names, "assets": assets}
 
-    def hidden_message(self, session_id: str, text: str, *, member: str = "") -> dict:
+    def hidden_message(self, session_id: str, text: str, *, members: list[str] | None = None) -> dict:
         """A private instruction to the hidden agent, which plans and makes the shots in the background. Beside the
         chat, not in it: the chat can be mid-turn, and neither ever waits for or hears the other."""
         session = self.get_session(session_id)
@@ -1268,18 +1289,21 @@ class AgentService:
             raise RequestError("Write the hidden instruction.")
         if session_id in self._hidden_tasks:
             raise Conflict("The hidden agent is still working on your last instruction.")
-        subject = self._hidden_shot_subject(session, member, text)  # before any model call: a refusal costs nothing
-        message = self.store.add_hidden_message(session_id, "user", {"text": text, "of": subject["name"]})
-        task = asyncio.create_task(self._hidden_run(session_id, member))
+        pool = self._hidden_shot_pool(session, members or [], text)  # before any model call: a refusal costs nothing
+        names = [subject["name"] for subject in pool]
+        message = self.store.add_hidden_message(session_id, "user", {"text": text, "of": names})
+        task = asyncio.create_task(self._hidden_run(session_id, names))
         self._hidden_tasks[session_id] = task
         task.add_done_callback(lambda _: self._hidden_tasks.pop(session_id, None))
         return message
 
-    async def _hidden_messages_for_model(self, session: dict, member: str) -> list[dict]:
+    async def _hidden_messages_for_model(self, session: dict, names: list[str]) -> list[dict]:
         cast = cast_of(session)
-        index = find_member(cast, member) if member.strip() else 0
-        subject = cast[index or 0]
-        about = f"The character: {display_name(subject, index or 0, len(cast))}. {subject.get('persona', '')}".strip()
+        people = []
+        for name in names:
+            index = find_member(cast, name)
+            people.append(f"- {name}: {cast[index].get('persona', '') if index is not None else ''}".strip())
+        about = "THE CHARACTERS AVAILABLE FOR THIS INSTRUCTION:\n" + "\n".join(people)
         heard = self._transcript(session, None, [])  # one way: the hidden agent reads the chat, the chat never reads it
         context = about + (f"\n\nRECENT CHAT, for context only:\n{heard[-3000:]}" if heard else "")
         messages = [{"role": "system", "content": HIDDEN_AGENT_PROMPT.format(max_shots=MAX_HIDDEN_SHOTS)},
@@ -1290,12 +1314,12 @@ class AgentService:
                 messages.append({"role": "user" if row["role"] == "user" else "assistant", "content": text})
         return messages
 
-    async def _hidden_run(self, session_id: str, member: str) -> None:
+    async def _hidden_run(self, session_id: str, names: list[str]) -> None:
         """Every failure ends as a hidden note, never in the chat: _note and _director_call both write there."""
         out: dict = {"text": "", "assets": [], "videos": [], "errors": []}
         try:
             session = self.get_session(session_id)
-            messages = await self._hidden_messages_for_model(session, member)
+            messages = await self._hidden_messages_for_model(session, names)
             models = await self.models_for("director", session)
             reply, failure = None, ""
             for model in models:
@@ -1319,8 +1343,15 @@ class AgentService:
                 if kind not in ("image", "video"):
                     out["errors"].append(f"Unknown shot type {kind!r}.")
                     continue
+                said = action["args"].get("of")
+                said = [said] if isinstance(said, str) else said if isinstance(said, list) else []
+                shown = [name for name in names if any(str(s).strip().casefold() == name.casefold() for s in said)]
+                unknown = [str(s) for s in said if not any(str(s).strip().casefold() == n.casefold() for n in names)]
+                if unknown:  # never widened to someone who wasn't available for this instruction
+                    out["errors"].append(f"Skipped a shot of {', '.join(unknown)}: not available for this instruction.")
+                    continue
                 try:
-                    made = await self.hidden_shot(session_id, description, member=member, kind=kind)
+                    made = await self.hidden_shot(session_id, description, members=shown or names, kind=kind)
                 except (RequestError, Conflict, NotFound, HawkUnavailable, AtlasError) as exc:
                     out["errors"].append(str(exc))
                     continue

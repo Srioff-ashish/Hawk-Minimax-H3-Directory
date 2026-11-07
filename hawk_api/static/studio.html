@@ -548,6 +548,13 @@
   .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
   .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
   @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+  /* Hidden mode is its own view: its conversation takes the thread's place, so the two never fight for height. */
+  .agent-hidden-view { flex: 1; min-height: 0; overflow: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; background: var(--bg); }
+  .agent-hidden-view > * { flex-shrink: 0; }
+  .agent-hidden-view .st-imgs img { width: 96px; height: 128px; }
+  .agent-hidden-view .st-imgs figure { max-width: 96px; }
+  .agent-chat.hidden-on #agentThread, .agent-chat.hidden-on #agentMentions, .agent-chat.hidden-on #agentAttachments,
+  .agent-chat.hidden-on #agentFileBtn, .agent-chat.hidden-on #agentFromLibrary, .agent-chat.hidden-on #agentNarrate { display: none !important; }
   .agent-composer { border-top: 1px solid var(--line); padding: 10px 12px; display: grid; gap: 8px; background: var(--surface); }
   .agent-composer .textarea { min-height: 44px; max-height: 200px; resize: none; }
   .agent-empty { margin: auto; max-width: 560px; text-align: center; display: grid; gap: 12px; color: var(--muted); }
@@ -994,19 +1001,17 @@
             <div class="row persona-actions"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
           </div>
           <div class="agent-thread" id="agentThread" aria-live="polite"></div>
+          <div class="agent-hidden-view" id="agentHiddenPanel" hidden>
+            <div class="alert">🕶 Hidden mode: this conversation is with the hidden agent, and no character learns about it. Turn Hidden mode off to see the chat again.</div>
+            <div class="grid" id="agentHiddenThread" style="gap:4px"></div>
+            <div class="st-imgs" id="agentHiddenShots"></div>
+          </div>
           <div class="agent-composer">
-            <div class="grid" id="agentHiddenPanel" hidden style="gap:6px;margin-bottom:6px">
-              <div class="alert">🕶 Hidden mode is on: Send goes to the hidden agent, not the chat. It plans and makes the shots, and no character learns about it. Turn this off to talk in the chat again.</div>
-              <div class="grid" id="agentHiddenThread" style="gap:4px;max-height:200px;overflow:auto"></div>
-              <div class="row">
-                <label class="sr-only" for="agentHiddenMember">Who it is of</label><select class="select" id="agentHiddenMember" style="width:auto;height:32px"></select>
-              </div>
-              <div class="st-imgs" id="agentHiddenShots"></div>
-            </div>
+            <div class="row" id="agentHiddenPicker" hidden style="gap:10px;flex-wrap:wrap"><span class="hint">In the shot:</span><span class="row" id="agentHiddenMembers" style="gap:10px;flex-wrap:wrap"></span><span class="hint">tick one or several · none: the agent decides</span></div>
             <div class="row mention-row" id="agentMentions" hidden></div>
             <div class="row" id="agentAttachments" hidden></div>
             <div class="row" style="flex-wrap:nowrap;align-items:flex-end">
-              <label class="icon-btn" title="Upload images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
+              <label class="icon-btn" id="agentFileBtn" title="Upload images, audio or video" style="flex:none;width:36px;height:36px"><input type="file" id="agentFile" multiple accept="image/*,audio/*,video/*" hidden><svg><use href="#i-upload"/></svg></label>
               <button class="icon-btn" type="button" id="agentFromLibrary" title="Attach from media" aria-label="Attach from media" style="flex:none;width:36px;height:36px"><svg><use href="#i-assets"/></svg></button>
               <button class="icon-btn" type="button" id="agentNarrate" aria-pressed="false" title="Narrate: something that happened in the scene, not a line spoken to the characters. Wrapping the message in *asterisks* does the same." aria-label="Narrate this message" style="flex:none;width:36px;height:36px"><svg><use href="#i-film"/></svg></button>
               <label class="sr-only" for="agentInput">Message</label>
@@ -6570,11 +6575,22 @@
   // Hidden mode: Send goes to the hidden-shots endpoint, and the chat and its characters never see any of it.
   function hiddenPaint(session) {
     const on = !!session?.hidden_mode;
+    const was = !$("agentHiddenPanel").hidden;
     $("agentHiddenMode").checked = on;
     $("agentHiddenPanel").hidden = !on;
+    $("agentHiddenPicker").hidden = !on;
+    $("agentThread").closest(".agent-chat").classList.toggle("hidden-on", on);
+    const input = $("agentInput");
+    if (on && !was) { input.dataset.chatPlaceholder = input.placeholder; input.placeholder = "Tell the hidden agent what to shoot… (Enter to send)"; }
+    if (!on && was) {
+      input.placeholder = input.dataset.chatPlaceholder || input.placeholder;
+      $("agentThread").scrollTop = $("agentThread").scrollHeight;  // it had no height while hidden, so it lost its place
+    }
     if (!on) return;
-    const keep = $("agentHiddenMember").value;
-    $("agentHiddenMember").innerHTML = castOf(session).map((m) => `<option value="${esc(m.id || "")}"${m.id === keep ? " selected" : ""}>${esc(m.display_name || "Character")}</option>`).join("");
+    const cast = castOf(session), signature = JSON.stringify(cast.map((m) => [m.id, m.display_name]));
+    if ($("agentHiddenMembers").dataset.cast === signature) return;  // redrawn on every poll otherwise, losing the ticks
+    $("agentHiddenMembers").dataset.cast = signature;
+    $("agentHiddenMembers").innerHTML = cast.map((m) => `<label class="adaptive-toggle"><input type="checkbox" value="${esc(m.id || "")}"> ${esc(m.display_name || "Character")}</label>`).join("");
   }
   async function hiddenShotsLoad() {
     if (!agent.current || $("agentHiddenPanel").hidden) return;
@@ -6583,20 +6599,22 @@
     if (chat !== agent.current) return;
     $("agentHiddenThread").innerHTML = messages.map((m) => {
       const c = m.content, errors = (c.errors || []).map((e) => `<span class="hint">⚠ ${esc(e)}</span>`).join(" ");
-      return `<div><strong>${m.role === "user" ? "You" : "Hidden agent"}:</strong> ${esc(c.text || "")} ${errors}</div>`;
+      const of = m.role === "user" && Array.isArray(c.of) && c.of.length ? ` <span class="hint">· ${esc(c.of.join(", "))}</span>` : "";
+      return `<div><strong>${m.role === "user" ? "You" : "Hidden agent"}:</strong> ${esc(c.text || "")}${of} ${errors}</div>`;
     }).join("") + (working ? `<span class="hint">Hidden agent is working…</span>` : "");
     clearTimeout(agent.hiddenPoll);
     if (working || videos.some((j) => !j.video_url && !["failed", "cancelled"].includes(j.status))) {
       agent.hiddenPoll = setTimeout(() => hiddenShotsLoad().catch(() => {}), 4000);
     }
-    $("agentHiddenShots").innerHTML = images.map((a) => `<figure><a href="${esc(a.file_url)}" target="_blank" rel="noopener"><img src="${esc(a.thumb_url)}" alt="" style="width:80px;height:auto"></a></figure>`).join("")
+    $("agentHiddenShots").innerHTML = images.map((a) => `<figure><a href="${esc(a.file_url)}" target="_blank" rel="noopener"><img src="${esc(a.thumb_url)}" alt=""></a><span>${esc((a.source?.hidden_of || []).join(", "))}</span></figure>`).join("")
       + videos.map((j) => j.video_url ? `<figure><a href="${esc(j.video_url)}" target="_blank" rel="noopener">▶ Video</a></figure>` : `<figure><span class="hint">Video: ${esc(j.status)}</span></figure>`).join("");
   }
   async function sendHiddenShot(text) {
     if (!text) return;
     $("agentSend").disabled = true;
     try {
-      await post(`/v1/agent/sessions/${agent.current}/hidden-messages`, { text, member: $("agentHiddenMember").value });
+      const members = [...$("agentHiddenMembers").querySelectorAll("input:checked")].map((box) => box.value);
+      await post(`/v1/agent/sessions/${agent.current}/hidden-messages`, { text, members });
       $("agentInput").value = ""; autoGrow();
       clearAgentDraft(agent.current);
       await hiddenShotsLoad();

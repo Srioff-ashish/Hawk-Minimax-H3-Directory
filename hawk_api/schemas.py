@@ -275,13 +275,13 @@ class AgentSessionIn(BaseModel):
 
 class HiddenShotIn(BaseModel):
     description: str = Field(min_length=1, max_length=4000, description="What the shot shows.")
-    member: str = Field("", description="Who it is of (id or name); empty is the lead character.")
+    members: list[str] = Field(default_factory=list, max_length=4, description="Who is in it (ids or names): one for an individual shot, several for a group shot. Empty is the lead character.")
     kind: Literal["image", "video"] = "image"
 
 
 class HiddenMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000, description="A private instruction to the hidden agent.")
-    member: str = Field("", description="Who the shots are of (id or name); empty is the lead character.")
+    members: list[str] = Field(default_factory=list, max_length=4, description="Who the agent may show (ids or names). Empty: it chooses from everyone in the chat who qualifies.")
 
 
 class AgentMessageIn(BaseModel):
