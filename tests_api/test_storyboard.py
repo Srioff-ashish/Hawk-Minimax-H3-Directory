@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import io
 import os
+import random
 import sys
+import types
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -27,6 +29,20 @@ def sheet_png(columns: int, rows: int, width: int = 800, height: int = 800, bord
             colour = (10, 10, 12) if dark else (60 + 20 * column, 120 + 30 * row, 200)
             image.paste(colour, (column * cell_w + border, row * cell_h + border,
                                  (column + 1) * cell_w - border, (row + 1) * cell_h - border))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def noisy_sheet(columns: int, rows: int, cell: int = 200, border: int = 12) -> bytes:
+    """A sheet whose panels hold noise, so a wrong cut compresses to a very different size, as on a real picture."""
+    width, height = columns * cell, rows * cell
+    image = Image.new("RGB", (width, height), (0, 0, 0))
+    for row in range(rows):
+        for column in range(columns):
+            side = (cell - 2 * border, cell - 2 * border)
+            noise = Image.frombytes("RGB", side, random.Random(column + 10 * row).randbytes(side[0] * side[1] * 3))
+            image.paste(noise.point(lambda v: 70 + v // 2), (column * cell + border, row * cell + border))
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
@@ -223,6 +239,65 @@ def png(width: int, height: int, colour=(200, 60, 60)) -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (width, height), colour).save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+class LostFiles(unittest.IsolatedAsyncioTestCase):
+    """A new runtime empties ComfyUI's input folder; panels and merged sheets are made again from their parents."""
+
+    def service(self, assets, files):
+        async def asset_bytes(asset):
+            if asset["id"] not in files:
+                raise sb.NotFound("gone")
+            return files[asset["id"]]
+
+        store = types.SimpleNamespace(get_asset=assets.get, all_assets=lambda: list(assets.values()))
+        return types.SimpleNamespace(store=store, asset_bytes=asset_bytes)
+
+    def panels(self, sheet, columns, rows, recorded=False):
+        out = {}
+        for number, cut in enumerate(sb.cut_grid(sheet, columns, rows)[0], 1):
+            source = {"type": "storyboard", "sheet": "s", "panel": number}
+            if recorded:
+                source["grid"] = [columns, rows]
+            out[f"p{number}"] = {"id": f"p{number}", "size": len(cut), "sha256": "from another zlib", "source": source}
+        return out
+
+    async def test_an_old_panel_with_no_recorded_grid_comes_back_as_the_same_cut(self):
+        sheet = noisy_sheet(2, 2)
+        assets = {"s": {"id": "s"}, **self.panels(sheet, 2, 2)}
+        wanted = sb.cut_grid(sheet, 2, 2)[0][2]
+        self.assertEqual(await sb.rebuild_asset(self.service(assets, {"s": sheet}), assets["p3"]), wanted)
+
+    async def test_a_rebuild_that_does_not_match_the_record_is_refused(self):
+        sheet = noisy_sheet(2, 2)
+        assets = {"s": {"id": "s"}, **self.panels(sheet, 2, 2, recorded=True)}
+        assets["p1"]["size"] *= 3
+        self.assertIsNone(await sb.rebuild_asset(self.service(assets, {"s": sheet}), assets["p1"]))
+
+    async def test_a_panel_whose_sheet_was_deleted_cannot_come_back(self):
+        assets = {"p1": {"id": "p1", "size": 1, "source": {"type": "storyboard", "sheet": "s", "panel": 1}}}
+        self.assertIsNone(await sb.rebuild_asset(self.service(assets, {}), assets["p1"]))
+
+    async def test_a_merged_sheet_comes_back_from_its_images(self):
+        images = {"a": noisy_sheet(1, 1), "b": noisy_sheet(1, 1)}
+        merged, grid = sb.compose_grid(list(images.values()), 2, "", "contain", 24, "black")
+        asset = {"id": "m", "size": len(merged), "sha256": "x",
+                 "source": {"type": "composed", "images": ["a", "b"], "grid": [grid["columns"], grid["rows"]]}}
+        assets = {"m": asset, "a": {"id": "a"}, "b": {"id": "b"}}
+        self.assertEqual(await sb.rebuild_asset(self.service(assets, images), asset), merged)
+
+    async def test_a_sheet_drawn_by_a_model_has_nothing_to_be_rebuilt_from(self):
+        asset = {"id": "x", "size": 1, "source": {"type": "generated"}}
+        self.assertIsNone(await sb.rebuild_asset(self.service({"x": asset}, {}), asset))
+
+    async def test_new_panels_record_their_grid_and_go_to_drive(self):
+        service = FakeService(sheet_png(2, 2, 1584, 2816, border=40))
+        service.store.assets["sheet1"] = {"id": "sheet1", "kind": "image", "filename": "s.png", "source": {}}
+        scheduled = []
+        service.drive_exporter = types.SimpleNamespace(schedule_assets=scheduled.extend)
+        cut = await sb.split_sheet(service, "sheet1", 2, 2, 4)
+        self.assertEqual(cut["panels"][0]["source"]["grid"], [2, 2])
+        self.assertEqual([a["id"] for a in scheduled], [a["id"] for a in cut["panels"]])
 
 
 class Compose(unittest.TestCase):

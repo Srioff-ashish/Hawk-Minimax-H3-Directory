@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import httpx
 
@@ -1312,7 +1313,7 @@ class HawkService:
             return True
         source = self.drive_asset_path(asset)
         if not source:
-            return False
+            return await self._rebuild_lost_asset(asset) is not None
         target = os.path.join(input_dir, asset["path"])
         await asyncio.to_thread(os.makedirs, os.path.dirname(target), exist_ok=True)
         await asyncio.to_thread(shutil.copyfile, source, target)
@@ -1337,10 +1338,33 @@ class HawkService:
         try:
             _, _, body = await self.comfy.view(filename, subfolder, "input")
         except ComfyNotFound as exc:
+            rebuilt = await self._rebuild_lost_asset(asset)
+            if rebuilt is not None:
+                return rebuilt
             raise NotFound(f"The file for asset {asset['id']} is gone from ComfyUI's input folder.") from exc
         except ComfyError as exc:
             raise Unavailable(str(exc)) from None
         return b"".join([chunk async for chunk in body])
+
+    async def _rebuild_lost_asset(self, asset: dict) -> bytes | None:
+        """A lost storyboard panel or merged sheet made again from its parents, put back under its recorded path and
+        copied to Drive. They had no Drive copy before, so a new runtime lost them for good while the sheet survived."""
+        from .storyboard import rebuild_asset
+
+        try:
+            data = await rebuild_asset(self, asset)
+        except NotFound:  # its parent is gone too
+            return None
+        if data is None:
+            return None
+        input_dir = self.settings.comfy_input_dir
+        if input_dir and os.path.isdir(input_dir):
+            target = os.path.join(input_dir, asset["path"])
+            await asyncio.to_thread(os.makedirs, os.path.dirname(target), exist_ok=True)
+            await asyncio.to_thread(Path(target).write_bytes, data)
+            if self.drive_exporter is not None:
+                self.drive_exporter.schedule_assets([asset])
+        return data
 
     async def asset_file(self, asset_id: str, width: int = 0) -> tuple[bytes, str]:
         asset = self.store.get_asset(asset_id)

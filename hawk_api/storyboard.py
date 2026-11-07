@@ -12,6 +12,7 @@ Every panel is described in full (who is in it, what they wear, where, the camer
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import logging
@@ -73,6 +74,7 @@ BORDER_LEVEL = 40
 MIN_PANEL_SHARE = 0.06
 #: Trimmed off every edge of a cut panel, so no border line rides into the video's first frame.
 TRIM_SHARE = 0.012
+REBUILD_SIZE_SHARE = 0.05
 
 ASPECTS = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0, "4:3": 4 / 3, "3:4": 3 / 4, "21:9": 21 / 9, "9:21": 9 / 21}
 
@@ -395,11 +397,75 @@ async def split_sheet(service, sheet_asset_id: str, columns: int = 0, rows: int 
             f"{stem}_panel_{number}.png", io.BytesIO(cut), "image/png", len(cut),
             collection=collection or asset.get("collection") or "Generated",
             tags=["storyboard-panel", *(tags or [])],
-            source={"type": "storyboard", "sheet": sheet_asset_id, "panel": number},
+            source={"type": "storyboard", "sheet": sheet_asset_id, "panel": number,
+                    **({"grid": [columns, rows]} if columns > 0 and rows > 0 else {})},
         )
         out.append(service.asset_view(stored))
+    _back_up(service, out)
     note = "" if found else ("The sheet's borders weren't clear, so it was cut as an even grid; check the panel edges.")
     return {"panels": out, "borders_found": found, "note": note}
+
+
+def _back_up(service, assets: list[dict]) -> None:
+    """Copy made images into Drive like generated ones: ComfyUI's input folder does not survive a new runtime."""
+    exporter = getattr(service, "drive_exporter", None)
+    if exporter is not None:
+        exporter.schedule_assets(assets)
+
+
+def _is_the_lost_file(data: bytes, asset: dict) -> bool:
+    """Whether rebuilt bytes are the file the record describes.
+
+    The hash only matches when Pillow and zlib are the same versions that wrote the file, so a size within
+    REBUILD_SIZE_SHARE also counts: the right cut lands within about 2% on real sheets, a wrong grid nowhere near."""
+    if hashlib.sha256(data).hexdigest() == asset.get("sha256"):
+        return True
+    size = asset.get("size") or 0
+    return size > 0 and abs(len(data) - size) <= size * REBUILD_SIZE_SHARE
+
+
+def _panel_grids(service, asset: dict) -> list[tuple[int, int]]:
+    """The grids a lost panel's sheet may have been cut on: as recorded, else from the panels of that sheet, squarest
+    first, else whatever its borders show. Panels cut before the grid was recorded don't say."""
+    source = asset.get("source") or {}
+    recorded = source.get("grid")
+    if isinstance(recorded, list) and len(recorded) == 2:
+        return [(int(recorded[0]), int(recorded[1]))]
+    count = max((int((a.get("source") or {}).get("panel") or 0) for a in service.store.all_assets()
+                 if (a.get("source") or {}).get("sheet") == source.get("sheet")), default=0)
+    pairs = [(c, count // c) for c in range(1, count + 1) if count % c == 0]
+    return sorted(pairs, key=lambda pair: abs(pair[0] - pair[1])) + [(0, 0)]
+
+
+async def rebuild_asset(service, asset: dict) -> bytes | None:
+    """A lost panel or merged sheet made again from the pictures it was made from, or None when that can't be done
+    faithfully. Costs nothing: neither is drawn by a model."""
+    source = asset.get("source") or {}
+    if source.get("type") == "storyboard" and source.get("sheet") and source.get("panel"):
+        sheet = service.store.get_asset(source["sheet"])
+        if sheet is None:
+            return None
+        data = await service.asset_bytes(sheet)
+        for columns, rows in _panel_grids(service, asset):
+            try:
+                cuts, _ = await asyncio.to_thread(cut_grid, data, columns, rows)
+            except StoryboardError:
+                continue
+            number = int(source["panel"])
+            if number <= len(cuts) and _is_the_lost_file(cuts[number - 1], asset):
+                return cuts[number - 1]
+        return None
+    if source.get("type") == "composed" and source.get("images"):
+        assets = [service.store.get_asset(a) for a in source["images"]]
+        if not all(assets):
+            return None
+        images = [await service.asset_bytes(a) for a in assets]
+        columns = int((source.get("grid") or [0])[0])
+        for fit in ("contain", "cover"):  # how it was fitted wasn't recorded; the Studio's default first
+            merged, _ = await asyncio.to_thread(compose_grid, images, columns, "", fit, 24, "black")
+            if _is_the_lost_file(merged, asset):
+                return merged
+    return None
 
 
 async def render_film(service, panel_asset_ids: list, identity_asset_ids, beats: list[str], character: str,
@@ -1344,6 +1410,7 @@ async def compose_sheet(service, asset_ids: list[str], columns: int = 0, cell_as
         collection=collection or assets[0].get("collection") or "Generated", tags=["composed-sheet"],
         source={"type": "composed", "images": [a["id"] for a in assets], "grid": [grid["columns"], grid["rows"]]},
     )
+    _back_up(service, [stored])
     return {"sheet": service.asset_view(stored), "grid": grid, "cost_usd": 0.0}
 
 
@@ -1503,6 +1570,7 @@ async def live_action_sheets(service, panels: list[bytes], identity_asset_ids: l
             f"{re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')[:40] or 'panels'}_drawn_{number}.png", io.BytesIO(data),
             "image/png", len(data), collection=collection or "Generated", tags=["composed-sheet", "drawn"],
             source={"type": "composed", "grid": [grid["columns"], grid["rows"]]})
+        _back_up(service, [merged])
         width, height = min(SHEET_SIZES, key=lambda size: abs(math.log((size[0] / size[1]) / (grid["size"][0] / grid["size"][1]))))
         prompt = LIVE_ACTION_PROMPT.format(count=len(group), columns=grid["columns"], cs="s" if grid["columns"] > 1 else "",
                                            rows=grid["rows"], rs="s" if grid["rows"] > 1 else "", people=cast, style=look,

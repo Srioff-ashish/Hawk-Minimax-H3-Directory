@@ -2701,7 +2701,7 @@
       const keep = $("sbChar").value;
       $("sbChar").innerHTML = `<option value="">None: describe below</option>` + characters.map((c) => `<option value="${esc(c.name)}"${c.name === keep ? " selected" : ""}>${esc(c.name)}</option>`).join("");
       $("chList").innerHTML = characters.length ? characters.map((c) => `<div class="row" style="gap:6px">${(c.identity_views[0] ? `<img src="${esc(c.identity_views[0].thumb_url)}" alt="" style="width:32px;height:40px;object-fit:cover;border-radius:4px">` : "")}`
-        + `<strong style="flex:1">${esc(c.name)}</strong><span class="hint">${esc(c.platform)}${Object.keys(c.pack || {}).length ? " · pack" : ""}</span><button class="btn btn-sm" type="button" data-ch-edit="${esc(c.name)}">Edit</button></div>`).join("")
+        + `<strong style="flex:1">${esc(c.name)}</strong><span class="hint">${esc(c.platform)}${Object.keys(c.pack_views || {}).length ? " · pack" : ""}</span><button class="btn btn-sm" type="button" data-ch-edit="${esc(c.name)}">Edit</button></div>`).join("")
         : `<span class="hint">No characters yet: fill the form below.</span>`;
     } catch (error) { $("chList").innerHTML = `<span class="hint">${esc(error.message)}</span>`; }
   }
@@ -2946,7 +2946,7 @@
     $("sbMergeGo").disabled = true;
     try {
       const out = await post("/v1/sheets/compose", { asset_ids: board.merge, columns: Number($("sbMergeCols").value) || 0, fit: $("sbMergeFit").value,
-                                                     cell_aspect: $("sbMergeAspect").value, background: $("sbMergeBg").value, title: $("sbTitle").value.trim() });
+                                                     cell_aspect: $("sbMergeAspect").value, background: $("sbMergeBg").value, title: $("sbTitle").value.trim().slice(0, 80) });
       $("sbMergeOut").innerHTML = `<div class="st-imgs"><figure><a href="${esc(out.sheet.file_url)}" target="_blank" rel="noopener"><img src="${esc(out.sheet.thumb_url)}" alt="" style="width:120px;height:auto"></a>`
         + `<span>${out.grid.columns} × ${out.grid.rows} · ${out.grid.size[0]}×${out.grid.size[1]} · in Media, tagged composed-sheet</span></figure></div>`;
       toast("Sheet made", `${board.merge.length} images, $0.`);

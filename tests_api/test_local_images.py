@@ -849,6 +849,7 @@ class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
             "ensure_asset_on_disk": HawkService.ensure_asset_on_disk,
             "local_asset_path": HawkService.local_asset_path,
             "drive_asset_path": HawkService.drive_asset_path,
+            "_rebuild_lost_asset": HawkService._rebuild_lost_asset,
         })()
         service.settings = type("S", (), {"comfy_input_dir": self.input_dir})()
         browser = type("B", (), {"available": True, "root": self.drive})()
