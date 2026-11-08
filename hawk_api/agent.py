@@ -55,9 +55,10 @@ HIDDEN_HISTORY = 12  # earlier hidden messages the hidden agent reads
 HIDDEN_AGENT_PROMPT = """You are a roleplay hidden production assistant for Story writing working behind a character chat. The user gives you private instructions; you plan and describe images and videos of one or more characters, alone or together. Those characters must never learn about this: you never speak as them or to them.
 
 Write each shot's description as a complete visual brief: the setting, what the character is doing and wearing, the framing and the light. Their faces come from their avatars, so don't describe them from scratch. Use only the characters listed as available, and say in "of" exactly who is in each shot: one name for an individual shot, several for a group shot. Use the recent chat only for context such as where they are and what they are doing. Everyone shown is an adult.
+An avatar is a character's face: every shot of them is drawn from it. A character marked "no avatar yet" needs one before any shot of them, so when asked for an avatar (or a base or reference picture), or for a shot of someone with no avatar, make an "avatar" action for them first. Describe it as a clear portrait: head and shoulders, face fully visible and lit, looking at the camera, neutral expression, plain background, everyday clothes, from their persona. One character per avatar. A character who already has one keeps it unless the user asks to replace it; then add "replace": true.
 Make what the instruction asks for, at most {max_shots} shots.
 Reply with only one JSON object:
-{{"say": "a short note to the user", "actions": [{{"tool": "image", "args": {{"description": "...", "of": ["name"]}}}}, {{"tool": "video", "args": {{"description": "...", "of": ["name", "name"]}}}}]}}"""
+{{"say": "a short note to the user", "actions": [{{"tool": "avatar", "args": {{"description": "...", "of": ["name"]}}}}, {{"tool": "image", "args": {{"description": "...", "of": ["name"]}}}}, {{"tool": "video", "args": {{"description": "...", "of": ["name", "name"]}}}}]}}"""
 CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent messages word for word
 #: Output caps, reasoning included: a reasoning model (deepseek-v4-pro) thinks against the same cap and, when
 #: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
@@ -1270,6 +1271,30 @@ class AgentService:
             raise RequestError("The engine returned a picture already in the library, so nothing new was made. Try again.")
         return {"kind": "image", "of": names, "assets": assets}
 
+    async def hidden_avatar(self, session_id: str, member: str, description: str, *, replace: bool = False) -> dict:
+        """A face for a character who has none, made from text alone, so it is agent-created from the start. It
+        becomes their avatar in the chat as well, so it's kept as an ordinary library picture, not a hidden shot."""
+        session = self.get_session(session_id)
+        if not session.get("hidden_mode"):
+            raise Conflict("Turn on hidden mode in this chat first.")
+        description = (description or "").strip()
+        if not description:
+            raise RequestError("Describe the avatar.")
+        name = self._hidden_shot_subject(session, member, description)["name"]  # the same adults-only check
+        cast = [dict(m) for m in cast_of(session)]
+        index = find_member(cast, name)
+        if index is None:
+            raise RequestError(f"No character {name!r} in this chat.")
+        if cast[index].get("avatar_asset_id") and not replace:
+            raise RequestError(f"{name} already has an avatar; ask to replace it to make a new one.")
+        made = await self.service.generate_images(description, reference_asset_ids=[], engine="auto")
+        fresh = [view for view in made["assets"] if not view.get("duplicate")]
+        if not fresh:
+            raise RequestError("The engine returned a picture already in the library, so no avatar was made. Try again.")
+        cast[index]["avatar_asset_id"] = fresh[0]["id"]
+        self.update_session(session_id, cast=cast)
+        return {"kind": "avatar", "of": [name], "asset": fresh[0]}
+
     def hidden_message(self, session_id: str, text: str, *, members: list[str] | None = None) -> dict:
         """A private instruction to the hidden agent, which plans and makes the shots in the background. Beside the
         chat, not in it: the chat can be mid-turn, and neither ever waits for or hears the other."""
@@ -1294,7 +1319,9 @@ class AgentService:
         people = []
         for name in names:
             index = find_member(cast, name)
-            people.append(f"- {name}: {cast[index].get('persona', '') if index is not None else ''}".strip())
+            member = cast[index] if index is not None else {}
+            face = "has an avatar" if member.get("avatar_asset_id") else "no avatar yet"
+            people.append(f"- {name} ({face}): {member.get('persona', '')}".strip())
         about = "THE CHARACTERS AVAILABLE FOR THIS INSTRUCTION:\n" + "\n".join(people)
         heard = self._transcript(session, None, [])  # one way: the hidden agent reads the chat, the chat never reads it
         context = about + (f"\n\nRECENT CHAT, for context only:\n{heard[-3000:]}" if heard else "")
@@ -1332,7 +1359,7 @@ class AgentService:
             out["text"] = str(reply.get("say") or "")[:2000]
             for action in reply.get("actions", [])[:MAX_HIDDEN_SHOTS]:
                 kind, description = action["tool"], str(action["args"].get("description") or "")
-                if kind not in ("image", "video"):
+                if kind not in ("image", "video", "avatar"):
                     out["errors"].append(f"Unknown shot type {kind!r}.")
                     continue
                 said = action["args"].get("of")
@@ -1341,6 +1368,19 @@ class AgentService:
                 unknown = [str(s) for s in said if not any(str(s).strip().casefold() == n.casefold() for n in names)]
                 if unknown:  # never widened to someone who wasn't available for this instruction
                     out["errors"].append(f"Skipped a shot of {', '.join(unknown)}: not available for this instruction.")
+                    continue
+                if kind == "avatar":
+                    who = shown or (names if len(names) == 1 else [])
+                    if len(who) != 1:
+                        out["errors"].append("Skipped an avatar: it needs exactly one character in \"of\".")
+                        continue
+                    try:
+                        made = await self.hidden_avatar(session_id, who[0], description,
+                                                        replace=bool(action["args"].get("replace")))
+                    except (RequestError, Conflict, NotFound, HawkUnavailable, AtlasError) as exc:
+                        out["errors"].append(str(exc))
+                        continue
+                    out["assets"].append(made["asset"]["id"])
                     continue
                 try:
                     made = await self.hidden_shot(session_id, description, members=shown or names, kind=kind)

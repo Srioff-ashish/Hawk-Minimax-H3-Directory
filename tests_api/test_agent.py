@@ -423,6 +423,32 @@ class HiddenShots(AgentHarness):
         _, state = await self.hidden_agent_turn(chat)
         self.assertEqual(len(state["images"]), 4, "one instruction makes at most four")
 
+    async def test_the_hidden_agent_makes_an_avatar_then_shoots_with_it(self):
+        chat = await self.hidden_on()
+        seen = []
+
+        def reply(body):
+            seen.append(json.dumps(body["messages"]))
+            return json.dumps({"say": "Face first, then the shot.", "actions": [
+                {"tool": "avatar", "args": {"description": "Portrait of Maya, head and shoulders", "of": ["Maya"]}},
+                {"tool": "image", "args": {"description": "Maya dancing on a rooftop", "of": ["Maya"]}}]})
+
+        self.atlas.reply = reply
+        _, state = await self.hidden_agent_turn(chat, "generate base and avatar image")
+        self.assertIn("no avatar yet", seen[0])
+        avatar = self.agent.get_session(chat)["avatar_asset_id"]
+        self.assertTrue(avatar, state["messages"][-1]["content"])
+        self.assertEqual(state["messages"][-1]["content"]["errors"], [])
+        self.assertNotEqual(self.agent.service.store.get_asset(avatar)["collection"], "Hidden shots",
+                            "the avatar is the character's everyday face, not a hidden shot")
+        self.assertEqual(len(state["images"]), 1, "the shot after it was made with the new face")
+
+        self.atlas.reply = lambda body: json.dumps({"say": "", "actions": [
+            {"tool": "avatar", "args": {"description": "Another portrait", "of": ["Maya"]}}]})
+        _, state = await self.hidden_agent_turn(chat, "new avatar")
+        self.assertIn("already has an avatar", " ".join(state["messages"][-1]["content"]["errors"]))
+        self.assertEqual(self.agent.get_session(chat)["avatar_asset_id"], avatar, "kept unless replace is asked")
+
     async def test_an_unusable_reply_is_reported_in_the_hidden_log_only(self):
         chat = await self.hidden_on()
         await self.avatar(chat)
