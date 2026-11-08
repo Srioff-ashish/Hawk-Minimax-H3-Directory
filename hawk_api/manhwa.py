@@ -2846,12 +2846,24 @@ _SCHOOL_AGE = re.compile(r"school ?uniform|elementary|middle[- ]school|high[- ]s
                          r"\b(?:pupil|grade[- ]?schooler|kindergarten)\b", re.I)
 
 
+#: Children someone has (or hasn't), not what they are: "married, no children", "her kids", "two grown kids".
+#: Only a word that owns, counts or negates them; "a child", "of a child", "child-like" and "child's" never match.
+_FAMILY_CHILDREN = re.compile(
+    r"\b(?:no|her|his|their|my|your|our|two|three|four|five|six|several|many|has|have|had|without|raising|raised)"
+    r"\s+(?:(?:own|grown|grown-up|adult|young|small|little|two|three|four|\d)\s+)?(?:children|child|kids|kid)\b"
+    r"(?![\w'’-])", re.I)
+
+
 def is_minor(name: str, data: dict) -> bool:
     """A character whose name or description reads as under 18. They never get a portrait, are never cast, and
-    a panel the vision model says shows them is not converted. Not something a role choice can lift."""
+    a panel the vision model says shows them is not converted. Not something a role choice can lift.
+
+    Mentions of a character's own children are left out first, so a 45-year-old "married, no children" isn't
+    read as a child. Anything describing the character themselves is still caught."""
     from .local_images import _MINOR
 
     text = " ".join([name, str(data.get("appearance") or ""), " ".join(data.get("aliases") or [])])
+    text = _FAMILY_CHILDREN.sub(" ", text)
     return bool(_MINOR.search(text) or _SCHOOL_AGE.search(text))
 
 
