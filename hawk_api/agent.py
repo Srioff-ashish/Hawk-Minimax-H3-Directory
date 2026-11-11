@@ -79,6 +79,41 @@ MAX_GROWTH = 12  # hard cap on growth notes per character in an adaptive chat
 MERGE_GROWTH_AT = 8  # at this many notes, the model merges them into a few denser ones
 MERGED_GROWTH = 4
 MAX_GROWTH_CHARS = 240
+# Long-term memory. Canon: what must never be forgotten about a character (a rule the user set, a lasting change, a
+# ritual, a fact later scenes depend on). Story: the chat's key plot beats in order. Both are append-only: nothing is
+# condensed away the way growth notes and the summary are, they are captured by their own call so they do not depend
+# on whichever director model happened to answer, and both sit in every prompt.
+MEMORY_CAPTURE = True  # tests switch the extra model call off where they count requests
+CANON_MAX = 40  # items per character; past it the oldest non-rule items go first, rules are never dropped
+CANON_CHARS = 300
+CANON_KINDS = ("rule", "change", "fact")
+STORY_MAX = 60  # beats kept word for word; past it the oldest STORY_FOLD are folded into a few
+STORY_FOLD = 30
+STORY_CHARS = 240
+MEMORY_WINDOW_CHARS = 16000  # new conversation read per capture
+MEMORY_TIMEOUT = 45.0  # a capture that takes longer is dropped for this turn and retried with the next one
+MAX_REFS = 4  # identity pictures per character (face, body, figure, ...)
+MAX_ENGINE_REFS = 8  # the most any image engine on the ladder takes
+MEMORY_PROMPT = """You are the PERMANENT MEMORY KEEPER of a roleplay chat. Read the new messages and return only what must
+never be forgotten for the rest of the story. Return JSON:
+{"canon": [{"speaker": "<character name>", "kind": "rule" | "change" | "fact", "text": "one short sentence", "replaces": <number or null>}],
+ "story": ["one short past-tense line per key event"]}
+
+canon -- lasting truths about one character:
+- rule: an instruction the user or the story set for how that character must behave from now on: "always", "never",
+  "from now on", "update your persona", dress codes, forbidden things, how they address someone, rituals they perform
+  and when (e.g. "Never wears a saree again; only western, skimpy clothes." / "Kneels and greets Aarav as Master at the
+  door every evening.").
+- change: a lasting change in who they are or what they have: a new role or relationship, a name or title, something
+  they now always wear or own (a collar), a body change, a decision that changes the story.
+- fact: a concrete fact later scenes depend on (a place, a possession, a promise, a secret someone holds).
+Not moods, not one-off actions, not anything already in the current canon below. When something new contradicts an
+existing item, write the new item and give "replaces": that item's number. Use the character's name exactly as listed.
+
+story -- 0 to 3 lines for the events in these messages that later scenes depend on (who did what, what changed).
+Leave out small talk. Empty lists when nothing qualifies."""
+STORY_FOLD_PROMPT = """Fold these story beats, oldest first, into at most 6 short past-tense lines that keep every event,
+decision, rule and change later scenes depend on. Return JSON: {"story": ["...", "..."]}"""
 # inspect_image tries the chat's model (when it sees images), then these, until one returns a usable verdict: some models
 # refuse or garble reviews of certain images (adult content in particular).
 #: Superseded by the "vision" role in models_llm.ROLES, which resolves against the provider's own catalogue.
@@ -172,6 +207,14 @@ AGENT_TOOLS = [
         "new asset_id. Later pictures or videos of yourself should use your avatar as a reference (role picture). "
         "asset_id \"\" removes the avatar. In a group chat pass speaker: whose avatar it is.",
         "args": {"asset_id": "string (required)", "name": "string, optional", "speaker": "string, optional"},
+    },
+    {
+        "name": "set_references",
+        "description": "Set a character's identity pictures (face first, then body or full look; up to 4). From then on "
+        "every image or video of that character gets them attached automatically, labelled, ahead of any other "
+        "reference -- you do not pass them yourself, and you do not describe the face in words. In a group chat pass "
+        "speaker: whose pictures they are.",
+        "args": {"asset_ids": "list of image asset ids (required)", "speaker": "string, optional"},
     },
     {
         "name": "inspect_image",
@@ -292,6 +335,35 @@ def cast_of(session: dict) -> list[dict]:
         return cast
     return [{"id": "main", "name": session.get("name", ""), "persona": session.get("persona", ""),
              "avatar_asset_id": session.get("avatar_asset_id", ""), "growth": []}]
+
+
+def clean_canon(items) -> list[dict]:
+    """Canon items as {text, kind, at}: short, no repeats, at most CANON_MAX. Past the cap the oldest non-rule items
+    go first; rules are what the user asked never to be forgotten, so they stay."""
+    clean: list[dict] = []
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, str):
+            item = {"text": item}
+        if not isinstance(item, dict):
+            continue
+        text = " ".join(str(item.get("text") or "").split())[:CANON_CHARS]
+        kind = str(item.get("kind") or "rule").lower()
+        if not text or text.lower() in (c["text"].lower() for c in clean):
+            continue
+        clean.append({"text": text, "kind": kind if kind in CANON_KINDS else "fact", "at": float(item.get("at") or 0)})
+    while len(clean) > CANON_MAX:
+        drop = next((i for i, c in enumerate(clean) if c["kind"] != "rule"), 0)
+        clean.pop(drop)
+    return clean
+
+
+def clean_story(beats) -> list[str]:
+    clean: list[str] = []
+    for beat in beats if isinstance(beats, list) else []:
+        text = " ".join(str(beat or "").split())[:STORY_CHARS]
+        if text and text.lower() not in (b.lower() for b in clean):
+            clean.append(text)
+    return clean
 
 
 def clean_growth(notes) -> list[str]:
@@ -955,6 +1027,21 @@ class AgentService:
             lead.update(name=session.get("name", ""), persona=session.get("persona", ""), avatar_asset_id=session.get("avatar_asset_id", ""))
         return self.store.save_session(session)
 
+    def _check_refs(self, refs, strict: bool = True) -> list[str]:
+        """A character's identity pictures: existing images, no repeats, at most MAX_REFS (face first). strict False
+        (pictures already stored) drops one deleted since rather than refusing every later edit of the cast."""
+        clean: list[str] = []
+        for asset_id in refs if isinstance(refs, list) else []:
+            try:
+                asset_id = self._check_avatar(str(asset_id or "").strip())
+            except RequestError:
+                if strict:
+                    raise
+                continue
+            if asset_id and asset_id not in clean:
+                clean.append(asset_id)
+        return clean[:MAX_REFS]
+
     def _check_avatar(self, asset_id: str) -> str:
         asset_id = (asset_id or "").strip()
         if asset_id:
@@ -986,6 +1073,10 @@ class AgentService:
             entry["feelings"] = clean_feelings(feelings if feelings is not None else before.get("feelings"))
             if before.get("memory"):  # the character's own memory of the chat (talk mode)
                 entry["memory"], entry["memory_upto"] = before["memory"], before.get("memory_upto", 0)
+            canon = member.get("canon")  # None keeps the character's permanent memory
+            entry["canon"] = clean_canon(canon if canon is not None else before.get("canon"))
+            refs = member.get("refs")  # None keeps the character's identity pictures
+            entry["refs"] = self._check_refs(refs) if refs is not None else self._check_refs(before.get("refs"), strict=False)
             shown = display_name(entry, index, len(cast))
             if len(cast) > 1:
                 if not (entry["name"] or persona_name(entry["persona"])):
@@ -1632,6 +1723,11 @@ class AgentService:
     async def _run(self, session_id: str, talk_rounds: int = 0, makes: int = 2) -> None:
         self._final[session_id] = "idle"
         try:
+            if MEMORY_CAPTURE:
+                try:
+                    await asyncio.wait_for(self._capture_memory(session_id), MEMORY_TIMEOUT)
+                except Exception as exc:  # memory never blocks a reply; the next turn reads the same messages again
+                    log.warning("long-term memory capture failed: %s", exc)
             if talk_rounds:
                 await self._talk(session_id, talk_rounds, makes)
                 # The conversation ran ahead of its pictures; wait for them before the chat says it is done,
@@ -1908,6 +2004,7 @@ class AgentService:
             listening=" They are listening to you talk right now and may join in.",
             feelings="\n".join(feeling_lines) or "(none yet)",
             memory="\n\n".join(part for part in (
+                self._memory_text(session),
                 member.get("memory") or "",
                 self._recall_text(session, member["id"], self._recent_text(session)),
             ) if part) or "(nothing older: everything is in the conversation below)",
@@ -2140,9 +2237,16 @@ class AgentService:
         """
         session = self.get_session(session_id)
         faces, without = self._avatars_for(session, list(of))
-        refs = [asset_id for _, asset_id in faces]
-        # Nothing labels a reference for the engine, so the prompt has to: see cast_talk.reference_key.
-        request = cast_talk.reference_key(request, faces, without)
+        identity = self._identity_for(session, list(of))
+        if identity:  # identity pictures (or the avatar when a character has none), labelled per person
+            refs = [asset for _, pictures in identity for asset in pictures][:MAX_ENGINE_REFS]
+            request = self._label_identity(request, identity)
+            if without:
+                request += f"\n\nThere is no reference for {', '.join(without)}; draw them from the description."
+        else:
+            refs = [asset_id for _, asset_id in faces]
+            # Nothing labels a reference for the engine, so the prompt has to: see cast_talk.reference_key.
+            request = cast_talk.reference_key(request, faces, without)
         if without:
             self._note(session_id, f"No avatar for {', '.join(without)}, so "
                        + ("her face was" if len(without) == 1 else "their faces were")
@@ -2398,7 +2502,8 @@ class AgentService:
 
     async def _execute(self, session_id: str, action: dict, asked_by: str = "",
                        subjects: tuple[str, ...] = ()) -> None:
-        name, args = action["tool"], action["args"]
+        name = action["tool"]
+        args = self._with_identity(self.get_session(session_id), action, asked_by, subjects)
         stepped = await self._step_up_engine(session_id, args) if name == "generate_image" else None
         if stepped:
             args = {**args, "engine": stepped}
@@ -2416,7 +2521,7 @@ class AgentService:
                 result = await self._describe_tool(args)
             elif name == "inspect_image":
                 result = await self._inspect_images(session_id, args)
-            elif name in ("set_persona", "set_avatar", "remove_character"):
+            elif name in ("set_persona", "set_avatar", "set_references", "remove_character"):
                 result = self._edit_character(session_id, name, args)
             elif name == "rename_chat":
                 self.update_session(session_id, title=str(args.get("title") or ""))
@@ -2668,7 +2773,7 @@ class AgentService:
             cast.pop(index)
         else:
             if index is None:  # a new speaker joins the chat
-                if tool == "set_avatar":
+                if tool in ("set_avatar", "set_references"):
                     names = ", ".join(display_name(m, i, len(cast)) or "(unnamed lead)" for i, m in enumerate(cast))
                     raise RequestError(f"No character called {speaker!r} (the cast is: {names}); add them with set_persona first.")
                 if not display_name(cast[0], 0, 1):
@@ -2685,12 +2790,15 @@ class AgentService:
                 member["name"] = str(args["name"])
             if tool == "set_persona":
                 member["persona"] = str(args.get("persona") or "")
+            elif tool == "set_references":
+                ids = args.get("asset_ids") or []
+                member["refs"] = [str(a) for a in (ids if isinstance(ids, list) else [ids])]
             else:
                 member["avatar_asset_id"] = str(args.get("asset_id") or "")
         self.update_session(session_id, cast=cast)
         view = self.public(self.get_session(session_id))
-        return {"cast": [{"name": m["display_name"], "avatar_asset_id": m["avatar_asset_id"], "thumb_url": m["avatar_url"]}
-                         for m in view["cast"]]}
+        return {"cast": [{"name": m["display_name"], "avatar_asset_id": m["avatar_asset_id"], "thumb_url": m["avatar_url"],
+                          "refs": m.get("refs") or []} for m in view["cast"]]}
 
     async def _grow(self, session_id: str, notes: list[dict]) -> None:
         """Adaptive chats: add what a character just became (about "self") to its growth notes, or how it now feels
@@ -2828,6 +2936,9 @@ class AgentService:
         elif persona:
             facts.append("You have no avatar yet. When the user asks to see you, generate_image a picture of your persona, "
                          "then set_avatar with it.")
+        if cast_of(session)[0].get("refs"):
+            facts.append("Your identity pictures are attached to every image and video of you automatically: describe "
+                         "the outfit, pose, place and light, never your face or body in words.")
         # Growth is deliberately NOT here. It changes almost every turn, and anything inside the persona block
         # sits near the top of a ~6k prompt that is otherwise identical between calls: one word of growth moving
         # invalidates the provider's cache for everything after it. It goes in the CHARACTER STATE message that
@@ -2841,6 +2952,9 @@ class AgentService:
         for member in view["cast"]:
             face = (f"Avatar: asset {member['avatar_asset_id']}." if member["avatar_url"]
                     else "No avatar yet (when the user asks to see them, generate_image a picture, then set_avatar with speaker).")
+            if member.get("refs"):
+                face += (" Identity pictures attached automatically to every image and video of them: describe outfit, "
+                         "pose and place, never their face or body in words.")
             # Growth and private feelings are not here on purpose: see _state_text. They change nearly every
             # turn in an adaptive chat, and this block is the part of the prompt worth keeping byte-identical.
             people.append(f"- {member['display_name']}: {member['persona'] or 'no persona yet'} {face}")
@@ -2908,6 +3022,237 @@ class AgentService:
             return ""
         return "CHARACTER STATE (the newest part of who they are; it changes as the chat goes on)\n" + "\n".join(blocks)
 
+    # ------------------------------------------------------------ long-term memory
+
+    def _memory_text(self, session: dict) -> str:
+        """Every character's canon and the story so far, for the tail of every prompt."""
+        cast = cast_of(session)
+        blocks: list[str] = []
+        for index, member in enumerate(cast):
+            canon = clean_canon(member.get("canon"))
+            if not canon:
+                continue
+            name = display_name(member, index, len(cast)) or "You"
+            rules = [c for c in canon if c["kind"] == "rule"]
+            rest = [c for c in canon if c["kind"] != "rule"]
+            lines = [f"{name} -- RULES (follow them in every reply and every picture or video):"] if rules else []
+            lines += [f"  - {c['text']}" for c in rules]
+            if rest:
+                lines.append(f"{name} -- lasting changes and facts:")
+                lines += [f"  - {c['text']}" for c in rest]
+            blocks.append("\n".join(lines))
+        story = clean_story(session.get("story"))
+        parts = []
+        if blocks:
+            parts.append("PERMANENT MEMORY (true for the rest of this chat; it overrides anything older, including the "
+                         "summary and the persona, and holds whichever model is answering)\n" + "\n".join(blocks))
+        if story:
+            parts.append("STORY SO FAR (key events, oldest first; stay consistent with every one)\n"
+                         + "\n".join(f"- {beat}" for beat in story))
+        return "\n\n".join(parts)
+
+    def _memory_transcript(self, session: dict) -> tuple[str, int]:
+        """The conversation since the last capture, as plain lines, and the id it reaches."""
+        stored = [m for m in self.store.messages(session["id"], after=session.get("canon_upto", 0))
+                  if m["role"] in ("user", "assistant")]
+        lines = []
+        for m in stored:
+            content = m["content"] if isinstance(m["content"], dict) else {}
+            if m["role"] == "user":
+                kind = "NARRATION" if content.get("narration") else "USER"
+                lines.append(f"{kind}: {content.get('text', '')}")
+            else:
+                spoken = [f"{(line or {}).get('speaker') or 'CHARACTER'}: {(line or {}).get('say') or ''}"
+                          for line in content.get("lines") or []]
+                if not spoken and content.get("say"):
+                    spoken = [f"CHARACTER: {content['say']}"]
+                lines.extend(spoken)
+        text = "\n".join(line for line in lines if line.strip())
+        return text[-MEMORY_WINDOW_CHARS:], (stored[-1]["id"] if stored else 0)
+
+    async def _memory_call(self, session_id: str, session: dict, request: list[dict], purpose: str) -> dict | None:
+        for model in dict.fromkeys((await self.model_for("summary"), await self.model_for("director", session))):
+            try:
+                text, usage = await self.atlas.chat(model, request, json_mode=True, max_tokens=2000, temperature=0.1,
+                                                    max_retries=1, purpose=purpose)
+            except AtlasError as exc:
+                log.warning("%s with %s failed: %s", purpose, model, exc)
+                continue
+            await self._add_usage(session_id, model, usage)
+            parsed = parse_json_object(text or "")
+            if parsed is not None:
+                return parsed
+            log.warning("%s with %s returned no JSON object", purpose, model)
+        return None  # nothing usable: the caller keeps its place and the next turn reads the same messages again
+
+    async def _capture_memory(self, session_id: str) -> bool:
+        """Read what was said since the last capture and add what must never be forgotten to the characters' canon
+        and the story. Runs at the start of a turn, on the summary model, before the director is asked anything --
+        so an instruction like "never wear a saree again" is in the prompt of whichever model answers next, even
+        one the chat fell back to. A failed call leaves canon_upto where it was, so the next turn reads it again."""
+        session = self.get_session(session_id)
+        transcript, upto = self._memory_transcript(session)
+        if not transcript or not upto:
+            return False
+        cast = cast_of(session)
+        names = [display_name(m, i, len(cast)) or "Character" for i, m in enumerate(cast)]
+        numbered: list[tuple[int, int]] = []  # item number -> (member index, canon index)
+        listing = []
+        for index, member in enumerate(cast):
+            canon = clean_canon(member.get("canon"))
+            listing.append(f"{names[index]}:" + ("" if canon else " (nothing yet)"))
+            for position, item in enumerate(canon):
+                numbered.append((index, position))
+                listing.append(f"  {len(numbered)}. [{item['kind']}] {item['text']}")
+        story = clean_story(session.get("story"))
+        recent_story = "\n".join(f"- {beat}" for beat in story[-10:]) or "(none yet)"
+        request = [{"role": "system", "content": MEMORY_PROMPT},
+                   {"role": "user", "content": f"Characters: {', '.join(names)}\n\nCURRENT CANON:\n" + "\n".join(listing)
+                    + f"\n\nSTORY SO FAR (latest):\n{recent_story}\n\nNEW MESSAGES:\n{transcript}"}]
+        data = await self._memory_call(session_id, session, request, "long-term memory")
+        if data is None:
+            return False
+        fresh = self.get_session(session_id)
+        cast = [dict(m) for m in cast_of(fresh)]
+        canons = [clean_canon(m.get("canon")) for m in cast]
+        replaced: set[tuple[int, int]] = set()
+        added: list[tuple[str, str]] = []
+        for item in data.get("canon") or []:
+            if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+                continue
+            who = find_member(cast, str(item.get("speaker") or "")) if item.get("speaker") else None
+            if who is None:
+                if len(cast) > 1:
+                    continue
+                who = 0
+            number = item.get("replaces")
+            if isinstance(number, int) and 1 <= number <= len(numbered):
+                replaced.add(numbered[number - 1])
+            canons[who].append({"text": item["text"], "kind": item.get("kind") or "fact", "at": time.time()})
+            added.append((names[who] if who < len(names) else "", " ".join(str(item["text"]).split())))
+        for index, member in enumerate(cast):
+            kept = [c for position, c in enumerate(canons[index]) if (index, position) not in replaced]
+            member["canon"] = clean_canon(kept)
+        beats = clean_story(story + [b for b in data.get("story") or [] if isinstance(b, str)])
+        fresh["cast"] = cast
+        fresh["story"] = beats
+        fresh["canon_upto"] = max(upto, fresh.get("canon_upto", 0))
+        self.store.save_session(fresh)
+        for name, text in added:
+            self.store.add_message(session_id, "note", {"text": text, "kind": "canon", "speaker": name})
+        if len(beats) > STORY_MAX:
+            await self._fold_story(session_id)
+        return bool(added) or beats != story
+
+    async def _fold_story(self, session_id: str) -> None:
+        """The oldest STORY_FOLD beats into a few denser ones; on failure a hard cap keeps the prompt bounded."""
+        session = self.get_session(session_id)
+        story = clean_story(session.get("story"))
+        old, rest = story[:STORY_FOLD], story[STORY_FOLD:]
+        request = [{"role": "system", "content": STORY_FOLD_PROMPT},
+                   {"role": "user", "content": "\n".join(f"- {beat}" for beat in old)}]
+        data = await self._memory_call(session_id, session, request, "story fold")
+        folded = clean_story((data or {}).get("story"))[:6]
+        fresh = self.get_session(session_id)
+        fresh["story"] = (folded + rest) if folded else story[-STORY_MAX * 2:]
+        self.store.save_session(fresh)
+
+    def memory_view(self, session_id: str) -> dict:
+        session = self.get_session(session_id)
+        cast = cast_of(session)
+        return {"characters": [{"id": m.get("id", ""), "name": display_name(m, i, len(cast)),
+                                "canon": clean_canon(m.get("canon")), "refs": list(m.get("refs") or [])}
+                               for i, m in enumerate(cast)],
+                "story": clean_story(session.get("story")), "captured_upto": session.get("canon_upto", 0)}
+
+    def set_memory(self, session_id: str, *, member: str = "", canon=None, refs=None, story=None,
+                   add: list[str] | None = None) -> dict:
+        """Edit the long-term memory by hand: a character's whole canon, identity pictures or added rules, and the
+        story. member names the character (the lead when empty)."""
+        session = self.get_session(session_id)
+        if canon is not None or refs is not None or add:
+            cast = [dict(m) for m in cast_of(session)]
+            index = find_member(cast, member) if member else 0
+            if index is None:
+                raise RequestError(f"No character called {member!r} in this chat.")
+            if canon is not None:
+                cast[index]["canon"] = [c if isinstance(c, dict) else {"text": c, "kind": "rule"} for c in canon]
+            if add:
+                cast[index]["canon"] = clean_canon(cast[index].get("canon")) + [
+                    {"text": text, "kind": "rule", "at": time.time()} for text in add]
+            if refs is not None:
+                cast[index]["refs"] = refs
+            self.update_session(session_id, cast=cast)
+        if story is not None:
+            fresh = self.get_session(session_id)
+            fresh["story"] = clean_story(story)
+            self.store.save_session(fresh)
+        return self.memory_view(session_id)
+
+    # ------------------------------------------------------------ identity pictures
+
+    def _identity_for(self, session: dict, names: list[str]) -> list[tuple[str, list[str]]]:
+        """(name, pictures) for each named character: their identity pictures, else their avatar."""
+        cast = cast_of(session)
+        found = []
+        for name in names:
+            index = find_member(cast, name)
+            if index is None:
+                continue
+            member = cast[index]
+            pictures = list(member.get("refs") or []) or ([member["avatar_asset_id"]] if member.get("avatar_asset_id") else [])
+            if pictures:
+                found.append((display_name(member, index, len(cast)), pictures))
+        return found
+
+    def _subject_names(self, session: dict, action: dict, asked_by: str, subjects: tuple[str, ...]) -> list[str]:
+        cast = cast_of(session)
+        names = [p["name"] for p in self._attribution(session, action, asked_by, subjects)["of"]]
+        if not names and len(cast) == 1:
+            names = [display_name(cast[0], 0, 1) or "main"]
+        return names
+
+    @staticmethod
+    def _label_identity(prompt: str, identity: list[tuple[str, list[str]]]) -> str:
+        """Say which reference is whose: nothing labels references for an engine except the prompt."""
+        n, parts = 1, []
+        for name, pictures in identity:
+            span = f"<image{n}>" if len(pictures) == 1 else f"<image{n}> to <image{n + len(pictures) - 1}>"
+            parts.append(f"{span} {'is' if len(pictures) == 1 else 'are'} {name}")
+            n += len(pictures)
+        return (prompt.strip() + "\n\n" + "; ".join(parts) + ". Keep each person's face, skin tone, age and body "
+                "exactly as in their own reference pictures; do not restyle them.")
+
+    def _with_identity(self, session: dict, action: dict, asked_by: str = "",
+                       subjects: tuple[str, ...] = ()) -> dict:
+        """The call with its subjects' identity pictures attached, whatever ids the model remembered.
+
+        The model passes one picture at best, often a stale one copied from an earlier turn, and describes the face
+        in words that pull it towards a stock look. The character's own pictures go first, labelled; any other
+        reference the model chose (an outfit, a place) follows."""
+        name, args = action["tool"], dict(action.get("args") or {})
+        if name not in ("generate_image", "make_video", "plan_film"):
+            return args
+        identity = self._identity_for(session, self._subject_names(session, action, asked_by, subjects))
+        if not identity:
+            return args
+        held = [asset for _, pictures in identity for asset in pictures]
+        if name == "generate_image":
+            others = [a for a in (args.get("reference_asset_ids") or []) if a not in held]
+            args["reference_asset_ids"] = (held + others)[:MAX_ENGINE_REFS]
+            args["prompt"] = self._label_identity(str(args.get("prompt") or ""), identity)
+        elif name == "make_video":
+            args["identity_asset_ids"] = held[:3]
+        else:  # plan_film: the planner numbers what it is given, so the pictures are added, never re-ordered
+            references = list(args.get("references") or [])
+            have = {str((r or {}).get("asset_id")) for r in references if isinstance(r, dict)}
+            for person, pictures in identity:
+                for asset in pictures:
+                    if asset not in have:
+                        references.append({"asset_id": asset, "role": "picture", "label": f"{person} identity"})
+            args["references"] = references
+        return args
+
     async def _build_messages(self, session: dict) -> list[dict]:
         system = render_agent_prompt(
             self.service.prompts.get("agent"),
@@ -2942,9 +3287,10 @@ class AgentService:
         history = self._history_messages(session)
         if history and history[0]["role"] == "assistant":
             history.insert(0, {"role": "user", "content": "(continuing the conversation)"})
+        memory = self._memory_text(session)
         state = self._state_text(session)
         recall = self._recall_text(session, "", self._recent_text(session))
-        tail = "\n\n".join(part for part in (state, recall) if part)
+        tail = "\n\n".join(part for part in (memory, state, recall) if part)
         return messages + history + ([{"role": "system", "content": tail}] if tail else [])
 
     async def _maybe_summarize(self, session: dict, force: bool = False) -> bool:

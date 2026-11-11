@@ -206,8 +206,9 @@ class AgentHarness(unittest.IsolatedAsyncioTestCase):
     test file in another module can subclass it without re-running everything in this one."""
 
     async def asyncSetUp(self):
-        self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "MAX_STEPS")}
+        self.saved = {name: getattr(agent_module, name) for name in ("WAIT_POLL_SECONDS", "MAX_STEPS", "MEMORY_CAPTURE")}
         agent_module.WAIT_POLL_SECONDS = 0.05
+        agent_module.MEMORY_CAPTURE = False  # the long-term memory call is off here: many tests count model calls
         self.fake, self.atlas = FakeComfy(), FakeAtlas()
         self.runners = []
         comfy_port, atlas_port, api_port = free_port(), free_port(), free_port()

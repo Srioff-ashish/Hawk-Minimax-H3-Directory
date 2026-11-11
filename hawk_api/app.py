@@ -34,7 +34,7 @@ from .jobs import MODEL_FAMILIES, Conflict, HawkService, NotFound, RequestError,
 from .mcp_server import build_mcp
 from .prompts import PROMPT_NAMES
 from .schemas import (
-    AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
+    AgentMemoryIn, AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
@@ -1044,6 +1044,18 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/agent/sessions/{session_id}/hidden-shots", tags=["agent"])
     async def agent_hidden_shots(session_id: str):
         return agent.hidden_shots(session_id)
+
+    @app.get("/v1/agent/sessions/{session_id}/memory", tags=["agent"])
+    async def agent_memory(session_id: str):
+        """Long-term memory: each character's canon (rules, lasting changes, facts) and identity pictures, and the
+        chat's story so far. Captured automatically every turn and shown to every model that answers."""
+        return agent.memory_view(session_id)
+
+    @app.put("/v1/agent/sessions/{session_id}/memory", tags=["agent"])
+    async def agent_memory_update(session_id: str, body: AgentMemoryIn):
+        """Edit the long-term memory by hand: add rules, replace a character's canon or identity pictures, or the story."""
+        return agent.set_memory(session_id, member=body.member, canon=body.canon, refs=body.refs, story=body.story,
+                                add=body.add)
 
     @app.get("/v1/agent/sessions/{session_id}/graph", tags=["agent"])
     async def agent_graph(session_id: str):

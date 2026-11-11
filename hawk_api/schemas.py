@@ -255,6 +255,18 @@ class CastMemberIn(BaseModel):
     growth: list[str] | None = Field(None, description="How the character has grown in this chat (adaptive chats). Omit to keep; [] resets.")
     feelings: dict[str, list[str]] | None = Field(None, description="Private feelings about the user (key 'user') or another "
                                                   "character (their id), group chats. Omit to keep; {} resets.")
+    canon: list[str | dict] | None = Field(None, description="Permanent memory: rules, lasting changes and facts this "
+                                           "character never forgets (strings are rules). Omit to keep; [] clears.")
+    refs: list[str] | None = Field(None, description="Identity pictures (face first, up to 4), attached to every image "
+                                   "and video of this character. Omit to keep; [] clears.")
+
+
+class AgentMemoryIn(BaseModel):
+    member: str = Field("", description="Which character (name or id); the lead when empty.")
+    canon: list[str | dict] | None = Field(None, description="Replace the character's whole canon (strings are rules).")
+    add: list[str] | None = Field(None, description="Rules to add to the character's canon, keeping what is there.")
+    refs: list[str] | None = Field(None, description="Replace the character's identity pictures (face first, up to 4).")
+    story: list[str] | None = Field(None, description="Replace the chat's story-so-far beats.")
 
 
 class AgentTalkIn(BaseModel):
