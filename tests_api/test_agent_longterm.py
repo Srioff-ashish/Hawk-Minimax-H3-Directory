@@ -157,6 +157,27 @@ class LongTermMemory(AgentHarness):
                          "her own pictures first, labelled, then the reference the model chose")
         self.assertIn("<image1> to <image2> are Rebel", args["prompt"])
 
+    async def test_ids_copied_out_of_prose_are_cleaned(self):
+        # Seen on the pod: the model copied "asset bdad0dffe1b5" from the persona's own wording, and that one
+        # unknown id failed the whole call.
+        face, outfit = await self.upload(), await self.upload()
+        calls = []
+
+        def director(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return json.dumps({"say": "ek second", "done": False, "actions": [{"tool": "generate_image", "args": {
+                    "prompt": "Rebel's evening selfie.",
+                    "reference_asset_ids": [f"asset {face}", f"asset {outfit}", "abcdefabcdef", "not-an-id"]}}]})
+            return json.dumps({"say": "ye lo", "actions": [], "done": True})
+
+        chat = await self.chat(json.dumps({"canon": [], "story": []}), director)
+        await self.http.put(f"/v1/agent/sessions/{chat}/memory", json={"refs": [face]})
+        view = await self.say(chat, "selfie bhejo")
+        tool = next(m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "generate_image")
+        self.assertEqual(tool["content"]["args"]["reference_asset_ids"], [face, outfit],
+                         "her picture once, the real outfit id cleaned, the unknown ids dropped")
+
     async def test_the_agent_can_set_a_characters_pictures(self):
         face = await self.upload()
         calls = []

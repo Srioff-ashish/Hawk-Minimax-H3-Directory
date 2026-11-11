@@ -3238,7 +3238,14 @@ class AgentService:
             return args
         held = [asset for _, pictures in identity for asset in pictures]
         if name == "generate_image":
-            others = [a for a in (args.get("reference_asset_ids") or []) if a not in held]
+            # The model's own ids, cleaned: it copies them out of prose ("asset bdad0dffe1b5") and out of old turns,
+            # and one unknown id fails the whole call. Kept only when they name a real asset not already held.
+            others = []
+            for raw in args.get("reference_asset_ids") or []:
+                found = re.search(r"\b[0-9a-f]{12}\b", str(raw or ""))
+                asset = found.group(0) if found else ""
+                if asset and asset not in held and asset not in others and self.service.store.get_asset(asset):
+                    others.append(asset)
             args["reference_asset_ids"] = (held + others)[:MAX_ENGINE_REFS]
             args["prompt"] = self._label_identity(str(args.get("prompt") or ""), identity)
         elif name == "make_video":
