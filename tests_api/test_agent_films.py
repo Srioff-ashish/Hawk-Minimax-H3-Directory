@@ -74,28 +74,31 @@ class MakeVideo(unittest.IsolatedAsyncioTestCase):
         result = await mcp.call_tool("make_video", args)
         return made.get("request"), result
 
-    async def test_one_look_for_every_shot(self):
+    async def test_it_plans_and_renders_in_one_job(self):
         request, _ = await self.call({"identity_asset_ids": ["face", "body"], "character": "Rebel in a pink skirt.",
                                       "shots": ["She walks into the sea.", "She looks back."],
                                       "look_asset_ids": ["look"], "music_asset_id": "track"})
+        self.assertIsNone(request.script, "the planner writes the segments, not a template")
+        self.assertEqual(request.story.segment_count, 2)
+        self.assertIn("1. She walks into the sea.", request.story.story)
+        self.assertIn("2. She looks back.", request.story.story)
+        self.assertIn("<Picture 3>", request.story.story, "each shot names its look reference")
         self.assertEqual([r.asset_id for r in request.references], ["face", "body", "look"])
-        segments = request.script["segments"]
-        self.assertEqual([s["pictures"] for s in segments], [[1, 2, 3], [1, 2, 3]])
-        self.assertIn("subject_definitions:", segments[0]["prompt"])
-        self.assertIn("not a first frame", segments[0]["prompt"])
+        self.assertIn("shots 1, 2", request.references[2].label)
         self.assertEqual(request.settings.unet_name, POD_UNET)
         self.assertEqual(request.settings.megapixels, 0.6)
         self.assertEqual(request.settings.music_asset_id, "track")
-        self.assertEqual(request.settings.continuity, "off")
+        self.assertEqual(request.settings.continuity, "tail_22", "a scene flows from segment to segment by default")
 
-    async def test_a_look_per_shot_and_no_looks(self):
-        request, _ = await self.call({"identity_asset_ids": ["face"], "character": "Rebel.",
+    async def test_a_look_per_shot_cuts_and_no_looks(self):
+        request, _ = await self.call({"identity_asset_ids": ["face"], "character": "Rebel.", "continuity": "off",
                                       "shots": ["a", "b", "c"], "look_asset_ids": ["l1", "l2", "l1"]})
         self.assertEqual([r.asset_id for r in request.references], ["face", "l1", "l2"])
-        self.assertEqual([s["pictures"] for s in request.script["segments"]], [[1, 2], [1, 3], [1, 2]])
+        self.assertIn("shots 1, 3", request.references[1].label)
+        self.assertEqual(request.settings.continuity, "off")
+        self.assertIn("hard cuts", request.story.story)
         plain, _ = await self.call({"identity_asset_ids": ["face"], "character": "Rebel.", "shots": ["a"]})
-        self.assertEqual(plain.script["segments"][0]["pictures"], [1])
-        self.assertNotIn("look reference", plain.script["segments"][0]["prompt"])
+        self.assertNotIn("look reference", plain.story.story)
 
     async def test_bad_calls_are_refused(self):
         for args in ({"identity_asset_ids": [], "character": "x", "shots": ["a"]},

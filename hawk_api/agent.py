@@ -2520,8 +2520,8 @@ class AgentService:
                 # a model imitates what worked before. Refused here, the model picks the route it should have.
                 raise RequestError(
                     "make_film draws a storyboard and is only for when the user asks for a storyboard, panels or "
-                    "sheets. For this video use plan_film (references: the characters' pictures; story: every beat), "
-                    "wait_for_job, then render_film with plan_job_id -- or make_video for a quick montage reel.")
+                    "sheets. For this video call make_video (identity pictures, a character line with outfits, one "
+                    "line per shot): it plans and renders in one job. Then wait_for_job.")
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
             elif name == "describe_tool":

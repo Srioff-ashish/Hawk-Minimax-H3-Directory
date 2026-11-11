@@ -195,7 +195,7 @@ class LongTermMemory(AgentHarness):
     async def test_a_storyboard_nobody_asked_for_is_refused(self):
         tool = await self.storyboard_attempt("ek video banao beach pe")
         self.assertFalse(tool["ok"])
-        self.assertIn("plan_film", tool["error"], "the refusal names the route to take instead")
+        self.assertIn("make_video", tool["error"], "the refusal names the route to take instead")
 
     async def test_a_storyboard_the_user_asks_for_goes_ahead(self):
         tool = await self.storyboard_attempt("pehle ek storyboard banao")
