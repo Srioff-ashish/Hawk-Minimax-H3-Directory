@@ -5,6 +5,8 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from hawk_api import mcp_server, storyboard
 from hawk_api.schemas import RenderSettings
 
@@ -53,6 +55,56 @@ class MakeFilmDefaults(unittest.IsolatedAsyncioTestCase):
     async def test_no_pod_model_leaves_settings_alone(self):
         got = await self.call({"idea": "x", "identity_asset_ids": ["face1"]}, unet="")
         self.assertIsNone(got["settings"])
+
+
+class MakeVideo(unittest.IsolatedAsyncioTestCase):
+    """The direct route: one render from the reference pictures, no storyboard."""
+
+    async def call(self, args: dict, unet: str = POD_UNET):
+        made = {}
+        service = fake_service(unet)
+
+        async def create_video(request):
+            made["request"] = request
+            return {"id": "job1"}
+
+        service.create_video = create_video
+        service.job_view = lambda job: job
+        mcp = mcp_server.build_mcp(service, boards=None)
+        result = await mcp.call_tool("make_video", args)
+        return made.get("request"), result
+
+    async def test_one_look_for_every_shot(self):
+        request, _ = await self.call({"identity_asset_ids": ["face", "body"], "character": "Rebel in a pink skirt.",
+                                      "shots": ["She walks into the sea.", "She looks back."],
+                                      "look_asset_ids": ["look"], "music_asset_id": "track"})
+        self.assertEqual([r.asset_id for r in request.references], ["face", "body", "look"])
+        segments = request.script["segments"]
+        self.assertEqual([s["pictures"] for s in segments], [[1, 2, 3], [1, 2, 3]])
+        self.assertIn("subject_definitions:", segments[0]["prompt"])
+        self.assertIn("not a first frame", segments[0]["prompt"])
+        self.assertEqual(request.settings.unet_name, POD_UNET)
+        self.assertEqual(request.settings.megapixels, 0.6)
+        self.assertEqual(request.settings.music_asset_id, "track")
+        self.assertEqual(request.settings.continuity, "off")
+
+    async def test_a_look_per_shot_and_no_looks(self):
+        request, _ = await self.call({"identity_asset_ids": ["face"], "character": "Rebel.",
+                                      "shots": ["a", "b", "c"], "look_asset_ids": ["l1", "l2", "l1"]})
+        self.assertEqual([r.asset_id for r in request.references], ["face", "l1", "l2"])
+        self.assertEqual([s["pictures"] for s in request.script["segments"]], [[1, 2], [1, 3], [1, 2]])
+        plain, _ = await self.call({"identity_asset_ids": ["face"], "character": "Rebel.", "shots": ["a"]})
+        self.assertEqual(plain.script["segments"][0]["pictures"], [1])
+        self.assertNotIn("look reference", plain.script["segments"][0]["prompt"])
+
+    async def test_bad_calls_are_refused(self):
+        for args in ({"identity_asset_ids": [], "character": "x", "shots": ["a"]},
+                     {"identity_asset_ids": ["f"], "character": "x", "shots": []},
+                     {"identity_asset_ids": ["f"], "character": "x", "shots": ["a", "b", "c"], "look_asset_ids": ["l1", "l2"]},
+                     {"identity_asset_ids": ["f1", "f2"], "character": "x", "shots": [str(i) for i in range(8)],
+                      "look_asset_ids": [f"l{i}" for i in range(8)]}):
+            with self.assertRaises(ToolError, msg=args):
+                await self.call(args)
 
 
 class FollowSettings(unittest.TestCase):

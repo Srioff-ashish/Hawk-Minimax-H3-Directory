@@ -26,7 +26,7 @@ Typical flow:
 1. References: call upload_page_link and give the user the link to upload images / audio / video from their device, or call add_reference_from_url for a public file URL. Each file gets an asset_id. list_references shows what exists.
    Images the user attaches in this chat do NOT reach the server: you can see them, but you cannot pass them to a tool (upload_image needs the file's bytes, which a chat attachment does not give you). So when the user attaches a picture to edit or to use as a reference, never call generate_image or render_film without it and never claim you used it: call upload_page_link, ask them to upload the same picture there, then call list_references(kind="image", limit=5) -- the newest is theirs -- confirm it by its filename or thumb_url, and pass its asset_id.
 2. Plan: plan_film with a brief and the references. Poll get_job until status is done, show the user the script, and let them edit it. Whenever the video uses reference pictures (any character or face to keep), always plan -- with plan_film, or render_film with story -- even for a dance or music video with no dialogue: the planner writes H3's six-section reference format (subject_definitions, summary, retention_analysis, detailed_description, overall_soundscape, non_diegetic_music), which is what keeps each face tied to its picture. Put the people, their looks and outfits, the action, camera and music in the brief; the planner does the rest.
-   Several shots of one recurring character (a reel, a photoshoot, a dance, an adult scene)? make_film is the one call: name the characters from the library (list_characters; save_character once), give an idea, the platform and the quality -- the shots are written, drawn as $0.018 Seedream Flash sheets, checked, and filmed after the user approves (approve_film). The storyboard_* tools below are its parts, for step-by-step control. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere. The user's own images need no drawing: storyboard_film with panel_asset_ids, or compose_sheet then storyboard_film with sheet_asset_id ($0 for the images).
+   Several shots of one recurring character (a reel, a photoshoot, a dance, an adult scene)? make_video is the one call: the character's identity pictures, a character line with their outfit, one line per shot, and optional look pictures and a music track -- one direct render from the references, no drawing, no image cost. Only when the user asks for a storyboard or panels: make_film -- name the characters from the library (list_characters; save_character once), give an idea, the platform and the quality -- the shots are written, drawn as $0.018 Seedream Flash sheets, checked, and filmed after the user approves (approve_film). The storyboard_* tools below are its parts, for step-by-step control. Up to 40 shots; get_storyboard shows the panels and the film, redo_storyboard_panel fixes one shot ($0.018). For a recurring character, make_identity_pack once gives clean front/back/side/face references to use everywhere. The user's own images need no drawing: storyboard_film with panel_asset_ids, or compose_sheet then storyboard_film with sheet_asset_id ($0 for the images).
 3. Render: render_film with plan_job_id (or the approved, possibly edited script, or story to plan and render in one job). A hand-written script is for clips with no reference pictures, or one already in the six-section format; get_job warns when a script with pictures skips it. Start with settings.megapixels=0.4 for a cheap preview.
 4. Progress: poll get_job every 30-60 seconds; progress.segments_done / segments_total. One job runs at a time: status queued with queue_position N means N-th in line behind the current render. When done, give the user video_url (a signed download link); if drive.view_url is present, also mention the Google Drive copy (faster, and it doesn't go through the tunnel).
 5. If a render failed with resumable=true, retry_job resumes: finished segments are reused.
@@ -334,8 +334,71 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         return service.job_view(job)
 
     @mcp.tool(description=(
-        "THE way to make a multi-shot video (a reel, a photoshoot, a dance, an adult scene, anything with a recurring "
-        "character): who (characters, names from the character library -- or identity_asset_ids), what (an idea, and "
+        "THE way to make a video of a recurring character (a reel, a photoshoot, a dance, a drive, an adult scene): "
+        "one direct render from reference pictures, no storyboard, no sheets, no image cost. identity_asset_ids: the "
+        "people's pictures (face first, then body or full look; up to 3), referred to in character as <Picture 1>, "
+        "<Picture 2>... in that order. character: who is in it and exactly what they wear, e.g. 'Rebel, the 45-year-old "
+        "woman whose face is <Picture 1> and whose figure is <Picture 2>, in a black lace crop top and pink micro skirt'. "
+        "shots: one line per segment, each a concrete action with camera move (where each body is, what the hands do, "
+        "where they look). look_asset_ids (optional): one picture for every shot, or one per shot -- a look reference "
+        "for outfit, setting and light, never a first frame. At most 9 pictures in all. setting: the place, written "
+        "into every shot. music_asset_id: an uploaded track laid under the whole video. Renders on the pod's own model "
+        "at 0.6 MP by default (unet_name / megapixels override). Returns a job; wait_for_job, then give video_url. "
+        "Use make_film only when the user asks for a storyboard or panels."))
+    async def make_video(identity_asset_ids: list[str], character: str, shots: list[str],
+                         look_asset_ids: list[str] | None = None, setting: str = "", title: str = "",
+                         segment_seconds: float = 5.0, aspect_ratio: str = "9:16", music_asset_id: str | None = None,
+                         megapixels: float = 0.6, unet_name: str | None = None) -> dict:
+        identity = [a for a in identity_asset_ids if a]
+        shots = [s.strip() for s in shots if s and s.strip()]
+        looks = [a for a in (look_asset_ids or []) if a]
+        if not 1 <= len(identity) <= 3:
+            raise ToolError("Give 1 to 3 identity pictures (face first).")
+        if not shots:
+            raise ToolError("Give at least one shot.")
+        if looks and len(looks) not in (1, len(shots)):
+            raise ToolError(f"look_asset_ids takes one picture for every shot or one per shot ({len(shots)}).")
+        unique_looks = list(dict.fromkeys(looks))
+        if len(identity) + len(unique_looks) > 9:
+            raise ToolError(f"{len(identity)} identity and {len(unique_looks)} look pictures are more than the 9 a render takes.")
+        references = [ReferenceIn(asset_id=a, role="picture", label=f"identity {n}") for n, a in enumerate(identity, 1)]
+        references += [ReferenceIn(asset_id=a, role="picture", label="look reference") for a in unique_looks]
+        number = {a: len(identity) + n for n, a in enumerate(unique_looks, 1)}
+        ids = ", ".join(f"<Picture {n}>" for n in range(1, len(identity) + 1))
+        seconds = max(1.0, min(float(segment_seconds), max_segment_seconds()))
+        quiet = "kept very low under the music" if music_asset_id else "natural ambience"
+        segments = []
+        for index, shot in enumerate(shots):
+            look = looks[0] if len(looks) == 1 else (looks[index] if looks else None)
+            pics = list(range(1, len(identity) + 1)) + ([number[look]] if look else [])
+            look_line = (f"\n<Picture {number[look]}> is a look reference for this shot: outfit, setting and light only, "
+                         "not a first frame." if look else "")
+            keep_look = (f"\n<Picture {number[look]}>: partially_preserved - outfit, setting and light; not a keyframe."
+                         if look else "")
+            prompt = (f"subject_definitions:\n<Subject 1> is {character.strip()} Their faces and bodies come from {ids}; "
+                      f"keep them exactly, and keep the outfit for the entire segment.{look_line}\n\n"
+                      f"summary:\nreference generation. {title.strip() or 'A video'}: shot {index + 1} of {len(shots)}.\n\n"
+                      f"retention_analysis:\n<Subject 1> (appears in [Shot 1]): fully_preserved - faces and bodies from {ids}."
+                      f"{keep_look}\n\n"
+                      f"detailed_description:\n[Shot 1] {shot}{(' ' + setting.strip()) if setting.strip() else ''}\n\n"
+                      f"overall_soundscape: Main sound: {quiet}. No speech unless the shot gives a line; no other voices.\n\n"
+                      "non_diegetic_music: N/A")
+            segments.append({"title": f"Shot {index + 1}", "duration": seconds, "pictures": pics, "videos": [],
+                             "audios": [], "poses": [], "continuity": "off", "prompt": prompt})
+        model = unet_name or service.render_models.resolve(service.settings.models).unet_name or None
+        settings = RenderSettings(aspect_ratio=aspect_ratio, megapixels=megapixels, continuity="off",
+                                  default_seconds=seconds, unet_name=model, music_asset_id=music_asset_id,
+                                  **({"scene_volume_db": -18.0, "music_volume_db": 0.0} if music_asset_id else {}))
+        try:
+            request = VideoRequest(references=references, settings=settings,
+                                   script={"title": title.strip() or "Video", "style": "", "segments": segments})
+        except ValueError as exc:
+            raise ToolError(str(exc)) from None
+        return service.job_view(await run(service.create_video(request)))
+
+    @mcp.tool(description=(
+        "A storyboarded multi-shot video, only when the user asks for a storyboard or panels (make_video is the "
+        "default for any video of a recurring character): who (characters, names from the character library -- or identity_asset_ids), what (an idea, and "
         "the shots, motions and a mode per shot are written for you; or your own shots, panel_asset_ids or a "
         "sheet_asset_id), where it goes (platform: instagram keeps everyone clothed and checks it; fanvue allows "
         "adult nudity), quality (draft fast, final to post). The engine draws Seedream Flash sheets ($0.018 per 4 "
