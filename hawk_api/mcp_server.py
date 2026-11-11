@@ -340,15 +340,30 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         "sheet_asset_id), where it goes (platform: instagram keeps everyone clothed and checks it; fanvue allows "
         "adult nudity), quality (draft fast, final to post). The engine draws Seedream Flash sheets ($0.018 per 4 "
         "shots, every frame described in full), checks every panel with a vision model and leaves rejects out of the "
-        "video (their segments are built from the identity pictures), then films: frame shots on the "
-        "face-faithful base model, look shots (dancing, positions -- the video model composes them) on the "
-        "action one, joined into one video with one music track (music_prompt composes one, about $0.15). "
+        "video (their segments are built from the identity pictures), then films every shot on the pod's own "
+        "render model (settings.unet_name overrides it). Shots written from an idea are look shots by default: "
+        "the panel guides outfit and setting, and the video model composes the action from the identity pictures "
+        "(pass modes to use a panel as a literal first frame). Everything goes inside the one argument film. "
+        "Joined into one video with one music track (music_prompt composes one, about $0.15). "
         "review ask (default): it stops at status review -- show the user the panels (get_storyboard: panel_views, "
         "checks) and call approve_film; review auto films straight away. Returns the board; poll get_storyboard."))
     async def make_film(film: FilmIn) -> dict:
         if boards is None:
             raise ToolError("Films aren't available on this server.")
-        return await boarded(storyboards.make_film(boards, settings=film.settings, **film.model_dump(exclude={"settings"})))
+        fields = film.model_dump(exclude={"settings"})
+        # One base model for the whole film: the pod's own render model (what the operator chose in Studio),
+        # unless the caller named one. Without this the board splits frame shots onto beta5.
+        settings = film.settings
+        if not (settings and settings.unet_name):
+            pinned = service.render_models.resolve(service.settings.models).unet_name
+            if pinned:
+                settings = (settings.model_copy(update={"unet_name": pinned}) if settings
+                            else RenderSettings(unet_name=pinned, continuity="off"))
+        # Shots written from an idea: every panel is a look reference, never a literal first frame, so the
+        # video model composes the action from the identity pictures.
+        if not film.modes and not film.panel_asset_ids and not film.sheet_asset_id:
+            fields["modes"] = ["look"] * (len(film.shots) if film.shots else film.shot_count)
+        return await boarded(storyboards.make_film(boards, settings=settings, **fields))
 
     @mcp.tool(description="Approve a film stopped at status review (after showing the user its panels): it renders now. Poll get_storyboard.")
     async def approve_film(board_id: str, segment_seconds: float | None = None, mood: str | None = None) -> dict:

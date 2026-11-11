@@ -1517,7 +1517,9 @@ async def make_film(boards: "StoryboardManager", *, characters: list[str] | None
         written = await suggest_shots(service, idea, identity, shot_count, aspect_ratio, character=facts, platform=platform)
         shots, motions, modes = written["shots"], motions or written["motions"], modes or written["modes"]
         style = style or written["style"]
-    follow = {"settings": settings.model_dump() if settings else None, "segment_seconds": segment_seconds,
+    # Only what was asked for: a full dump would mark every field as set when rebuilt, and the quality
+    # preset (draft 0.6 MP / final 0.98 MP) would never apply.
+    follow = {"settings": settings.model_dump(exclude_unset=True) if settings else None, "segment_seconds": segment_seconds,
               "mood": mood, "music": ""}
     board = boards.create(title=title or (idea.strip()[:80] if idea else "Film"),
                           character="" if characters else (facts or (written or {}).get("character", "")),
