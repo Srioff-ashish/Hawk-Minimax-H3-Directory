@@ -1718,7 +1718,8 @@ class HawkService:
 
     #: Reported as the result's "model". Deliberately not "z-image/..." -- that prefix means the Atlas engine
     #: to _text_only_image_model, and a local id must never be mistaken for it.
-    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo"}
+    LOCAL_MODEL_NAMES = {"krea2": "krea2/turbo", "qwen21": "qwen-image/2.1", "zimage": "zimage/turbo",
+                         "ph3": "p-h3-image"}
 
     async def _local_image(self, spec, action: str, prompt: str, sources: list, **kwargs):
         """Run one local engine. Returns its result and the model name to report."""
@@ -1729,6 +1730,12 @@ class HawkService:
                     steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"],
                     wait_seconds=kwargs["wait_seconds"], negative=kwargs["negative"], cfg=kwargs["cfg"])
                 return local, "qwen-image/2.1-edit"
+            if spec.id == "ph3":
+                local = await self.local_images.edit_ph3(
+                    prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
+                    steps=kwargs["steps"], max_adult_loras=kwargs["max_adult_loras"],
+                    wait_seconds=kwargs["wait_seconds"], negative=kwargs["negative"], cfg=kwargs["cfg"])
+                return local, "p-h3-image/edit"
             local = await self.local_images.edit(
                 prompt, sources, size=kwargs["size"], n=kwargs["n"], seed=kwargs["seed"], loras=kwargs["loras"],
                 steps=kwargs["steps"], ref_boost=kwargs["ref_boost"], max_adult_loras=kwargs["max_adult_loras"],

@@ -253,6 +253,17 @@ class Settings:
     zimage_unet: str = "z_image_turbo_nvfp4.safetensors"
     zimage_clip: str = "qwen_3_4b_fp4_mixed.safetensors"
     zimage_vae: str = "z_image_ae.safetensors"
+    #: P-H3-Image (PrunaAI/P-H3-Image-Comfy). Any precision of each file is found when the named one is absent.
+    ph3_unet: str = "p-h3-image_int8_convrot.safetensors"
+    ph3_clip: str = "p-h3-image_text_encoder_int8_convrot.safetensors"
+    ph3_vae: str = "p-h3-image_vae_int8_convrot.safetensors"
+    ph3_upsampler: str = "p-h3-image_prompt_upsampler_bf16.safetensors"
+    #: Without the P-H3-Image model, a MiniMax-H3 FL2VA model plus Pruna's p-h3-image_lora runs it instead.
+    ph3_base_unet: str = "minimax_h3_fl2va_bf16.safetensors"
+    #: Text-to-image size when a request gives none (Pruna: 8 MP is where it works best), and the size an
+    #: edit's first image is scaled to (4 MP in Pruna's edit workflows).
+    ph3_megapixels: float = 8.0
+    ph3_edit_megapixels: float = 4.0
     #: Local Krea 2 text-to-image attaches the go-to adult pair (SNOFS + Mystic XXX) unless the request names its
     #: own adult LoRA. HAWK_KREA_ADULT_DEFAULT=0 turns it off; edits of uploaded photos never get them.
     krea_adult_default: bool = True
@@ -323,6 +334,13 @@ class Settings:
             zimage_unet=_env("HAWK_ZIMAGE_UNET", cls.zimage_unet),
             zimage_clip=_env("HAWK_ZIMAGE_CLIP", cls.zimage_clip),
             zimage_vae=_env("HAWK_ZIMAGE_VAE", cls.zimage_vae),
+            ph3_unet=_env("HAWK_PH3_UNET", cls.ph3_unet),
+            ph3_clip=_env("HAWK_PH3_CLIP", cls.ph3_clip),
+            ph3_vae=_env("HAWK_PH3_VAE", cls.ph3_vae),
+            ph3_upsampler=_env("HAWK_PH3_UPSAMPLER", cls.ph3_upsampler),
+            ph3_base_unet=_env("HAWK_PH3_BASE_UNET", cls.ph3_base_unet),
+            ph3_megapixels=float(_env("HAWK_PH3_MEGAPIXELS", str(cls.ph3_megapixels))),
+            ph3_edit_megapixels=float(_env("HAWK_PH3_EDIT_MEGAPIXELS", str(cls.ph3_edit_megapixels))),
             krea_adult_default=_env("HAWK_KREA_ADULT_DEFAULT", "1") not in ("0", "false", "no", "off"),
             comfy_input_dir=_env("COMFY_INPUT_DIR"),
             comfy_output_dir=_env("COMFY_OUTPUT_DIR"),

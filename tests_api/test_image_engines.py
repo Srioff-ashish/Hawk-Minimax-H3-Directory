@@ -415,3 +415,31 @@ class DefaultNameForms(unittest.TestCase):
         from hawk_api.local_images import _same_lora
         self.assertFalse(_same_lora("lenovo_qwen21.safetensors", "lenovo_krea2"))
         self.assertFalse(_same_lora("lenovo_qwen21.safetensors", ""))
+
+
+class PH3Engine(unittest.TestCase):
+    def test_aliases_and_capabilities(self):
+        for name in ("ph3", "p-h3", "p-h3-image", "pruna"):
+            self.assertEqual(ie.resolve(name), "ph3")
+        spec = ie.get("ph3")
+        self.assertTrue(spec.local and spec.generate and spec.edit and spec.checks)
+        self.assertEqual((spec.max_refs, spec.lora_family), (8, "ph3"))
+
+    def test_family_is_its_own_and_never_the_h3_video_one(self):
+        self.assertEqual(ie.family_of("p-h3-image_lora_bf16.safetensors"), "ph3")
+        self.assertEqual(ie.family_of("ph3_style.safetensors"), "ph3")
+        self.assertEqual(ie.family_of("ph3/anything.safetensors"), "ph3")
+        self.assertEqual(ie.family_of("h3_motion.safetensors"), "h3")
+
+    def test_off_in_both_ladders_until_switched_on(self):
+        self.assertNotIn("ph3", ie.order(ie.DEFAULTS["generate"], "generate"))
+        self.assertNotIn("ph3", ie.order(ie.DEFAULTS["edit"], "edit"))
+        self.assertIn({"engine": "ph3", "enabled": False}, ie.full_order(ie.DEFAULTS["edit"], "edit"))
+
+    def test_upsampler_setting_defaults_on_and_saves(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        store = ie.ImageEngineStore(folder)
+        self.assertTrue(store.ph3_upsampler())
+        self.assertFalse(store.save(ph3_upsampler=False)["ph3_upsampler"])
+        self.assertFalse(ie.ImageEngineStore(folder).ph3_upsampler())

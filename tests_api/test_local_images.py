@@ -242,15 +242,20 @@ class TheLocalModelPatterns(unittest.TestCase):
     LISTING = {
         "diffusion_models": ["krea2_turbo_nvfp4.safetensors", "qwen_image_2.1_int8_convrot.safetensors",
                              "z_image_turbo_nvfp4.safetensors",
-                             "minimax_h3_ref2va_pruned_int8_convrot.safetensors"],
-        "text_encoders": ["qwen3vl_4b_fp8_scaled.safetensors", "qwen3vl_8b_bf16.safetensors",
+                             "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                             "p-h3-image_int8_convrot.safetensors"],
+        "text_encoders": ["p-h3-image_prompt_upsampler_bf16.safetensors",
+                          "p-h3-image_text_encoder_int8_convrot.safetensors",
+                          "qwen3vl_4b_fp8_scaled.safetensors", "qwen3vl_8b_bf16.safetensors",
                           "qwen_3_4b_fp4_mixed.safetensors", "umt5_xxl.safetensors",
                           "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"],
         "vae": ["qwen_image_vae.safetensors", "qwen_image_2.1_vae_bf16.safetensors",
-                "z_image_ae.safetensors",
+                "z_image_ae.safetensors", "p-h3-image_vae_int8_convrot.safetensors",
                 "minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"],
     }
     EXPECTED = {
+        "ph3": ("p-h3-image_int8_convrot.safetensors", "p-h3-image_text_encoder_int8_convrot.safetensors",
+                "p-h3-image_vae_int8_convrot.safetensors"),
         "krea2": ("krea2_turbo_nvfp4.safetensors", "qwen3vl_4b_fp8_scaled.safetensors", "qwen_image_vae.safetensors"),
         "qwen21": ("qwen_image_2.1_int8_convrot.safetensors", "qwen3vl_8b_bf16.safetensors",
                    "qwen_image_2.1_vae_bf16.safetensors"),
@@ -970,3 +975,227 @@ class AReferenceWhoseFileIsGone(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+PH3_FILES = {"unet": "p-h3-image_int8_convrot.safetensors",
+             "clip": "p-h3-image_text_encoder_int8_convrot.safetensors",
+             "vae": "p-h3-image_vae_int8_convrot.safetensors"}
+PH3_UP = "p-h3-image_prompt_upsampler_bf16.safetensors"
+PH3_LORA_FILE = "p-h3-image_lora_bf16.safetensors"
+
+
+class PH3Sizes(unittest.TestCase):
+    def test_no_size_is_pruna_8mp_portrait(self):
+        self.assertEqual(li.ph3_size(None), (2368, 3552))
+
+    def test_other_megapixels_keep_2_3_in_multiples_of_32(self):
+        width, height = li.ph3_size(None, 4.0)
+        self.assertEqual((width % 32, height % 32), (0, 0))
+        self.assertAlmostEqual(width / height, 2 / 3, places=1)
+        self.assertLess(abs(width * height - 4_000_000), 200_000)
+
+    def test_every_recommended_size_passes_untouched(self):
+        for name, (width, height) in li.PH3_SIZES.items():
+            with self.subTest(name=name):
+                self.assertEqual(li.ph3_size(f"{width}x{height}"), (width, height))
+
+    def test_a_small_size_is_kept_not_capped_like_the_other_engines(self):
+        self.assertEqual(li.ph3_size("1024x1536"), (1024, 1536))
+
+    def test_above_8_5_mp_scales_down_keeping_the_aspect(self):
+        width, height = li.ph3_size("4096x4096")
+        self.assertLessEqual(width * height, li.PH3_MAX_PIXELS)
+        self.assertEqual(width, height)
+
+    def test_aspect_names_the_upsampler_knows(self):
+        self.assertEqual(li.ph3_aspect(2368, 3552), "2:3")
+        self.assertEqual(li.ph3_aspect(1920, 1080), "16:9")
+        self.assertEqual(li.ph3_aspect(1000, 1010), "1:1")
+
+    def test_a_bad_size_is_an_error(self):
+        with self.assertRaises(li.LocalImageError):
+            li.ph3_size("big")
+
+
+class PH3Graph(unittest.TestCase):
+    """Text to image, checked against Pruna's p-h3-image_text_to_image.json."""
+
+    def graph(self, **kwargs):
+        args = dict(width=2368, height=3552, seed=7, loras=[], prefix="t", **PH3_FILES)
+        args.update(kwargs)
+        return li.ph3_graph("a ramen shop", **args)
+
+    def test_loaders_shift_and_sampling_match_the_workflow(self):
+        graph = self.graph()
+        self.assertEqual(nodes_of(graph, "CLIPLoader")[0]["inputs"]["type"], "minimax")
+        shift = nodes_of(graph, "MiniMaxH3SigmaShift")[0]["inputs"]
+        self.assertEqual((shift["shift_video"], shift["shift_audio"]), (1.0, 1.0), "not the video shifts of 12 / 3")
+        self.assertEqual(nodes_of(graph, "ManualSigmas")[0]["inputs"]["sigmas"], li.PH3_SIGMAS)
+        self.assertEqual(len(li.PH3_SIGMAS.split(",")), li.PH3_STEPS + 1)
+        self.assertEqual(nodes_of(graph, "KSamplerSelect")[0]["inputs"]["sampler_name"], "euler")
+        self.assertTrue(nodes_of(graph, "BasicGuider"), "no CFG guider, no negative prompt")
+        self.assertFalse(nodes_of(graph, "KSampler"))
+        cond = nodes_of(graph, li.PH3_NODE)[0]["inputs"]
+        self.assertEqual((cond["width"], cond["height"], cond["prompt"]), (2368, 3552, "a ramen shop"))
+        self.assertEqual(graph["7"]["inputs"]["latent_image"], ["4", 1], "the conditioning node supplies the latent")
+
+    def test_without_the_upsampler_there_are_no_text_nodes(self):
+        graph = self.graph()
+        self.assertFalse(nodes_of(graph, "TextGenerate"))
+        self.assertNotIn("pe_show", graph)
+
+    def test_upsampler_gets_the_aspect_line_and_feeds_the_conditioning(self):
+        graph = self.graph(width=3872, height=2176, upsampler={"file": PH3_UP, "mtp": False})
+        up = nodes_of(graph, "TextGenerate")[0]["inputs"]
+        self.assertEqual(up["prompt"], "Aspect ratio: 16:9\nRequest: a ramen shop")
+        self.assertEqual((up["thinking"], up["use_default_template"], up["sampling_mode"]), (True, True, "off"))
+        self.assertNotIn("mtp", up, "only sent to a TextGenerate that declares it")
+        self.assertEqual(graph["up_clip"]["inputs"]["type"], "minimax")
+        self.assertEqual(graph["4"]["inputs"]["prompt"], ["up", 0])
+        self.assertIn("pe_show", graph, "the rewrite has to reach ComfyUI's history to be reported")
+
+    def test_trigger_suffix_rides_after_the_rewrite(self):
+        graph = self.graph(upsampler={"file": PH3_UP, "mtp": True, "suffix": "ohwx"})
+        self.assertEqual(graph["up"]["inputs"]["mtp"], "auto")
+        self.assertEqual(graph["4"]["inputs"]["prompt"], ["up_join", 0])
+
+    def test_lora_mode_bypasses_pruna_lora_onto_the_h3_model_before_the_shift(self):
+        graph = self.graph(unet="minimax_h3_fl2va_bf16.safetensors", base_lora=PH3_LORA_FILE,
+                           loras=[("ph3/style.safetensors", 0.7)])
+        self.assertEqual(graph["bl"]["class_type"], "LoraLoaderBypassModelOnly")
+        self.assertEqual(graph["bl"]["inputs"]["model"], ["1", 0])
+        self.assertEqual(graph["l0"]["inputs"]["model"], ["bl", 0])
+        self.assertEqual(graph["shift"]["inputs"]["model"], ["l0", 0])
+        self.assertEqual(graph["guide"]["inputs"]["model"], ["shift", 0])
+
+
+class PH3EditGraph(unittest.TestCase):
+    """Edits, checked against Pruna's p-h3-image_edit.json."""
+
+    def graph(self, images, **kwargs):
+        args = dict(width=None, height=None, seed=3, loras=[], prefix="t", **PH3_FILES)
+        args.update(kwargs)
+        return li.ph3_edit_graph("Put the hat from <Picture 2> on <Picture 1>.", images=images, **args)
+
+    def test_first_image_is_scaled_to_4mp_and_the_rest_go_in_as_they_are(self):
+        graph = self.graph(["a.png", "b.png", "c.png"])
+        cond = graph["4"]["inputs"]
+        self.assertEqual(cond["images.image_1"], ["s1", 0])
+        self.assertEqual(graph["s1"]["inputs"]["megapixels"], 4.0)
+        self.assertEqual((cond["images.image_2"], cond["images.image_3"]), (["i2", 0], ["i3", 0]))
+        self.assertEqual((cond["width"], cond["height"]), (0, 0), "0 means the size of image_1")
+        self.assertEqual(cond["vae"], ["3", 0])
+
+    def test_a_size_overrides_image_1(self):
+        cond = self.graph(["a.png"], width=2048, height=2048)["4"]["inputs"]
+        self.assertEqual((cond["width"], cond["height"]), (2048, 2048))
+
+    def test_limits(self):
+        with self.assertRaises(li.LocalImageError):
+            self.graph([])
+        with self.assertRaises(li.LocalImageError) as caught:
+            self.graph([f"{i}.png" for i in range(9)])
+        self.assertTrue(caught.exception.fatal)
+
+    def test_upsampler_sees_every_image_in_pruna_template(self):
+        graph = self.graph(["a.png", "b.png", "c.png"], upsampler={"file": PH3_UP, "mtp": False})
+        up = graph["up"]["inputs"]
+        self.assertEqual(up["prompt"].count("<|vision_start|><|image_pad|><|vision_end|>"), 3)
+        self.assertTrue(up["prompt"].startswith("<|im_start|>user\n<Picture 1>: "))
+        self.assertIn("Edit <Picture 1>. Put the hat", up["prompt"])
+        self.assertTrue(up["prompt"].endswith("<|im_start|>assistant\n<think>\n"))
+        self.assertEqual((up["thinking"], up["use_default_template"], up["max_length"]), (False, False, 3072))
+        self.assertEqual(graph["up_first"]["inputs"]["megapixels"], 1.0)
+        batch = graph["up_batch"]["inputs"]
+        self.assertEqual(batch, {"images.image0": ["up_first", 0], "images.image1": ["up_pad1", 0],
+                                 "images.image2": ["up_pad2", 0]})
+        self.assertEqual(graph["up_pad1"]["inputs"]["target_width"], ["up_size", 0])
+
+    def test_qwen_style_tags_become_picture_tags(self):
+        self.assertEqual(li.ph3_edit_prompt("Put <image2> into <image1>, like <Image_3>"),
+                         "Put <Picture 2> into <Picture 1>, like <Picture 3>")
+
+
+class PH3Service(StubService):
+    def __init__(self, data_dir, models, nodes=(li.PH3_NODE, li.PE_NODE)):
+        super().__init__(data_dir, models.get("loras", []))
+        self.settings.ph3_unet, self.settings.ph3_clip, self.settings.ph3_vae = "", "", ""
+        self._models = models
+        nodes = set(nodes)
+
+        class Comfy:
+            async def object_info(self, name):
+                return {"input": {"required": {}, "optional": {}}} if name in nodes else {}
+
+            async def queue_state(self):
+                return [], []
+        self.comfy = Comfy()
+
+    async def available_models(self, folder, refresh=False):
+        return list(self._models.get(folder, []))
+
+
+class PH3StatusAndLoras(unittest.IsolatedAsyncioTestCase):
+    FULL = {"diffusion_models": [PH3_FILES["unet"]], "text_encoders": [PH3_FILES["clip"], PH3_UP],
+            "vae": [PH3_FILES["vae"]], "loras": []}
+
+    def engine(self, models, **kwargs):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        return li.LocalImageEngine(PH3Service(self.dir, models, **kwargs))
+
+    async def test_installed_with_its_own_files(self):
+        status = await self.engine(self.FULL).status("ph3")
+        self.assertTrue(status["installed"], status["missing"])
+        self.assertEqual(status["files"]["clip"], PH3_FILES["clip"], "never the upsampler as the text encoder")
+        self.assertNotIn("lora", status["files"])
+
+    async def test_runs_as_pruna_lora_on_a_stock_h3_when_its_model_is_absent(self):
+        models = dict(self.FULL, diffusion_models=["minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                                                   "minimax_h3_fl2va_bf16.safetensors"],
+                      loras=[PH3_LORA_FILE])
+        status = await self.engine(models).status("ph3")
+        self.assertTrue(status["installed"], status["missing"])
+        self.assertEqual(status["files"]["unet"], "minimax_h3_fl2va_bf16.safetensors", "FL2VA, never ref2va")
+        self.assertEqual(status["files"]["lora"], PH3_LORA_FILE)
+
+    async def test_missing_model_names_both_ways_to_fix_it(self):
+        status = await self.engine(dict(self.FULL, diffusion_models=[])).status("ph3")
+        self.assertFalse(status["installed"])
+        self.assertIn("p-h3-image_lora", status["missing"][0])
+
+    async def test_an_old_comfyui_is_told_which_node(self):
+        status = await self.engine(self.FULL, nodes=()).status("ph3")
+        self.assertFalse(status["installed"])
+        self.assertIn(li.PH3_NODE, status["missing"][0])
+
+    async def test_pruna_lora_is_applied_by_the_engine_not_offered_as_a_choice(self):
+        engine = self.engine(dict(self.FULL, loras=[PH3_LORA_FILE, "ph3_style.safetensors", "ph3/plain.safetensors"]))
+        names = [item.file for item in await engine.catalogue("ph3")]
+        self.assertNotIn(PH3_LORA_FILE, names)
+        self.assertIn("ph3_style.safetensors", names)
+        self.assertIn("ph3/plain.safetensors", names, "a file in models/loras/ph3 is classified by its folder")
+        self.assertIn(PH3_LORA_FILE, await engine.lora_basenames(), "so video renders never offer it")
+
+    async def test_upsampler_is_on_by_default_and_found(self):
+        engine = self.engine(self.FULL)
+        up = await engine._ph3_upsampler("a lamp", "a lamp, ohwx", [])
+        self.assertEqual(up, {"file": PH3_UP, "mtp": False, "suffix": "ohwx"})
+
+    async def test_upsampler_switched_off_or_missing_never_costs_the_image(self):
+        engine = self.engine(dict(self.FULL, text_encoders=[PH3_FILES["clip"]]))
+        warnings = []
+        self.assertIsNone(await engine._ph3_upsampler("x", "x", warnings))
+        self.assertIn("prompt_upsampler", warnings[0])
+        engine.service.image_engines.save(ph3_upsampler=False)
+        warnings = []
+        self.assertIsNone(await engine._ph3_upsampler("x", "x", warnings))
+        self.assertEqual(warnings, [])
+
+    def test_ignored_settings_are_named(self):
+        warnings = []
+        li.LocalImageEngine._ph3_ignored(warnings, 30, "blurry", 3.0)
+        self.assertIn("steps, negative, cfg were ignored", warnings[0])
+        warnings = []
+        li.LocalImageEngine._ph3_ignored(warnings, 8, "", None)
+        self.assertEqual(warnings, [])

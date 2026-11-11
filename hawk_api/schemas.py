@@ -123,7 +123,7 @@ class ImageRequest(BaseModel):
     seed: int | None = Field(None, ge=0)
     engine: str | None = Field(None, description="auto (default: local Qwen Image 2.1 when idle, then "
                                "Krea 2, then Z-Image, then z-image/turbo, then Seedream; with references it starts at Qwen "
-                               "Image 2.1), or one of qwen21, krea2, zimage, local, turbo, seedream, seedream-lite, "
+                               "Image 2.1), or one of qwen21, krea2, zimage, ph3, local, turbo, seedream, seedream-lite, "
                                "nano-banana, nano-banana-pro, nano-banana-lite. 'klein' still resolves, to qwen21. The Nano Banana engines "
                                "(Google) take SFW requests only: an SFW check runs first, and anything it does not pass "
                                "goes to the next engine in the ladder, or fails when one is pinned.")
@@ -198,7 +198,7 @@ class DriveExportSettings(BaseModel):
 
 
 class ImageEngineRung(BaseModel):
-    engine: str = Field(description="Engine id from /v1/images/engines, e.g. qwen21, krea2, zimage, turbo, seedream.")
+    engine: str = Field(description="Engine id from /v1/images/engines, e.g. qwen21, krea2, zimage, ph3, turbo, seedream.")
     enabled: bool = Field(True, description="Off keeps its place in the order but is never tried.")
 
 
@@ -220,8 +220,11 @@ class ImageEngineSettings(BaseModel):
     qwen21_pe: bool | None = Field(
         None, description="Run Qwen Image 2.1's prompt enhancer (a local Qwen3.5-9B) over the prompt first. Slower; "
                           "needs the qwen3.5_9b_qwen_image_2.1_pe_t2i / _pe_i2i files in models/text_encoders.")
+    ph3_upsampler: bool | None = Field(
+        None, description="Run P-H3-Image's prompt upsampler (a local Qwen3.5-9B) over the prompt first. On by "
+                          "default; needs p-h3-image_prompt_upsampler_*.safetensors in models/text_encoders.")
     defaults: dict[str, list[ImageLoraDefault]] | None = Field(
-        None, description='LoRAs a family attaches on its own, keyed by family (krea2, qwen21, zit). An empty list switches them off.')
+        None, description='LoRAs a family attaches on its own, keyed by family (krea2, qwen21, zit, ph3). An empty list switches them off.')
 
 
 class RenderModelSettings(BaseModel):

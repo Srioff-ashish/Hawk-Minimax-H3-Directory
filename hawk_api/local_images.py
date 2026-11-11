@@ -8,8 +8,11 @@ type from one produces nonsense in another rather than an error:
 * **Krea 2 Turbo** -- 8 steps at cfg 1, encoder type "krea2". Edits through Krea 2 Identity
   Edit, which needs the comfyui-krea2edit node pack and takes at most two references.
 * **Z-Image Turbo** -- 8 steps, encoder type "lumina2", through ModelSamplingAuraFlow. No edits.
+* **P-H3-Image** (PrunaAI, built on MiniMax-H3) -- a fixed 8-step sigma grid, no CFG, encoder type "minimax",
+  8 MP text to image. Edits take up to eight images through one PH3ImageConditioning node. An optional prompt
+  upsampler (a Qwen3.5-9B) writes the full prompt from a short request first.
 
-All three share the GPU and the queue with video renders, so ``busy()`` tells callers to use a
+All of them share the GPU and the queue with video renders, so ``busy()`` tells callers to use a
 cloud engine instead of waiting behind a long render.
 """
 
@@ -17,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import shutil
@@ -33,7 +37,7 @@ WAIT_SECONDS = 300.0  # first use loads ~18 GB of weights
 POLL_SECONDS = 1.0
 LORA_KINDS = ("realism", "detail", "style", "adult", "other")
 #: Local engines whose ComfyUI graphs exist.
-WIRED_ENGINES = ("krea2", "qwen21", "zimage")
+WIRED_ENGINES = ("krea2", "qwen21", "zimage", "ph3")
 # Any precision of the three Krea 2 files works (fp8_scaled, bf16, fp16…): the configured name wins,
 # else the first match, higher precision first.
 MODEL_FAMILIES = {
@@ -65,6 +69,14 @@ LOCAL_MODELS: dict[str, dict] = {
                   "vae": ("vae", re.compile(r"z[-_ ]?image.*ae|^ae\.safetensors$", re.IGNORECASE))},
         "configured": {"unet": "zimage_unet", "clip": "zimage_clip", "vae": "zimage_vae"},
     },
+    # Pruna ships every component in bf16, int8_convrot and w4a8 (no w4a8 VAE); any mix works. The text encoder
+    # and the prompt upsampler sit in the same folder under the same prefix, so each pattern names its own part.
+    "ph3": {
+        "files": {"unet": ("diffusion_models", re.compile(r"^p[-_ ]?h3[-_ ]?image[-_ ](?!lora)", re.IGNORECASE)),
+                  "clip": ("text_encoders", re.compile(r"p[-_ ]?h3[-_ ]?image[-_ ]?text[-_ ]?encoder", re.IGNORECASE)),
+                  "vae": ("vae", re.compile(r"p[-_ ]?h3[-_ ]?image[-_ ]?vae", re.IGNORECASE))},
+        "configured": {"unet": "ph3_unet", "clip": "ph3_clip", "vae": "ph3_vae"},
+    },
 }
 #: Qwen Image 2.1's own defaults, from the reference ComfyUI workflows. A LoRA in the catalogue may override
 #: any of them -- the NSFW one wants 25 steps at cfg 1 on er_sde/beta, which is why ImageLora carries a cfg.
@@ -92,6 +104,24 @@ PE_WAIT_SECONDS = 300.0  # on top of WAIT_SECONDS: a thinking pass before the re
 PE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "qwen21_pe")
 ZIMAGE_STEPS = 8
 _PRECISION = ("bf16", "fp16", "fp8", "")
+
+# P-H3-Image (PrunaAI/P-H3-Image-Comfy). Every value here comes from Pruna's own workflows in that repository.
+PH3_NODE = "PH3ImageConditioning"  # core, ComfyUI master from November 2026; nothing renders without it
+PH3_SIGMAS = "1.0, 0.984753, 0.967905, 0.951688, 0.925372, 0.881923, 0.810083, 0.528718, 0.0"  # the 8-step grid
+PH3_STEPS = 8
+PH3_MAX_REFS = 8
+#: Pruna's LoRA that turns a stock MiniMax-H3 FL2VA model into P-H3-Image. Used only when the P-H3-Image
+#: diffusion model itself is not installed; applied through LoraLoaderBypassModelOnly, as in their workflows.
+PH3_LORA = re.compile(r"p[-_ ]?h3[-_ ]?image[-_ ]?lora", re.IGNORECASE)
+PH3_BASE_UNET = re.compile(r"minimax[-_ ]?h3[-_ ]?fl2va", re.IGNORECASE)
+PH3_UPSAMPLER = re.compile(r"p[-_ ]?h3[-_ ]?image[-_ ]?prompt[-_ ]?upsampler", re.IGNORECASE)
+PH3_UPSAMPLER_LENGTH = {"t2i": 2048, "edit": 3072}
+#: The 8 MP sizes Pruna recommends, by the aspect-ratio names the upsampler understands.
+PH3_SIZES = {"1:1": (2912, 2912), "4:3": (3360, 2496), "3:4": (2496, 3360), "3:2": (3552, 2368),
+             "2:3": (2368, 3552), "16:9": (3872, 2176), "9:16": (2176, 3872)}
+PH3_MAX_PIXELS = 8_500_000  # a little over the 8 MP sizes, so all of them pass untouched
+PH3_EDIT_MEGAPIXELS = 4.0  # Pruna scales the image being edited to 4 MP; the edit comes out at that size
+_IMAGE_TAG = re.compile(r"<\s*(?:image|picture|pic|img)\s*_?\s*(\d+)\s*>", re.IGNORECASE)
 
 # Krea 2 Identity Edit (conradlocke/krea2-identity-edit): a LoRA plus the comfyui-krea2edit node pack,
 # which feeds the reference image in as context tokens and grounds the text encoder on it.
@@ -482,6 +512,168 @@ def zimage_graph(prompt: str, *, width: int, height: int, n: int, seed: int, lor
     return graph
 
 
+def ph3_aspect(width: int, height: int) -> str:
+    """The upsampler's aspect-ratio name nearest to this size (it only knows the seven Pruna lists)."""
+    want = math.log(max(1, width) / max(1, height))
+    return min(PH3_SIZES, key=lambda name: abs(math.log(PH3_SIZES[name][0] / PH3_SIZES[name][1]) - want))
+
+
+def ph3_size(size: str | None, megapixels: float = 8.0) -> tuple[int, int]:
+    """Output size for P-H3-Image text to image.
+
+    No size: portrait 2:3 at ``megapixels`` (Pruna's 8 MP table at the default). A size is honoured, snapped to
+    multiples of 32 and scaled down only when it is above about 8.5 MP -- unlike parse_size, which caps sides at
+    2048 for the other engines: this model is made for 8 MP.
+    """
+    if not size:
+        if abs(megapixels - 8.0) < 1e-6:
+            return PH3_SIZES["2:3"]
+        width, height, target = 2, 3, megapixels * 1_000_000
+    else:
+        match = re.fullmatch(r"\s*(\d+)\s*[x*×]\s*(\d+)\s*", size)
+        if not match:
+            raise LocalImageError(f"size {size!r} should look like 2368x3552.")
+        width, height = (max(1, int(v)) for v in match.groups())
+        target = min(width * height, PH3_MAX_PIXELS)
+    scale = (target / (width * height)) ** 0.5
+    return tuple(max(512, min(4096, round(v * scale / 32) * 32)) for v in (width, height))
+
+
+def ph3_edit_prompt(prompt: str) -> str:
+    """Reference tags in the form P-H3-Image was trained on: <Picture 1>, <Picture 2>...
+
+    The agent writes <image1> for Qwen Image 2.1; the same request on this engine should not lose its references
+    to a spelling difference.
+    """
+    return _IMAGE_TAG.sub(lambda m: f"<Picture {int(m.group(1))}>", prompt)
+
+
+def _ph3_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]],
+              base_lora: str | None = None) -> tuple[dict, list]:
+    """Loaders, LoRAs and the sigma shift shared by both P-H3-Image graphs.
+
+    ``base_lora`` is Pruna's LoRA for running P-H3-Image on a stock MiniMax-H3 FL2VA model (``unet`` is then
+    that model). It goes on in bypass mode first, as in Pruna's LoRA workflows; LoRAs the request asked for
+    follow. Both shifts are 1.0 -- not the video defaults of 12 and 3.
+    """
+    graph: dict = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": unet, "weight_dtype": "default"}},
+        "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "minimax", "device": "default"}},
+        "3": {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+    }
+    model = ["1", 0]
+    if base_lora:
+        graph["bl"] = {"class_type": "LoraLoaderBypassModelOnly",
+                       "inputs": {"model": model, "lora_name": base_lora, "strength_model": 1.0}}
+        model = ["bl", 0]
+    for index, (name, strength) in enumerate(loras):
+        node = f"l{index}"
+        graph[node] = {"class_type": "LoraLoaderModelOnly", "inputs": {"model": model, "lora_name": name, "strength_model": strength}}
+        model = [node, 0]
+    graph["shift"] = {"class_type": "MiniMaxH3SigmaShift", "inputs": {"model": model, "shift_video": 1.0, "shift_audio": 1.0}}
+    return graph, ["shift", 0]
+
+
+def _ph3_sample(graph: dict, model: list, seed: int, prefix: str) -> None:
+    """Sampling as Pruna wires it: ManualSigmas on the 8-step grid, BasicGuider (no CFG, no negative), euler.
+    The conditioning node "4" supplies both the conditioning and the latent."""
+    graph.update({
+        "sig": {"class_type": "ManualSigmas", "inputs": {"sigmas": PH3_SIGMAS}},
+        "guide": {"class_type": "BasicGuider", "inputs": {"model": model, "conditioning": ["4", 0]}},
+        "ks": {"class_type": "KSamplerSelect", "inputs": {"sampler_name": "euler"}},
+        "noise": {"class_type": "RandomNoise", "inputs": {"noise_seed": seed % 0xffffffffffffffff}},
+        "7": {"class_type": "SamplerCustomAdvanced", "inputs": {
+            "noise": ["noise", 0], "guider": ["guide", 0], "sampler": ["ks", 0], "sigmas": ["sig", 0],
+            "latent_image": ["4", 1]}},
+        "8": {"class_type": "VAEDecode", "inputs": {"samples": ["7", 0], "vae": ["3", 0]}},
+        "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": prefix}},
+    })
+
+
+def _ph3_upsampler_nodes(graph: dict, request: str, up: dict, images: list | None = None) -> list:
+    """Add Pruna's prompt upsampler and return the link to the prompt it writes.
+
+    ``up`` is ``{"file", "mtp"}`` plus an optional ``suffix`` (LoRA triggers, joined on after the rewrite so it
+    cannot paraphrase them away). Greedy decoding (sampling_mode "off"), so the same request always gives the
+    same prompt and ComfyUI's cache runs it once for every take of an edit.
+
+    Text to image: "Aspect ratio: W:H" and "Request: ..." on two lines, with the default chat template and
+    thinking on. Edits: Pruna's raw template with one <Picture N> block per image and thinking opened by the
+    template itself, and the images batched -- image_1 at 1 MP, the others padded to its size.
+    """
+    graph["up_clip"] = {"class_type": "CLIPLoader", "inputs": {"clip_name": up["file"], "type": "minimax", "device": "default"}}
+    inputs = {"clip": ["up_clip", 0], "prompt": request, "sampling_mode": "off"}
+    if images:
+        blocks = "".join(f"<Picture {i}>: <|vision_start|><|image_pad|><|vision_end|>" for i in range(1, len(images) + 1))
+        inputs.update(prompt=f"<|im_start|>user\n{blocks}Edit <Picture 1>. {request}<|im_end|>\n<|im_start|>assistant\n<think>\n",
+                      max_length=PH3_UPSAMPLER_LENGTH["edit"], thinking=False, use_default_template=False)
+        graph["up_first"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+            "image": images[0], "upscale_method": "lanczos", "megapixels": 1.0, "resolution_steps": 1}}
+        graph["up_size"] = {"class_type": "GetImageSize", "inputs": {"image": ["up_first", 0]}}
+        batch = {"images.image0": ["up_first", 0]}
+        for index, ref in enumerate(images[1:], start=1):
+            graph[f"up_pad{index}"] = {"class_type": "ResizeAndPadImage", "inputs": {
+                "image": ref, "target_width": ["up_size", 0], "target_height": ["up_size", 1],
+                "padding_color": "white", "interpolation": "lanczos"}}
+            batch[f"images.image{index}"] = [f"up_pad{index}", 0]
+        graph["up_batch"] = {"class_type": "BatchImagesNode", "inputs": batch}
+        inputs["image"] = ["up_batch", 0]
+    else:
+        inputs.update(max_length=PH3_UPSAMPLER_LENGTH["t2i"], thinking=True, use_default_template=True)
+    if up.get("mtp"):
+        inputs["mtp"] = "auto"  # only on a TextGenerate that has the input: an unknown keyword fails at run time
+    graph["up"] = {"class_type": "TextGenerate", "inputs": inputs}
+    text = ["up", 0]
+    if up.get("suffix"):
+        graph["up_join"] = {"class_type": "StringConcatenate", "inputs": {"string_a": text, "string_b": up["suffix"], "delimiter": ", "}}
+        text = ["up_join", 0]
+    graph["pe_show"] = {"class_type": "PreviewAny", "inputs": {"source": text}}  # read back by _collect
+    return text
+
+
+def ph3_graph(prompt: str, *, width: int, height: int, seed: int, loras: list[tuple[str, float]],
+              unet: str, clip: str, vae: str, prefix: str, base_lora: str | None = None,
+              upsampler: dict | None = None) -> dict:
+    """P-H3-Image text to image, wired like Pruna's p-h3-image_text_to_image.json (and _lora_ with base_lora)."""
+    graph, model = _ph3_base(unet, clip, vae, loras, base_lora)
+    text = (_ph3_upsampler_nodes(graph, f"Aspect ratio: {ph3_aspect(width, height)}\nRequest: {prompt}", upsampler)
+            if upsampler else prompt)
+    graph["4"] = {"class_type": PH3_NODE, "inputs": {"clip": ["2", 0], "prompt": text, "width": width, "height": height}}
+    _ph3_sample(graph, model, seed, prefix)
+    return graph
+
+
+def ph3_edit_graph(prompt: str, *, images: list[str], width: int | None, height: int | None, seed: int,
+                   loras: list[tuple[str, float]], unet: str, clip: str, vae: str, prefix: str,
+                   base_lora: str | None = None, upsampler: dict | None = None,
+                   megapixels: float = PH3_EDIT_MEGAPIXELS) -> dict:
+    """P-H3-Image edit, wired like Pruna's p-h3-image_edit.json.
+
+    image_1 is the picture being edited, scaled to ``megapixels`` (4 by default); the edit comes out at its
+    size unless a width and height are given. Up to seven more images are references, passed as they are
+    (the node scales anything above about 8 MP down itself).
+    """
+    if not images:
+        raise LocalImageError("P-H3-Image edit needs at least one image.", fatal=True)
+    if len(images) > PH3_MAX_REFS:
+        raise LocalImageError(f"P-H3-Image edit takes at most {PH3_MAX_REFS} images; {len(images)} were given.", fatal=True)
+    graph, model = _ph3_base(unet, clip, vae, loras, base_lora)
+    for index, path in enumerate(images, start=1):
+        graph[f"i{index}"] = {"class_type": "LoadImage", "inputs": {"image": path}}
+    text = (_ph3_upsampler_nodes(graph, prompt, upsampler, images=[[f"i{i}", 0] for i in range(1, len(images) + 1)])
+            if upsampler else prompt)
+    graph["s1"] = {"class_type": "ImageScaleToTotalPixels", "inputs": {
+        "image": ["i1", 0], "upscale_method": "lanczos", "megapixels": float(megapixels), "resolution_steps": 32}}
+    encode = {"clip": ["2", 0], "vae": ["3", 0], "prompt": text, "width": width or 0, "height": height or 0,
+              # Autogrow input: the slots are namespaced "images.image_N", as on TextEncodeQwenImage21
+              "images.image_1": ["s1", 0]}
+    for index in range(2, len(images) + 1):
+        encode[f"images.image_{index}"] = [f"i{index}", 0]
+    graph["4"] = {"class_type": PH3_NODE, "inputs": encode}
+    _ph3_sample(graph, model, seed, prefix)
+    return graph
+
+
 def _qwen21_base(unet: str, clip: str, vae: str, loras: list[tuple[str, float]], cache: bool = False) -> tuple[dict, list]:
     """Loaders and the LoRA chain shared by both Qwen Image 2.1 graphs.
 
@@ -645,6 +837,8 @@ class LocalImageEngine:
                     files[key] = found
                 else:
                     missing.append(f"{folder}/{name}")
+            if engine == "ph3":
+                missing = await self._ph3_status(files, missing, listing["diffusion_models"])
             busy, queue = await self.busy()
             reachable = True
         except Exception as exc:  # ComfyUI down
@@ -655,6 +849,27 @@ class LocalImageEngine:
                 "edit": await self.edit_status(engine),
                 # each engine lists its own family's LoRAs; loading another family's makes a worse image, not an error
                 "loras": [lora.view() for lora in await self.catalogue(family)]}
+
+    async def _ph3_status(self, files: dict, missing: list[str], unets: list[str]) -> list[str]:
+        """P-H3-Image's extra requirements; returns the missing list to report.
+
+        Without its own diffusion model it still runs as Pruna's LoRA on a stock MiniMax-H3 FL2VA model, when
+        both are on the pod (``files["lora"]`` then names the LoRA). And it needs PH3ImageConditioning, which
+        only recent ComfyUI has -- checked once the files are all there, so a pod without them makes no call.
+        """
+        if "unet" not in files:
+            base = pick_model(getattr(self.settings, "ph3_base_unet", ""), unets, PH3_BASE_UNET)
+            lora = next((f for f in await self.service.available_models("loras")
+                         if PH3_LORA.search(f.rsplit("/", 1)[-1])), None)
+            if base and lora:
+                files.update(unet=base, lora=lora)
+                missing = [m for m in missing if not m.startswith("diffusion_models/")]
+            else:
+                missing = [m + " (or minimax_h3_fl2va + loras/p-h3-image_lora_bf16.safetensors)"
+                           if m.startswith("diffusion_models/") else m for m in missing]
+        if not missing and not await self.service.comfy.object_info(PH3_NODE):
+            missing.append(f"core node {PH3_NODE} (update ComfyUI to the latest master)")
+        return missing
 
     async def statuses(self) -> dict:
         """Every local engine's status, keyed by engine id."""
@@ -733,7 +948,8 @@ class LocalImageEngine:
             # The whole path, not the base: a file in models/loras/qwen21 is a Qwen 2.1 LoRA even when its own
             # name says nothing, which is the point of downloading into a folder named after the family.
             found = image_engines.family_of(name)
-            if base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base):
+            if (base not in known and found in image_engines.IMAGE_FAMILIES and not EDIT_LORA.search(base)
+                    and not PH3_LORA.search(base)):
                 items.append(ImageLora(file=name, kind=guess_kind(base), label=base, installed=True, family=found))
         return [item for item in items if not family or item.family == family]
 
@@ -743,10 +959,13 @@ class LocalImageEngine:
         Includes the Krea 2 Identity Edit LoRA, which the catalogue leaves out because edit() applies it itself.
         """
         names = {item.file.rsplit("/", 1)[-1].lower() for item in await self.catalogue(family) if item.installed}
-        if family and family != "krea2":
+        if family and family not in ("krea2", "ph3"):
             return names
+        # the LoRAs an engine applies itself: Krea 2's identity edit and Pruna's P-H3-Image-on-H3 LoRA
+        own = {"krea2": (EDIT_LORA,), "ph3": (PH3_LORA,)}.get(family, (EDIT_LORA, PH3_LORA))
         files = await self.service.available_models("loras")
-        return names | {f.rsplit("/", 1)[-1].lower() for f in files if EDIT_LORA.search(f.rsplit("/", 1)[-1])}
+        return names | {f.rsplit("/", 1)[-1].lower() for f in files
+                        if any(p.search(f.rsplit("/", 1)[-1]) for p in own)}
 
     async def families_for_loras(self, names: list[str]) -> set[str]:
         """The LoRA families whose installed files cover every one of these names.
@@ -942,6 +1161,10 @@ class LocalImageEngine:
         seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
         batch = max(1, min(4, n))
         started = time.monotonic()
+        if engine == "ph3":
+            return await self._generate_ph3(prompt, text, size=size, n=n, seed=seed, chosen=chosen, files=files,
+                                            warnings=warnings, steps=steps, negative=negative, cfg=cfg,
+                                            started=started)
         pe = await self._pe("t2i", prompt, text, warnings) if engine == "qwen21" else None
         if engine == "qwen21":
             graph = qwen21_graph(prompt if pe else text, width=width, height=height, n=batch, seed=seed, loras=chosen,
@@ -972,6 +1195,91 @@ class LocalImageEngine:
         images = await self._submit(graph, spec.label, WAIT_SECONDS + (PE_WAIT_SECONDS if pe else 0), texts)
         return LocalResult(images, [{"file": f, "strength": v} for f, v in chosen], round(time.monotonic() - started, 1),
                            warnings, enhanced_prompt=texts[0] if texts else "")
+
+    async def _ph3_upsampler(self, prompt: str, text: str, warnings: list[str]) -> dict | None:
+        """P-H3-Image's prompt upsampler for this image, or None to send the prompt as written.
+
+        On unless switched off in Studio. A missing file or node is a warning, never a failure.
+        """
+        store = getattr(self.service, "image_engines", None)
+        if store is None or not store.ph3_upsampler():
+            return None
+        files = await self.service.available_models("text_encoders")
+        found = pick_model(getattr(self.settings, "ph3_upsampler", ""), files, PH3_UPSAMPLER)
+        if not found:
+            warnings.append("P-H3-Image's prompt upsampler is on, but p-h3-image_prompt_upsampler_*.safetensors is "
+                            "not in models/text_encoders, so this image was made from the prompt as written.")
+            return None
+        info = await self.service.comfy.object_info(PE_NODE)
+        if not info:
+            warnings.append(f"P-H3-Image's prompt upsampler is on, but this ComfyUI has no {PE_NODE} node "
+                            "(update ComfyUI), so this image was made from the prompt as written.")
+            return None
+        declared = {**(info.get("input") or {}).get("required", {}), **(info.get("input") or {}).get("optional", {})}
+        return {"file": found, "mtp": "mtp" in declared, "suffix": text.strip()[len(prompt.strip()):].lstrip(", ")}
+
+    @staticmethod
+    def _ph3_ignored(warnings: list[str], steps, negative: str, cfg) -> None:
+        """Say which settings P-H3-Image does not take, rather than dropping them silently."""
+        ignored = [name for name, given in (("steps", steps and steps != PH3_STEPS), ("negative", negative.strip()),
+                                            ("cfg", cfg is not None and cfg != 1.0)) if given]
+        if ignored:
+            warnings.append(f"P-H3-Image samples on its fixed {PH3_STEPS}-step grid without CFG or a negative "
+                            f"prompt, so {', '.join(ignored)} {'was' if len(ignored) == 1 else 'were'} ignored.")
+
+    async def _generate_ph3(self, prompt: str, text: str, *, size, n, seed, chosen, files, warnings, steps,
+                            negative, cfg, started) -> LocalResult:
+        """P-H3-Image text to image: one image per prompt (the conditioning node sizes a single latent), so a
+        batch is a run of takes on consecutive seeds, sharing one upsampler pass through ComfyUI's cache."""
+        self._ph3_ignored(warnings, steps, negative, cfg)
+        width, height = ph3_size(size, float(getattr(self.settings, "ph3_megapixels", 8.0) or 8.0))
+        up = await self._ph3_upsampler(prompt, text, warnings)
+        images, texts = [], []
+        for index in range(max(1, min(4, n))):
+            graph = ph3_graph(prompt if up else text, width=width, height=height, seed=seed + index, loras=chosen,
+                              unet=files["unet"], clip=files["clip"], vae=files["vae"], prefix="hawk_images/ph3",
+                              base_lora=files.get("lora"), upsampler=up)
+            images += await self._submit(graph, "P-H3-Image", WAIT_SECONDS + (PE_WAIT_SECONDS if up else 0), texts)
+        applied = ([{"file": files["lora"], "strength": 1.0}] if files.get("lora") else []) + \
+                  [{"file": f, "strength": v} for f, v in chosen]
+        return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings,
+                           enhanced_prompt=texts[0] if texts else "")
+
+    async def edit_ph3(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
+                       seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,
+                       max_adult_loras: int = MAX_ADULT_LORAS, wait_seconds: float = 0.0,
+                       negative: str = "", cfg: float | None = None) -> LocalResult:
+        """P-H3-Image edit: the first source is the picture being edited, up to seven more are references.
+
+        Refer to them as <Picture 1>, <Picture 2>...; <image1>-style tags are rewritten to that form.
+        """
+        check_prompt(prompt)
+        status = await self.status("ph3")
+        await self._ready(status, "ph3", "edit", wait_seconds=wait_seconds)
+        photo = any(from_upload(asset, self.service.store.lineage) for asset in sources)
+        chosen, used, warnings = await self.resolve_loras(loras, max(1, min(MAX_ADULT_LORAS, max_adult_loras)),
+                                                          adult_default=self.adult_default and not photo, family="ph3")
+        check_edit(prompt, sources, used, self.service.store.lineage)
+        self._ph3_ignored(warnings, steps, negative, cfg)
+        request = ph3_edit_prompt(prompt)
+        text = self._with_triggers(request, used)
+        width, height = ph3_size(size) if size else (None, None)
+        files = status["files"]
+        seed = seed if seed is not None else int.from_bytes(os.urandom(6), "big")
+        paths = await self._reference_paths(sources)
+        up = await self._ph3_upsampler(request, text, warnings)
+        megapixels = float(getattr(self.settings, "ph3_edit_megapixels", PH3_EDIT_MEGAPIXELS) or PH3_EDIT_MEGAPIXELS)
+        started, images, texts = time.monotonic(), [], []
+        for index in range(max(1, min(4, n))):
+            graph = ph3_edit_graph(request if up else text, images=paths, width=width, height=height,
+                                   seed=seed + index, loras=chosen, unet=files["unet"], clip=files["clip"],
+                                   vae=files["vae"], prefix="hawk_images/ph3_edit", base_lora=files.get("lora"),
+                                   upsampler=up, megapixels=megapixels)
+            images += await self._submit(graph, "P-H3-Image edit", WAIT_SECONDS + (PE_WAIT_SECONDS if up else 0), texts)
+        applied = ([{"file": files["lora"], "strength": 1.0}] if files.get("lora") else []) + \
+                  [{"file": f, "strength": v} for f, v in chosen]
+        return LocalResult(images, applied, round(time.monotonic() - started, 1), warnings,
+                           enhanced_prompt=texts[0] if texts else "")
 
     async def edit_qwen21(self, prompt: str, sources: list[dict], *, size: str | None = None, n: int = 1,
                           seed: int | None = None, loras: list[dict] | None = None, steps: int | None = None,

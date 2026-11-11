@@ -93,6 +93,12 @@ ENGINES: dict[str, ImageEngine] = {
         id="zimage", label="Z-Image Turbo", where="local", generate=True, edit=False, max_refs=0,
         lora_family="zit", checks=True, tag="zimage",
     ),
+    # PrunaAI's P-H3-Image: an image model built on MiniMax-H3. 8 steps, no CFG, 8 MP text to image, and edits
+    # that take up to 8 images through one PH3ImageConditioning node. Core ComfyUI nodes only.
+    "ph3": ImageEngine(
+        id="ph3", label="P-H3-Image", where="local", generate=True, edit=True, max_refs=8,
+        lora_family="ph3", checks=True, tag="ph3", edit_tag="ph3-edit",
+    ),
     "turbo": ImageEngine(
         id="turbo", label="z-image/turbo (Atlas)", where="atlas", generate=True, edit=False, max_refs=0,
         lora_family="", checks=False, atlas_model=IMAGE_FAST_MODEL, price_key="z-image", tag="z-image",
@@ -143,6 +149,7 @@ ALIASES = {
     # before the swap still resolve; MOVED says so out loud rather than letting it look like Klein ran.
     "klein": "qwen21", "flux": "qwen21", "flux2": "qwen21", "flux-2": "qwen21",
     "z-image": "zimage", "zimage": "zimage", "zit": "zimage", "z-image-local": "zimage",
+    "ph3": "ph3", "p-h3": "ph3", "p-h3-image": "ph3", "ph3-image": "ph3", "h3-image": "ph3", "pruna": "ph3",
     "turbo": "turbo", "fast": "turbo", "cheap": "turbo", "z-image-turbo": "turbo", "z-image/turbo": "turbo",
     "seedream": "seedream", "quality": "seedream", "best": "seedream",
     "seedream-lite": "seedream-lite", "lite": "seedream-lite",
@@ -176,6 +183,9 @@ LORA_FAMILIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "qwen21": ("Qwen Image 2.1", ("qwen21_", "qwen_image_2.1", "qwen-image-2.1", "qwen2.1", "qwen image2.1",
                                   "lenovo_qwen21", "pornmaster_qi2.1", "elusarcas-qwen2-1")),
     "zit": ("Z-Image Turbo", ("zit_",)),
+    # "p-h3-image" also starts Pruna's own LoRA for running P-H3-Image on a stock MiniMax-H3; local_images
+    # keeps that one out of the catalogue (PH3_LORA) and applies it itself, like Krea 2's identity-edit LoRA.
+    "ph3": ("P-H3-Image", ("ph3_", "p-h3-image", "p_h3_image")),
 }
 
 #: Mirrors local_images.DEFAULT_ADULT_LORAS so view() can show what a family falls back to. Kept here as
@@ -204,7 +214,7 @@ BASE_LORA_UPGRADES: dict[str, tuple[str, ...]] = {
 }
 
 #: The families that belong to images; everything else is a video LoRA.
-IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit"})
+IMAGE_FAMILIES = frozenset({"krea2", "qwen21", "zit", "ph3"})
 
 #: Tags written before engines had ids, so an asset made by an older build can still be traced back.
 _TAG_IDS = {"krea2": "krea2", "krea2-edit": "krea2", "z-image": "turbo", "seedream": "seedream", "atlas": "seedream",
@@ -230,6 +240,7 @@ FAMILY_FOLDERS: dict[str, tuple[str, ...]] = {
     # "qwen2.1角色卡-4.safetensors" -- gets classified without being renamed first.
     "qwen21": ("qwen-image-2.1", "qwen_image_2.1", "qwenimage21", "qwen2.1", "qwen"),
     "zit": ("zimage", "z_image", "z-image"),
+    "ph3": ("p-h3-image", "p_h3_image", "p-h3"),
 }
 
 
@@ -321,6 +332,8 @@ DEFAULTS = {
         {"engine": "qwen21", "enabled": True},
         {"engine": "krea2", "enabled": True},
         {"engine": "zimage", "enabled": True},
+        # Off until switched on in Studio (or named with engine "ph3"): its smallest set is a 20 GB download.
+        {"engine": "ph3", "enabled": False},
         # below all three local engines, so it only ever fires when none of them can run -- and then it is
         # a third of Seedream's price for the same job
         {"engine": "turbo", "enabled": True},
@@ -335,6 +348,7 @@ DEFAULTS = {
     "edit": [
         {"engine": "qwen21", "enabled": True},  # 16 references, so a group shot no longer falls onto paid Seedream
         {"engine": "krea2", "enabled": True},
+        {"engine": "ph3", "enabled": False},  # up to 8 references
         {"engine": "seedream", "enabled": True},
         {"engine": "seedream-lite", "enabled": False},
         {"engine": "seedream-flash", "enabled": False},
@@ -351,6 +365,9 @@ DEFAULTS = {
     #: it. Off by default: it is on trial, costs a thinking pass per image, and the agent already writes
     #: prompts in the shape the enhancer produces.
     "qwen21_pe": False,
+    #: P-H3-Image's prompt upsampler (a Qwen3.5-9B from Pruna) turns a short request into the full prompt the
+    #: model renders well. On by default, as in every one of Pruna's workflows; a missing file is a warning.
+    "ph3_upsampler": True,
 }
 BUSY_MODES = ("wait", "fall_through")
 MAX_WAIT_SECONDS = 300  # matches local_images.WAIT_SECONDS: waiting longer than one render is pointless
@@ -406,6 +423,7 @@ class ImageEngineStore:
             "confirm_paid": self.confirm_paid(),
             "pick_takes": self.pick_takes(),
             "qwen21_pe": self.qwen21_pe(),
+            "ph3_upsampler": self.ph3_upsampler(),
         }
 
     def confirm_paid(self) -> bool:
@@ -422,6 +440,11 @@ class ImageEngineStore:
         """Whether Qwen Image 2.1 runs its prompt enhancer before generating or editing."""
         stored = self._load().get("qwen21_pe")
         return DEFAULTS["qwen21_pe"] if not isinstance(stored, bool) else stored
+
+    def ph3_upsampler(self) -> bool:
+        """Whether P-H3-Image runs its prompt upsampler before generating or editing."""
+        stored = self._load().get("ph3_upsampler")
+        return DEFAULTS["ph3_upsampler"] if not isinstance(stored, bool) else stored
 
     def defaults(self, family: str) -> list[dict] | None:
         """LoRAs this family attaches on its own, or None when the user has never set them.
@@ -539,7 +562,7 @@ class ImageEngineStore:
         return cleaned
 
     def save(self, *, generate=None, edit=None, busy_mode=None, busy_max_wait_seconds=None, defaults=None,
-             confirm_paid=None, pick_takes=None, qwen21_pe=None) -> dict:
+             confirm_paid=None, pick_takes=None, qwen21_pe=None, ph3_upsampler=None) -> dict:
         """Update the parts that were given. Anything left as None keeps its current value."""
         with self._lock:
             current = self.settings()
@@ -561,6 +584,8 @@ class ImageEngineStore:
                 current["pick_takes"] = bool(pick_takes)
             if qwen21_pe is not None:
                 current["qwen21_pe"] = bool(qwen21_pe)
+            if ph3_upsampler is not None:
+                current["ph3_upsampler"] = bool(ph3_upsampler)
             stored_defaults = dict(self._load().get("defaults") or {})
             for family, entries in (defaults or {}).items():
                 stored_defaults[family] = self._clean_defaults(family, entries or [])

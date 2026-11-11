@@ -397,6 +397,7 @@ The server always appends a short, non-editable **platform rules** block (no sex
 | `auto` (default) | Qwen Image 2.1 → Krea 2 → Z-Image → z-image/turbo → Seedream | The first local engine that is installed and can run; otherwise z-image/turbo; Seedream if that fails too. The result's `tried` lists what was skipped and why. Change the default with `HAWK_IMAGE_ENGINE`. |
 | `qwen21` | Qwen Image 2.1 on the pod's GPU | Free, the lead local engine, and the only local one that edits with more than two references (up to 16). 30 steps at cfg 2.0, euler / simple; its repair LoRA is attached to every image. `klein`, `flux` and `flux2` still resolve here. |
 | `zimage` | Z-Image Turbo on the pod's GPU | Free, text only. 8 steps at cfg 1. `z-image` means this local engine; the Atlas one is `turbo`. |
+| `ph3` | P-H3-Image (PrunaAI, built on MiniMax-H3) on the pod's GPU | Free. 8 MP text to image in 8 steps without CFG, and edits with up to 8 images (`<Picture 1>` is the one being edited). Off in the ladder until switched on in Studio; naming `ph3` always uses it. `p-h3`, `p-h3-image` and `pruna` mean the same. See [P-H3-Image](#p-h3-image) below. |
 | `local` | Krea 2 Turbo on the pod's GPU | Free and private, with Krea 2 LoRAs. Waits behind a running render instead of falling back. Model `krea` / `local` means the same. |
 | `turbo` | Atlas `z-image/turbo` | Fast, about $0.01 an image; sizes 512–2048 a side (default 1024x1536); `n` runs as parallel requests. `HAWK_IMAGE_MODEL` sets the Atlas text-to-image default. |
 | `seedream` | Atlas `bytedance/seedream-v5.0-pro/text-to-image` | Best quality. Sizes snap to Atlas's nearest preset. Up to 2.36 MP is the 1.5K tier, about $0.036 an image (default 1328x1776; 1024x1024 becomes 1536x1536 at the same price). Larger sizes such as 2048x2048 bill the 2K tier, about $0.072. One image per request, so `n` runs as parallel requests. |
@@ -404,6 +405,29 @@ The server always appends a short, non-editable **platform rules** block (no sex
 | `auto` / `local`, with `reference_asset_ids` | Krea 2 Identity Edit on the pod | 1 image, or 2 (the scene first, then the person to place in it). Free, keeps a face while changing outfit, pose, scene, light or style; `ref_boost` is the likeness dial (4 default, 1 looser, above about 8 fights removals). Falls back to Seedream edit when not installed, busy, or given more than 2 images. |
 | `seedream` / `turbo`, with `reference_asset_ids` | `bytedance/seedream-v5.0-pro/edit` | Up to 10 images. z-image can't edit, so `turbo` switches here and says so in `note`. |
 | `seedream-lite`, with `reference_asset_ids` | `bytedance/seedream-v5.0-lite/edit` | Same as Lite above. |
+
+#### P-H3-Image
+
+[P-H3-Image](https://huggingface.co/PrunaAI/P-H3-Image-Comfy) is PrunaAI's image model built on MiniMax-H3. The gateway builds the same graphs as Pruna's four ComfyUI workflows, using only core ComfyUI nodes. It needs a ComfyUI recent enough to have `PH3ImageConditioning`, so run `git pull` in ComfyUI if `/v1/images/options` reports that node missing.
+
+1. **Download one file per part** into `ComfyUI/models`. The int8 set uses about 31 GB of VRAM at 8 MP and comes out close to bf16:
+   ```bash
+   hf download PrunaAI/P-H3-Image-Comfy --include "diffusion_models/p-h3-image_int8_convrot.safetensors" \
+     "text_encoders/p-h3-image_text_encoder_int8_convrot.safetensors" "vae/p-h3-image_vae_int8_convrot.safetensors" \
+     "text_encoders/p-h3-image_prompt_upsampler_bf16.safetensors" --local-dir ComfyUI/models
+   ```
+   For the smallest set (about 21 GB of VRAM), use `p-h3-image_w4a8` for the diffusion model and the text encoder, and keep the int8 VAE. Any precision of a file is found when the configured name isn't there.
+2. **Switch it on** under Studio → Settings → Image engines, in the generate and edit orders. You can also name `"engine": "ph3"` on a request, which works even while it's off in the ladder.
+
+| | |
+|---|---|
+| Text to image | No `size`: 2368x3552 (2:3 at `HAWK_PH3_MEGAPIXELS`, default 8). Pruna's 8 MP sizes: 2912x2912, 3360x2496, 2496x3360, 3552x2368, 2368x3552, 3872x2176, 2176x3872. A given size is kept, snapped to multiples of 32, and scaled down only above about 8.5 MP. |
+| Edits | Up to 8 `reference_asset_ids`. The first is the picture being edited; it is scaled to `HAWK_PH3_EDIT_MEGAPIXELS` (default 4) and the edit comes out at that size unless `size` is given. Refer to the images as `<Picture 1>`, `<Picture 2>`; `<image1>` tags are rewritten to that form. |
+| Prompt upsampler | Pruna's Qwen3.5-9B writes the full prompt from a short request, the way their workflows do. It is on by default; switch it off in Studio (`ph3_upsampler` on `PUT /v1/images/engines`). The rewritten prompt is returned as `enhanced_prompt`. If its file is missing, the image is still made from the prompt as written, with a warning. |
+| Sampling | A fixed 8-step sigma grid, euler, no CFG. `steps`, `cfg` and `negative` are ignored, with a warning. |
+| On your own MiniMax-H3 | If `p-h3-image_*` isn't in `diffusion_models` but `minimax_h3_fl2va_*` is, along with `loras/p-h3-image_lora_bf16.safetensors`, the engine runs Pruna's LoRA on the FL2VA model instead (their `_lora_` workflows). It still needs the P-H3-Image text encoder and VAE. The ref2va model this pack renders video with isn't used for this. |
+| LoRAs | Its own family, `ph3`: files starting `ph3_` or kept in `models/loras/ph3/`. |
+| File names | `HAWK_PH3_UNET`, `HAWK_PH3_CLIP`, `HAWK_PH3_VAE`, `HAWK_PH3_UPSAMPLER`, `HAWK_PH3_BASE_UNET`, if yours differ from the defaults. |
 
 Atlas results carry `cost_usd`, an estimate from Atlas's discounted list prices (September 2026). Seedream adds about $0.003 for each reference image after the first. `GET /v1/images/options` lists the prices under `atlas.prices_usd`.
 

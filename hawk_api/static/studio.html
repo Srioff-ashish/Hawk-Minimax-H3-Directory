@@ -1655,6 +1655,7 @@
             <label class="check"><input type="checkbox" id="engineConfirmPaid"> Ask before a failed take retries on a paid engine</label>
             <label class="check"><input type="checkbox" id="enginePickTakes"> Show me a rejected take and let me choose before it is made again</label>
             <label class="check"><input type="checkbox" id="engineQwen21Pe"> Run Qwen Image 2.1's prompt enhancer first (slower; rewrites the prompt, needs the qwen3.5_9b …_pe_t2i / _pe_i2i files)</label>
+            <label class="check"><input type="checkbox" id="enginePh3Upsampler"> Run P-H3-Image's prompt upsampler first (turns a short request into the full prompt; needs p-h3-image_prompt_upsampler_*.safetensors)</label>
             <div class="field"><label class="label">LoRAs each model attaches on its own</label>
               <span class="hint">Applied to every local image from that model unless the request names its own adult LoRA. Clear a family's list to switch it off — useful when the pair is pulling ordinary portraits off-target.</span>
               <div class="grid grid-2" style="margin-top:8px;align-items:start">
@@ -4967,6 +4968,10 @@
       "Close-up editorial portrait of a 28-year-old Delhi stylist, textured linen kurta in rust, silver jhumkas, freckled skin, rooftop at golden hour, warm rim light from the right, 85mm, shallow depth of field, film grain, editorial photography"],
     krea2Edit: [[4, 40], "Krea 2 Identity Edit: one plain instruction naming only what changes: put, place, replace, remove, turn, restage. With 2 images, image 1 is the scene and image 2 the person. Replace is reliable; removals and outfit swaps less so.",
       "Put a retro red trenchcoat on her and turn her head to the left."],
+    ph3: [[5, 250], "P-H3-Image: with its prompt upsampler on (the default), a short plain request is enough \u2014 the upsampler writes the full prompt. With it off, write a full, specific description: subject, setting, light, camera, style, and any text in double quotes. No negative prompt. Omit the size for 8 MP.",
+      "A neon sign that says \"OPEN 24/7\" above a ramen shop at night in the rain, cinematic photo"],
+    ph3Edit: [[4, 80], "P-H3-Image edit: <Picture 1> is the image being edited, <Picture 2> onward are references (up to 8 images). Say what changes in one plain instruction; the upsampler expands it.",
+      "Put the hat from <Picture 2> on the person in <Picture 1>."],
     zimage: [[80, 250], "Z-Image Turbo likes the most detail: subject (age, features, clothing, expression) \u2192 place, time and weather \u2192 camera, lens or film stock (e.g. Kodak Portra 400) \u2192 framing. No negative prompts: say what you want. Text in quotes.",
       "A 65-year-old woman with silver hair and gentle wrinkles in a hand-knitted maroon cardigan, reading by a tall window with a contemplative expression. A cosy wood-panelled library, late afternoon, soft natural light falling across the pages. Shot on a Canon 5D with an 85mm lens, Kodak Portra 400 tones, shallow depth of field, framed from the waist up on the left third."],
     turbo: [[80, 250], "Atlas z-image/turbo: the same model as the local Z-Image, so the same guidance -- lots of detail, subject then place then camera then framing. No negative prompts.",
@@ -4996,6 +5001,7 @@
     const id = plannedEngine(), edit = genAction() === "edit";
     if (id === "qwen21") return edit ? "qwen21Edit" : "qwen21";
     if (id === "krea2") return edit ? "krea2Edit" : "krea2";
+    if (id === "ph3") return edit ? "ph3Edit" : "ph3";
     if (id === "zimage" || id === "turbo") return id;
     return edit ? "seedreamEdit" : "seedream";
   }
@@ -5763,6 +5769,7 @@
     $("engineConfirmPaid").checked = data.confirm_paid !== false;
     $("enginePickTakes").checked = data.pick_takes !== false;
     $("engineQwen21Pe").checked = data.qwen21_pe === true;
+    $("enginePh3Upsampler").checked = data.ph3_upsampler !== false;
     $("engineWarnings").innerHTML = (data.warnings || []).map((w) => `<div class="engine-note">${w}</div>`).join("");
   }
   async function loadImageEngines() {
@@ -5797,6 +5804,7 @@
           busy_mode: $("engineBusyMode").value, busy_max_wait_seconds: Number($("engineMaxWait").value) || 0,
           confirm_paid: $("engineConfirmPaid").checked, pick_takes: $("enginePickTakes").checked,
           qwen21_pe: $("engineQwen21Pe").checked,
+          ph3_upsampler: $("enginePh3Upsampler").checked,
           defaults: engineState.defaults }) }));
       if (engineState.video.length) {
         // video defaults live in loras.json, with its own rules, so they save separately
