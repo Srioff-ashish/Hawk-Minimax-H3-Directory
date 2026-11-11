@@ -2515,6 +2515,13 @@ class AgentService:
                     "Inspection rejected the last take and the user has not chosen yet. Show them the images from "
                     "inspect_image, say what is wrong and what another take would cost, and end your turn with "
                     '"done": true. This tool works again as soon as they reply.')
+            if name == "make_film" and not self._asked_for_storyboard(session_id):
+                # A chat with storyboards in its history keeps reaching for them whatever the instructions say:
+                # a model imitates what worked before. Refused here, the model picks the route it should have.
+                raise RequestError(
+                    "make_film draws a storyboard and is only for when the user asks for a storyboard, panels or "
+                    "sheets. For this video use plan_film (references: the characters' pictures; story: every beat), "
+                    "wait_for_job, then render_film with plan_job_id -- or make_video for a quick montage reel.")
             if name == "wait_for_job":
                 result = await self._wait_for_job(session_id, args)
             elif name == "describe_tool":
@@ -2544,6 +2551,12 @@ class AgentService:
         if job_id:
             content["job_id"] = job_id
         self.store.add_message(session_id, "tool", content)
+
+    def _asked_for_storyboard(self, session_id: str) -> bool:
+        """Whether the user's latest message asks for a storyboard (the only time make_film is the right tool)."""
+        last = next((m for m in reversed(self.store.messages(session_id)) if m["role"] == "user"), None)
+        text = str(((last or {}).get("content") or {}).get("text") or "").lower()
+        return bool(re.search(r"story ?board|panels?\b|sheets?\b|\bboard\b", text))
 
     async def _describe_tool(self, args: dict) -> dict:
         name = str(args.get("name") or "").strip()

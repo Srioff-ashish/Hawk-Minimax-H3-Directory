@@ -178,6 +178,29 @@ class LongTermMemory(AgentHarness):
         self.assertEqual(tool["content"]["args"]["reference_asset_ids"], [face, outfit],
                          "her picture once, the real outfit id cleaned, the unknown ids dropped")
 
+    async def storyboard_attempt(self, text: str) -> dict:
+        calls = []
+
+        def director(request):
+            calls.append(request)
+            if len(calls) == 1:
+                return json.dumps({"say": "banati hoon", "done": False, "actions": [{"tool": "make_film", "args": {
+                    "film": {"identity_asset_ids": [], "idea": "Rebel walks to the beach."}}}]})
+            return json.dumps({"say": "ok", "actions": [], "done": True})
+
+        chat = await self.chat(json.dumps({"canon": [], "story": []}), director)
+        view = await self.say(chat, text)
+        return next(m for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "make_film")["content"]
+
+    async def test_a_storyboard_nobody_asked_for_is_refused(self):
+        tool = await self.storyboard_attempt("ek video banao beach pe")
+        self.assertFalse(tool["ok"])
+        self.assertIn("plan_film", tool["error"], "the refusal names the route to take instead")
+
+    async def test_a_storyboard_the_user_asks_for_goes_ahead(self):
+        tool = await self.storyboard_attempt("pehle ek storyboard banao")
+        self.assertNotIn("only for when the user asks", str(tool.get("error") or ""))
+
     async def test_the_agent_can_set_a_characters_pictures(self):
         face = await self.upload()
         calls = []

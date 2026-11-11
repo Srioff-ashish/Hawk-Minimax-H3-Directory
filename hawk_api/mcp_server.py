@@ -561,6 +561,22 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         try:
             return service.job_view(service.get_job(job_id))
         except NotFound as exc:
+            # A storyboard id passed here (make_film returns one) used to come back as "No job", and a chat took
+            # that to mean its video had vanished while the board went on to finish. Say what the id is instead.
+            if boards is not None:
+                try:
+                    board = boards.board(job_id)
+                except NotFound:
+                    board = None
+                if board is not None:
+                    render = board.get("render") or {}
+                    film = render.get("film_asset_id")
+                    found = service.store.get_asset(film) if film else None
+                    return {"id": job_id, "kind": "storyboard", "status": board.get("status"),
+                            "film_asset_id": film, "film_url": service.asset_view(found).get("file_url") if found else None,
+                            "render_jobs": render.get("jobs") or [], "error": board.get("error") or None,
+                            "note": "This id is a storyboard, not a job. Its film appears here (film_url) once status is "
+                                    "done; until then it is drawing, checking or rendering -- poll get_storyboard."}
             raise ToolError(str(exc)) from None
 
     @mcp.tool(description="Recent jobs, newest first.")

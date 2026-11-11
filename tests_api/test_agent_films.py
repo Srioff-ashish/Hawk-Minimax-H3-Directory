@@ -107,6 +107,29 @@ class MakeVideo(unittest.IsolatedAsyncioTestCase):
                 await self.call(args)
 
 
+class GetJobKnowsStoryboards(unittest.IsolatedAsyncioTestCase):
+    async def test_a_storyboard_id_says_what_it_is(self):
+        from hawk_api.jobs import NotFound
+
+        def get_job(job_id):
+            raise NotFound(f"No job {job_id!r}.")
+
+        service = fake_service()
+        service.get_job = get_job
+        service.job_view = lambda job: job
+        service.store = SimpleNamespace(get_asset=lambda asset_id: {"id": asset_id} if asset_id == "film1" else None)
+        service.asset_view = lambda asset: {"file_url": f"https://pod/{asset['id']}.mp4"}
+        boards = SimpleNamespace(board=lambda board_id: {"id": board_id, "status": "done",
+                                                         "render": {"film_asset_id": "film1", "jobs": ["j1"]}})
+        mcp = mcp_server.build_mcp(service, boards=boards)
+        result = await mcp.call_tool("get_job", {"job_id": "board1"})
+        content = getattr(result, "structured_content", None)
+        if not isinstance(content, dict):
+            content = json.loads(result.content[0].text)
+        self.assertEqual(content["kind"], "storyboard")
+        self.assertEqual(content["film_url"], "https://pod/film1.mp4")
+
+
 class FollowSettings(unittest.TestCase):
     def test_only_given_fields_are_stored(self):
         stored = RenderSettings(unet_name=POD_UNET, continuity="off").model_dump(exclude_unset=True)
