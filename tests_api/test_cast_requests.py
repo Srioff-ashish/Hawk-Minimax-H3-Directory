@@ -21,15 +21,20 @@ class Detect(unittest.TestCase):
     def test_cast_requests(self):
         for text in ("i fuck her for 60 min ..include her i chat group", "creaye persona ,add character ,set persona",
                      "set avataar correctly", "rebel avaaar theek kar apna", "add Priya to the chat",
-                     "usko group mein daal do", "remove Sakshi from the chat", "2310bb217002 is rebel avatar..correct it"):
+                     "usko group mein daal do", "remove Sakshi from the chat", "2310bb217002 is rebel avatar..correct it",
+                     "change you name in chat Anjali", "update persoa", "update your ame in persona Anal",
+                     "rename Mrs Khanna to Anjali"):
             with self.subTest(text=text):
                 self.assertTrue(asks_cast_change(text))
-        for text in ("next day .i wake up", "tu bata teri hawas khatam hui", "bring me tea", "toh kitne lekar aayi"):
+        for text in ("next day .i wake up", "tu bata teri hawas khatam hui", "bring me tea", "toh kitne lekar aayi",
+                     "Mrs khanna what is your first name??"):
             with self.subTest(text=text):
                 self.assertFalse(asks_cast_change(text))
 
     def test_chat_mechanics_are_not_memory(self):
-        for text in ("Mrs. Khanna has now been added to the chat group.", "Her avatar asset is 25309665bef5."):
+        for text in ("Mrs. Khanna has now been added to the chat group.", "Her avatar asset is 25309665bef5.",
+                     "Her name in chat is now Anal, replacing Anjali.",
+                     "Her avatar is now created and set in the group alongside Rebel's and Sakshi's avatars."):
             with self.subTest(text=text):
                 self.assertTrue(is_chat_mechanics(text))
         for text in ("Must bring Mrs. Khanna to the master's bed.", "Calls the user boss.",

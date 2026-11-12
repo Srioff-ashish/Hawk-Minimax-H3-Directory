@@ -403,7 +403,9 @@ def is_finished_event(text: str) -> bool:
 _CHAT_MECHANICS = re.compile(
     r"\b(added|joined|removed|invited|included)\b.{0,30}\b(chat|group|cast)\b"
     r"|\b(avatar|avataar|identity pictures?|references?)\b.{0,30}\b(asset|is|are|set)\b.{0,20}\b[0-9a-f]{12}\b"
-    r"|\b(avatar|avataar)\b.{0,15}\basset\b",
+    r"|\b(avatar|avataar)\b.{0,15}\basset\b"
+    r"|\bname in (the )?(chat|group)\b"
+    r"|\b(avatar|avataar)\b.{0,40}\b(set|created|added)\b.{0,30}\b(chat|group)\b",
     re.IGNORECASE)
 
 
@@ -420,8 +422,8 @@ _CAST_REQUEST = re.compile(
     r"|\b(chat|group|cast)\b.{0,20}\b(mein|me|main)\b.{0,15}\b(daal|dal|add|la|laa|shamil|jod)\w*\b"
     r"|\b(add|create|make|new|naya|nayi)\w*\b.{0,15}\b(character|persona|charcter|charactor)s?\b"
     r"|\b(set|change|fix|correct|update|theek|thik|sahi|badal|laga|lagao|use)\w*\b.{0,30}"
-    r"\b(persona|ava+t?a*r|avtar|dp|identity|references?|refs?)\b"
-    r"|\b(persona|ava+t?a*r|avtar|identity|references?|refs?)\b.{0,30}"
+    r"\b(persona|persoa|persna|personna|ava+t?a*r|avtar|dp|identity|references?|refs?|name|naam|nickname)\b"
+    r"|\brename\w*\b|\b(persona|persoa|persna|personna|ava+t?a*r|avtar|identity|references?|refs?|naam)\b.{0,30}"
     r"\b(set|change|fix|correct|update|theek|thik|sahi|badal|laga|lagao)\w*\b",
     re.IGNORECASE)
 
