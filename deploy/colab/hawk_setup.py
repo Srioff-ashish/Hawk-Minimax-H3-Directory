@@ -141,10 +141,14 @@ sageattn(q,k,v,tensor_layout='HND'); torch.cuda.synchronize(); print('SAGE 2 OK 
 def install_comfyui(workspace: str, requirements: bool = True) -> str:
     """ComfyUI on origin/master (P-H3-Image needs master); a reset, because a pull fails silently on a tag."""
     if not os.path.isdir(f"{workspace}/.git"):
-        _sh(f"git clone -q https://github.com/comfyanonymous/ComfyUI.git {workspace}", quiet=True)
+        # init + fetch rather than clone: clone refuses a folder that already exists (custom_nodes made by an
+        # earlier cell or run), which is how the first run of the new notebook failed.
+        os.makedirs(workspace, exist_ok=True)
+        _sh(f"cd {workspace} && git init -q && git remote add origin https://github.com/comfyanonymous/ComfyUI.git",
+            quiet=True)
     before = _git(workspace, "rev-parse", "HEAD")
-    _sh(f"git -C {workspace} fetch -q origin master && git -C {workspace} checkout -q master && "
-        f"git -C {workspace} reset -q --hard origin/master", quiet=True)
+    _sh(f"git -C {workspace} fetch -q origin +master:refs/remotes/origin/master && "
+        f"git -C {workspace} checkout -q -f -B master origin/master", quiet=True)
     after = _git(workspace, "rev-parse", "HEAD")
     if requirements and (before != after or not os.path.exists(f"{workspace}/{NODE_STAMP}")):
         _sh(f"{sys.executable} -m pip install -q -r {workspace}/requirements.txt", quiet=True)
