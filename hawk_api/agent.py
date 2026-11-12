@@ -367,6 +367,22 @@ def clean_story(beats) -> list[str]:
     return clean
 
 
+PAST_MAX = 4  # earlier chats a character can carry memories from
+PAST_CHARS = 4000  # per earlier chat: their own memory, that chat's story and what it learned
+PAST_FACTS = 30
+
+
+def clean_past(items) -> list[dict]:
+    """Memories a character brought from other chats: [{"from": chat title, "text": ..., "at": time}], newest last."""
+    out = []
+    for item in items or []:
+        if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+            continue
+        out.append({"from": str(item.get("from") or "an earlier chat").strip()[:120],
+                    "text": str(item["text"]).strip()[:PAST_CHARS], "at": float(item.get("at") or 0)})
+    return out[-PAST_MAX:]
+
+
 def clean_growth(notes) -> list[str]:
     """Growth notes: short, non-empty, no repeats, the newest MAX_GROWTH kept."""
     clean: list[str] = []
@@ -1074,6 +1090,8 @@ class AgentService:
                 entry["memory"], entry["memory_upto"] = before["memory"], before.get("memory_upto", 0)
             canon = member.get("canon")  # None keeps the character's permanent memory
             entry["canon"] = clean_canon(canon if canon is not None else before.get("canon"))
+            past = member.get("past")  # None keeps what they brought from other chats
+            entry["past"] = clean_past(past if past is not None else before.get("past"))
             refs = member.get("refs")  # None keeps the character's identity pictures
             entry["refs"] = self._check_refs(refs) if refs is not None else self._check_refs(before.get("refs"), strict=False)
             shown = display_name(entry, index, len(cast))
@@ -1269,9 +1287,32 @@ class AgentService:
             person["chats"].sort(key=lambda chat: -chat["updated_at"])
         return sorted(grouped.values(), key=lambda p: (-len(p["chats"]), p["name"].casefold()))
 
-    def bring_in(self, session_id: str, from_session: str, member: str) -> dict:
+    def _carried_memory(self, source: dict, person: dict, name: str) -> str:
+        """What a character remembers of a chat, as one text: their own memory of it, its story beats, and the
+        facts it learned that were said aloud or are theirs privately."""
+        parts = []
+        if person.get("memory"):
+            parts.append(f"Your own memory of it: {person['memory'].strip()}")
+        story = clean_story(source.get("story"))
+        if story:
+            parts.append("What happened: " + " ".join(story))
+        facts = [e["fact"] for e in self.store.all_edges(source["id"], live_only=True)
+                 if e.get("owner") in ("", person.get("id")) and e.get("fact")][:PAST_FACTS]
+        if facts:
+            parts.append("What you know from it: " + " ".join(facts))
+        summary = (source.get("summary") or "").strip()
+        if summary and not person.get("memory"):
+            parts.append(f"How it went: {summary}")
+        text = "\n".join(parts)
+        if len(text) > PAST_CHARS:  # keep the start (their own memory) and the most recent story
+            text = text[: PAST_CHARS - 1] + "…"
+        return text
+
+    def bring_in(self, session_id: str, from_session: str, member: str, full: bool = False) -> dict:
         """Add a character from another chat to this one, with who they are and what they have become: persona,
-        avatar, identity pictures, canon and growth. Feelings and their memory of that chat stay there."""
+        avatar, identity pictures, canon and growth. With ``full`` they also bring everything they remember of that
+        chat (their own memory of it, its story, what it learned) and their feelings -- about the user, and about
+        anyone from there who is also here. Otherwise feelings and that chat's memories stay behind."""
         target = self.get_session(session_id)
         source = self.get_session(from_session)
         source_cast = cast_of(source)
@@ -1285,7 +1326,24 @@ class AgentService:
             raise Conflict(f"{name} is already in this chat.")
         entry = {"name": name, "persona": person.get("persona") or "", "avatar_asset_id": person.get("avatar_asset_id") or "",
                  "refs": list(person.get("refs") or []), "canon": clean_canon(person.get("canon")),
-                 "growth": clean_growth(person.get("growth")), "feelings": {}}
+                 "growth": clean_growth(person.get("growth")), "feelings": {},
+                 "past": clean_past(person.get("past")) if full else []}
+        if full:
+            carried = self._carried_memory(source, person, name)
+            if carried:
+                entry["past"] = clean_past(entry["past"] + [{"from": source.get("title") or "an earlier chat",
+                                                             "text": carried, "at": time.time()}])
+            # Feelings are keyed by who they are about: "user", or a member id in the old chat. Re-point each one
+            # at the same person here, by name; a feeling about someone who is not here stays behind.
+            here = {display_name(m, i, len(cast)).casefold(): m.get("id") for i, m in enumerate(cast)}
+            names_there = {m.get("id"): display_name(m, i, len(source_cast)) for i, m in enumerate(source_cast)}
+            for key, notes in clean_feelings(person.get("feelings")).items():
+                if key == USER_KEY:
+                    entry["feelings"][USER_KEY] = notes
+                    continue
+                target = here.get(str(names_there.get(key) or "").casefold())
+                if target:
+                    entry["feelings"][target] = notes
         fresh_chat = not self.store.messages(session_id) and len(cast) == 1 and not (cast[0].get("persona") or "").strip()
         cast = [entry] if fresh_chat else cast + [entry]
         return self.update_session(session_id, cast=cast)
@@ -2105,7 +2163,7 @@ class AgentService:
             listening=" They are listening to you talk right now and may join in.",
             feelings="\n".join(feeling_lines) or "(none yet)",
             memory="\n\n".join(part for part in (
-                self._memory_text(session),
+                self._memory_text(session, viewer=member["id"]),
                 member.get("memory") or "",
                 self._recall_text(session, member["id"], self._recent_text(session)),
             ) if part) or "(nothing older: everything is in the conversation below)",
@@ -3142,10 +3200,21 @@ class AgentService:
 
     # ------------------------------------------------------------ long-term memory
 
-    def _memory_text(self, session: dict) -> str:
-        """Every character's canon and the story so far, for the tail of every prompt."""
+    def _memory_text(self, session: dict, viewer: str = "") -> str:
+        """Every character's canon and the story so far, for the tail of every prompt. ``viewer`` is the character
+        whose own turn this is: memories brought from other chats are theirs alone, so a character sees only its own
+        (the director sees everyone's, marked as known only to that character)."""
         cast = cast_of(session)
         blocks: list[str] = []
+        pasts: list[str] = []
+        for index, member in enumerate(cast):
+            past = clean_past(member.get("past"))
+            if not past or (viewer and member.get("id") != viewer):
+                continue
+            name = display_name(member, index, len(cast)) or "You"
+            known = "you remember this" if viewer else f"only {name} knows this unless they tell the others"
+            for item in past:
+                pasts.append(f"{name} -- from the chat \"{item['from']}\" ({known}):\n{item['text']}")
         for index, member in enumerate(cast):
             canon = clean_canon(member.get("canon"))
             if not canon:
@@ -3167,6 +3236,9 @@ class AgentService:
         if story:
             parts.append("STORY SO FAR (key events, oldest first; stay consistent with every one)\n"
                          + "\n".join(f"- {beat}" for beat in story))
+        if pasts:
+            parts.append("MEMORIES FROM EARLIER CHATS (lived through and true; a character brings them up the way a "
+                         "person recalls their past, not all at once)\n" + "\n\n".join(pasts))
         return "\n\n".join(parts)
 
     def _memory_transcript(self, session: dict) -> tuple[str, int]:
@@ -3279,16 +3351,17 @@ class AgentService:
         session = self.get_session(session_id)
         cast = cast_of(session)
         return {"characters": [{"id": m.get("id", ""), "name": display_name(m, i, len(cast)),
-                                "canon": clean_canon(m.get("canon")), "refs": list(m.get("refs") or [])}
+                                "canon": clean_canon(m.get("canon")), "refs": list(m.get("refs") or []),
+                                "past": clean_past(m.get("past"))}
                                for i, m in enumerate(cast)],
                 "story": clean_story(session.get("story")), "captured_upto": session.get("canon_upto", 0)}
 
     def set_memory(self, session_id: str, *, member: str = "", canon=None, refs=None, story=None,
-                   add: list[str] | None = None) -> dict:
+                   add: list[str] | None = None, past=None) -> dict:
         """Edit the long-term memory by hand: a character's whole canon, identity pictures or added rules, and the
         story. member names the character (the lead when empty)."""
         session = self.get_session(session_id)
-        if canon is not None or refs is not None or add:
+        if canon is not None or refs is not None or add or past is not None:
             cast = [dict(m) for m in cast_of(session)]
             index = find_member(cast, member) if member else 0
             if index is None:
@@ -3300,6 +3373,8 @@ class AgentService:
                     {"text": text, "kind": "rule", "at": time.time()} for text in add]
             if refs is not None:
                 cast[index]["refs"] = refs
+            if past is not None:
+                cast[index]["past"] = clean_past(past)
             self.update_session(session_id, cast=cast)
         if story is not None:
             fresh = self.get_session(session_id)

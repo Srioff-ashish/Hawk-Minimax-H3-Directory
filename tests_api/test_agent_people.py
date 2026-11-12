@@ -72,6 +72,63 @@ class People(AgentHarness):
         self.assertEqual(again.status_code, 409)
 
 
+class FullMemory(AgentHarness):
+    async def source_chat(self) -> str:
+        """Maya and Riya in a chat that has a story, facts, a memory and feelings."""
+        chat = await self.new_chat(cast=[{"name": "Maya", "persona": "Maya, 27, a photographer."},
+                                         {"name": "Riya", "persona": "Riya, 26, her flatmate."}])
+        session = self.agent.get_session(chat)
+        maya, riya = session["cast"]
+        maya.update(memory="I took Riya to Goa and we fought about the hotel.",
+                    feelings={"user": ["missed you"], riya["id"]: ["still annoyed about Goa"]})
+        session["story"] = ["Maya and Riya went to Goa.", "They argued about the hotel."]
+        self.agent.store.save_session(session)
+        node_m = self.agent.store.upsert_node(chat, "", f"member:{maya['id']}", "person", "Maya")
+        node_g = self.agent.store.upsert_node(chat, "", "goa", "place", "Goa")
+        self.agent.store.put_edge(chat, "", node_m, node_g, "owns", "owns", "Maya owns a flat in Goa.", 1.0, 1)
+        secret = self.agent.store.upsert_node(chat, riya["id"], "secret", "thing", "secret")
+        self.agent.store.put_edge(chat, riya["id"], secret, node_g, "owns", "owns", "Riya hides a ring.", 1.0, 1)
+        return chat
+
+    async def test_she_arrives_remembering_everything(self):
+        source = await self.source_chat()
+        target = await self.new_chat(cast=[{"name": "Riya", "persona": "Riya again."}, {"name": "Zoya", "persona": "Zoya."}])
+        response = await self.http.post(f"/v1/agent/sessions/{target}/bring_in",
+                                        json={"from_session": source, "member": "Maya", "full": True})
+        self.assertEqual(response.status_code, 200, response.text)
+        session = self.agent.get_session(target)
+        maya = next(m for m in session["cast"] if m["name"] == "Maya")
+        riya_here = next(m for m in session["cast"] if m["name"] == "Riya")
+        past = maya["past"][0]["text"]
+        self.assertIn("we fought about the hotel", past, "her own memory of that chat")
+        self.assertIn("They argued about the hotel.", past, "what happened there")
+        self.assertIn("Maya owns a flat in Goa.", past, "what it learned aloud")
+        self.assertNotIn("Riya hides a ring", past, "another character's private fact stays private")
+        self.assertEqual(maya["feelings"]["user"], ["missed you"])
+        self.assertEqual(maya["feelings"][riya_here["id"]], ["still annoyed about Goa"],
+                         "a feeling about Riya points at the Riya who is here")
+
+        director = self.agent._memory_text(session)
+        self.assertIn("MEMORIES FROM EARLIER CHATS", director)
+        self.assertIn("only Maya knows this", director)
+        self.assertIn("we fought", self.agent._memory_text(session, viewer=maya["id"]))
+        self.assertNotIn("we fought", self.agent._memory_text(session, viewer=riya_here["id"]),
+                         "the others do not know her past unless she tells them")
+
+        memory = (await self.http.get(f"/v1/agent/sessions/{target}/memory")).json()
+        self.assertEqual(next(c for c in memory["characters"] if c["name"] == "Maya")["past"][0]["from"],
+                         self.agent.get_session(source)["title"])
+        await self.http.put(f"/v1/agent/sessions/{target}/memory", json={"member": "Maya", "past": []})
+        self.assertEqual(next(m for m in self.agent.get_session(target)["cast"] if m["name"] == "Maya")["past"], [])
+
+    async def test_without_full_the_memories_stay_behind(self):
+        source = await self.source_chat()
+        target = await self.new_chat()
+        await self.http.post(f"/v1/agent/sessions/{target}/bring_in", json={"from_session": source, "member": "Maya"})
+        maya = self.agent.get_session(target)["cast"][0]
+        self.assertEqual((maya["past"], maya["feelings"]), ([], {}))
+
+
 class Identity(unittest.TestCase):
     def test_identity_gives_way_to_the_picture_being_edited(self):
         identity = [("Maya", ["m1", "m2", "m3", "m4"]), ("Riya", ["r1", "r2", "r3", "r4"])]

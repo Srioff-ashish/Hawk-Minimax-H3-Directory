@@ -1000,7 +1000,8 @@
             <div class="cast-extra" id="castExtra"></div>
             <div class="row"><button class="btn btn-sm" id="castAdd" type="button">+ Add character</button>
               <label class="sr-only" for="castBring">Bring in someone from another chat</label>
-              <select class="select" id="castBring" style="width:auto;max-width:260px;height:32px" title="Bring in a character from another chat with their persona, look, permanent memory and what they have grown into. Feelings and their memory of that chat stay there."><option value="">Bring in someone…</option></select><span class="hint">Up to 4 characters in one chat, like a group chat. Talk to one with @Name.</span></div>
+              <select class="select" id="castBring" style="width:auto;max-width:260px;height:32px" title="Bring in a character from another chat with their persona, look, permanent memory and what they have grown into. Feelings and their memory of that chat stay there."><option value="">Bring in someone…</option></select>
+              <label class="adaptive-toggle" id="castBringFullBox" title="Also bring everything they remember of that chat (their own memory of it, what happened, what they learned) and their feelings about you and anyone from there who is here too. Off brings who they are, their look, permanent memory and growth only."><input type="checkbox" id="castBringFull" checked> with everything they remember</label><span class="hint">Up to 4 characters in one chat, like a group chat. Talk to one with @Name.</span></div>
             <div class="row" id="personaChips"></div>
             <div class="row persona-actions"><button class="btn btn-primary btn-sm" id="agentPersonaSave" type="button">Save persona</button><button class="btn btn-ghost btn-sm" id="agentPersonaClose" type="button">Close</button></div>
           </div>
@@ -6591,7 +6592,9 @@
       + `<span class="hint" style="margin:0">in every prompt; rules are never dropped on their own</span></div>`
       + people.map((m) => `<div><div class="growth-who">${esc(m.name || "Agent")} · ${m.canon.length}</div><ul>`
         + m.canon.map((c, i) => `<li><span><b>${esc(c.kind)}</b> ${esc(c.text)}</span><button type="button" title="Wrong or out of date — remove it" aria-label="Remove" data-canon-member="${esc(m.name)}" data-canon-index="${i}">×</button></li>`).join("")
-        + `</ul><div class="row" style="gap:4px"><input class="input" data-canon-add="${esc(m.name)}" placeholder="Add a rule for ${esc(m.name || "them")}, e.g. Always calls me boss" style="height:30px;flex:1">`
+        + `</ul>`
+        + (m.past || []).map((p, i) => `<div class="growth-about" title="Only ${esc(m.name)} knows this unless they tell the others">🧳 Remembers from “${esc(p.from)}”</div><ul><li><span>${esc(p.text.length > 400 ? p.text.slice(0, 400) + "…" : p.text)}</span><button type="button" title="Forget everything from this chat" aria-label="Forget" data-past-member="${esc(m.name)}" data-past-index="${i}">×</button></li></ul>`).join("")
+        + `<div class="row" style="gap:4px"><input class="input" data-canon-add="${esc(m.name)}" placeholder="Add a rule for ${esc(m.name || "them")}, e.g. Always calls me boss" style="height:30px;flex:1">`
         + `<button class="btn btn-sm" type="button" data-canon-save="${esc(m.name)}">Add</button></div></div>`).join("")
       + ((data.story || []).length ? `<span class="hint">Story so far: ${data.story.length} beat${data.story.length === 1 ? "" : "s"}.</span>` : "");
     box.hidden = !people.length;
@@ -6601,9 +6604,16 @@
   $("agentMemory").addEventListener("click", async (event) => {
     const remove = event.target.closest("button[data-canon-index]");
     const save = event.target.closest("button[data-canon-save]");
-    if (!agent.current || !(remove || save)) return;
+    const forget = event.target.closest("button[data-past-index]");
+    if (!agent.current || !(remove || save || forget)) return;
     try {
-      if (remove) {
+      if (forget) {
+        const member = forget.dataset.pastMember;
+        const person = (agent.memory?.characters || []).find((m) => m.name === member);
+        const past = (person?.past || []).filter((_, i) => i !== Number(forget.dataset.pastIndex));
+        await api(`/v1/agent/sessions/${agent.current}/memory`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ member, past }) });
+        toast("Forgotten", `${member} no longer remembers that chat here.`, "ok", 3000);
+      } else if (remove) {
         const member = remove.dataset.canonMember;
         const person = (agent.memory?.characters || []).find((m) => m.name === member);
         const canon = (person?.canon || []).filter((_, i) => i !== Number(remove.dataset.canonIndex));
@@ -6638,15 +6648,18 @@
     const html = `<option value="">Bring in someone…</option>` + options.join("");
     if (select.dataset.html !== html) { select.innerHTML = html; select.dataset.html = html; }
     select.hidden = !options.length;
+    $("castBringFullBox").hidden = !options.length;
   }
   $("castBring").addEventListener("change", async (event) => {
     const [from_session, member] = (event.target.value || "").split("|");
     event.target.value = "";
     if (!agent.current || !from_session) return;
     try {
-      updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/bring_in`, { from_session, member }));
+      const full = $("castBringFull").checked;
+      updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/bring_in`, { from_session, member, full }));
       agent.castDraft = null;
-      toast(`${member} joined`, "With their persona, look, permanent memory and growth.", "ok", 4000);
+      toast(`${member} joined`, full ? "With everything they remember of that chat, their feelings, look, permanent memory and growth."
+        : "With their persona, look, permanent memory and growth.", "ok", 4500);
     } catch (error) { toast(`Could not bring in ${member}`, error.message, "bad"); }
   });
   //: What the chat has worked out, as facts. Read-only apart from deleting one: a cheap summary model will

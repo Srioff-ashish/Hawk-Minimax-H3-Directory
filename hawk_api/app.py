@@ -1087,7 +1087,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def agent_memory_update(session_id: str, body: AgentMemoryIn):
         """Edit the long-term memory by hand: add rules, replace a character's canon or identity pictures, or the story."""
         return agent.set_memory(session_id, member=body.member, canon=body.canon, refs=body.refs, story=body.story,
-                                add=body.add)
+                                add=body.add, past=body.past)
 
     @app.get("/v1/agent/sessions/{session_id}/graph", tags=["agent"])
     async def agent_graph(session_id: str):
@@ -1158,7 +1158,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         from_session, member = str(body.get("from_session") or ""), str(body.get("member") or "")
         if not from_session or not member:
             raise RequestError("Give from_session and member.")
-        return agent.public(agent.bring_in(session_id, from_session, member))
+        return agent.public(agent.bring_in(session_id, from_session, member, full=bool(body.get("full"))))
 
     @app.delete("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_delete(session_id: str):

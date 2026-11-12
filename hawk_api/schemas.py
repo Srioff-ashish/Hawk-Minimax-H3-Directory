@@ -267,6 +267,8 @@ class AgentMemoryIn(BaseModel):
     add: list[str] | None = Field(None, description="Rules to add to the character's canon, keeping what is there.")
     refs: list[str] | None = Field(None, description="Replace the character's identity pictures (face first, up to 4).")
     story: list[str] | None = Field(None, description="Replace the chat's story-so-far beats.")
+    past: list[dict] | None = Field(None, description="Replace the memories the character brought from other chats "
+                                    "([{from, text}]; [] forgets them all).")
 
 
 class AgentTalkIn(BaseModel):
