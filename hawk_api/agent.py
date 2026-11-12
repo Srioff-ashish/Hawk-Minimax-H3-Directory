@@ -209,15 +209,15 @@ AGENT_TOOLS = [
         "description": "Make an image your avatar in this chat: it is shown with your name next to every reply. When the "
         "user asks for a picture of you or your persona, generate it with generate_image, then call set_avatar with the "
         "new asset_id. Later pictures or videos of yourself should use your avatar as a reference (role picture). "
-        "asset_id \"\" removes the avatar. In a group chat pass speaker: whose avatar it is.",
+        "asset_id \"\" removes the avatar. In a group chat speaker is required: whose avatar it is.",
         "args": {"asset_id": "string (required)", "name": "string, optional", "speaker": "string, optional"},
     },
     {
         "name": "set_references",
         "description": "Set a character's identity pictures (face first, then body or full look; up to 4). From then on "
         "every image or video of that character gets them attached automatically, labelled, ahead of any other "
-        "reference -- you do not pass them yourself, and you do not describe the face in words. In a group chat pass "
-        "speaker: whose pictures they are.",
+        "reference -- you do not pass them yourself, and you do not describe the face in words. In a group chat "
+        "speaker is required: whose pictures they are.",
         "args": {"asset_ids": "list of image asset ids (required)", "speaker": "string, optional"},
     },
     {
@@ -3123,6 +3123,12 @@ class AgentService:
             # asked to add Mrs. Khanna overwrote its lead Rebel with her: persona, name and all. Renaming the lead
             # takes speaker=<their current name>.
             speaker = name
+        if not speaker and len(cast) > 1 and tool in ("set_avatar", "set_references"):
+            # Pictures without an owner went to the lead. A live chat set three characters' pictures in a row
+            # without speaker: each call overwrote the lead's, which ended up with another character's face, and
+            # every video of the lead was made from it.
+            names = ", ".join(display_name(m, i, len(cast)) for i, m in enumerate(cast))
+            raise RequestError(f"This chat has several characters ({names}): pass speaker to say whose pictures these are.")
         index = find_member(cast, speaker) if speaker else 0
         if tool == "remove_character":
             if index is None:

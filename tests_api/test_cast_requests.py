@@ -85,6 +85,26 @@ class InTheChat(AgentHarness):
         view = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()["session"]
         self.assertEqual(view["cast"][0]["avatar_asset_id"], "", "an empty id still removes it")
 
+    async def test_pictures_without_an_owner_do_not_land_on_the_lead(self):
+        uploaded = await self.http.post("/v1/assets", files={"files": ("face.png", tiny_png(), "image/png")})
+        meu_face = uploaded.json()["assets"][0]["id"]
+        calls = iter([[{"tool": "set_references", "args": {"asset_ids": [meu_face]}}],
+                      [{"tool": "set_references", "args": {"asset_ids": [meu_face], "speaker": "Meu"}}]])
+
+        def reply(body):
+            actions = next(calls, [])
+            return json.dumps({"say": "Ok.", "actions": actions, "done": not actions})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(cast=[{"name": "Randitya", "persona": "R."}, {"name": "Meu", "persona": "M."}])
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "set the reference pictures"})
+        view = await self.settle(chat)
+        cast = {m["display_name"]: m for m in view["session"]["cast"]}
+        self.assertEqual(cast["Randitya"].get("refs") or [], [], "the lead keeps his own pictures")
+        self.assertEqual(cast["Meu"]["refs"], [meu_face])
+        errors = [m["content"].get("error") for m in view["messages"] if m["role"] == "tool"]
+        self.assertIn("pass speaker", errors[0])
+
     async def test_renaming_takes_the_current_name(self):
         def reply(body):
             if not any(m["role"] == "assistant" for m in body["messages"]):
