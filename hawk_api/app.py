@@ -244,9 +244,10 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.get("/v1/library", tags=["assets"])
     async def library(kind: str | None = None, collection: str | None = None, tag: str | None = None, q: str | None = None,
                       limit: int = 200, offset: int = 0):
-        items, total = service.search_assets(kind=kind, collection=collection, tag=tag, query=q, limit=min(limit, 1000), offset=offset)
-        return {"assets": [service.asset_view(a) for a in items], "total": total,
-                "collections": service.collections(), "tags": service.tags()}
+        page = await asyncio.to_thread(service.library_page, kind=kind, collection=collection, tag=tag, query=q,
+                                       limit=min(limit, 1000), offset=offset)
+        return {"assets": [service.asset_view(a) for a in page["items"]], "total": page["total"],
+                "collections": page["collections"], "tags": page["tags"]}
 
     @app.patch("/v1/assets/{asset_id}", tags=["assets"])
     async def update_asset(asset_id: str, body: AssetUpdate):

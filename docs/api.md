@@ -366,6 +366,18 @@ Studio's **Agent** page (and the `/v1/agent` API) runs a chat model that does wh
 
 **Persona name and avatar.** Each chat has its own. `persona_name` is `name` when set, otherwise the name the persona gives itself ("You are Maya, …" → Maya). Ask the agent for a picture of itself: it runs `generate_image`, then `set_avatar` with the new image, and Studio shows that face and name on every reply, in the chat header and in the chat list. The agent is told its avatar's asset id and uses it as the picture reference for later images or videos of itself. Sessions include `avatar_url` (a signed thumbnail) and `avatar_file_url`.
 
+**Regenerate, permanent memory, people across chats.**
+- `POST /v1/agent/sessions/{id}/regenerate` hides the newest reply (greyed, restorable) and answers the last message again. Studio: **↻ Regenerate**.
+- `GET /PUT /v1/agent/sessions/{id}/memory` reads and edits each character's permanent memory (canon). Studio lists it in the Persona panel under **📌 Permanent memory**, with × to remove an item and a box to add a rule.
+- `GET /v1/people` lists everyone in any chat or the character library, grouped by name: their chats, how much each chat remembers about them, and how many pictures they made or are in.
+- `POST /v1/agent/sessions/{id}/bring_in` `{from_session, member}` adds a character from another chat with their persona, avatar, identity pictures, permanent memory and growth. Feelings and their memory of that chat stay there. Studio: **Bring in someone…** next to + Add character.
+- A chat character with no pictures of their own uses the character library's pictures for the same name.
+- Long-term memory is captured beside the reply, not before it. A rule you give is in the reply's own prompt as your message, and in permanent memory from the next turn on.
+
+**Providers.** With both an Atlas and an OpenRouter key set, chat calls go through one router: an id is sent in the spelling the provider serves (`deepseek-ai/` and `deepseek/` are the same model), a model id written `openrouter:…` or `atlas:…` runs on that provider whichever one is switched on, and a rate limit, server error or outage on one provider is tried once on the other. Refusals, truncated replies and bad requests are never moved. Errors name the provider that failed.
+
+**Storyboard shots as units.** `POST /v1/storyboards/{id}/shots` `{at, shot, motion?, lines?, mode?}` inserts a shot; `DELETE /v1/storyboards/{id}/shots/{n}` removes one; `POST /v1/storyboards/{id}/shots/{n}/move?to=m` moves one. Every other shot keeps its own panel, motion, mode, lines and check. `PATCH` takes `dialogue` (per shot, the lines in order). A second **Make film** reuses every render part whose inputs did not change. The panel check never drops a panel just because someone in it has no identity picture; when it drops more than half, the board stops for review.
+
 ### Media library and Google Drive import
 
 Every uploaded, imported or generated file is an **asset** in a **collection** (default `Uploads`) with optional **tags**. Identical files are stored once: uploading the same content again returns the existing asset with `duplicate: true`.

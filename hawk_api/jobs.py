@@ -326,6 +326,7 @@ PROMPT_RECORD_LIMIT = 4000
 class Store:
     _SCHEMA = """
     CREATE TABLE IF NOT EXISTS assets (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS assets_sha256 ON assets(json_extract(data, '$.sha256'));
     CREATE TABLE IF NOT EXISTS asset_history (id TEXT PRIMARY KEY, data TEXT NOT NULL, deleted_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS llm_calls (seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, service TEXT NOT NULL,
                                           outcome TEXT NOT NULL, data TEXT NOT NULL);
@@ -372,6 +373,13 @@ class Store:
         with self._lock:
             rows = self._db.execute(sql + " ORDER BY created_at DESC LIMIT ?", (*args, limit)).fetchall()
         return [json.loads(row[0]) for row in rows]
+
+    def asset_by_sha256(self, digest: str) -> dict | None:
+        """The asset with these exact bytes, through an index (the upload check used to parse every asset)."""
+        with self._lock:
+            row = self._db.execute("SELECT data FROM assets WHERE json_extract(data, '$.sha256') = ? "
+                                   "ORDER BY created_at LIMIT 1", (digest,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def all_assets(self) -> list[dict]:
         with self._lock:
@@ -873,7 +881,7 @@ class HawkService:
         kind = asset_kind(filename, content_type)
         digest = await asyncio.to_thread(_hash_file, fileobj)
         if dedupe and digest:
-            existing = next((a for a in self.store.all_assets() if a.get("sha256") == digest), None)
+            existing = self.store.asset_by_sha256(digest)
             if existing is not None:
                 return dict(existing, duplicate=True)
         asset_id = uuid.uuid4().hex[:12]
@@ -911,8 +919,9 @@ class HawkService:
 
     # ------------------------------------------------------------ library
 
-    def search_assets(self, *, kind=None, collection=None, tag=None, query=None, limit: int = 100, offset: int = 0) -> tuple[list[dict], int]:
-        items = self.store.all_assets()
+    def search_assets(self, *, kind=None, collection=None, tag=None, query=None, limit: int = 100, offset: int = 0,
+                      items: list[dict] | None = None) -> tuple[list[dict], int]:
+        items = self.store.all_assets() if items is None else items
         needle = (query or "").strip().lower()
         tag = (tag or "").strip().lower()
         matches = [
@@ -924,9 +933,9 @@ class HawkService:
         ]
         return matches[offset : offset + limit], len(matches)
 
-    def collections(self) -> list[dict]:
+    def collections(self, items: list[dict] | None = None) -> list[dict]:
         groups: dict[str, dict] = {}
-        for asset in self.store.all_assets():
+        for asset in self.store.all_assets() if items is None else items:
             name = asset.get("collection") or DEFAULT_COLLECTION
             group = groups.setdefault(name, {"name": name, "count": 0, "kinds": {}, "updated_at": 0})
             group["count"] += 1
@@ -934,12 +943,19 @@ class HawkService:
             group["updated_at"] = max(group["updated_at"], asset["created_at"])
         return sorted(groups.values(), key=lambda g: g["updated_at"], reverse=True)
 
-    def tags(self) -> list[dict]:
+    def tags(self, items: list[dict] | None = None) -> list[dict]:
         counts: dict[str, int] = {}
-        for asset in self.store.all_assets():
+        for asset in self.store.all_assets() if items is None else items:
             for tag in asset.get("tags") or []:
                 counts[tag] = counts.get(tag, 0) + 1
         return [{"name": name, "count": count} for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+    def library_page(self, *, kind=None, collection=None, tag=None, query=None, limit: int = 200, offset: int = 0) -> dict:
+        """The Media page in one read of the assets table (it used to read and parse every asset three times)."""
+        items = self.store.all_assets()
+        found, total = self.search_assets(kind=kind, collection=collection, tag=tag, query=query, limit=limit,
+                                          offset=offset, items=items)
+        return {"items": found, "total": total, "collections": self.collections(items), "tags": self.tags(items)}
 
     def update_asset(self, asset_id: str, *, collection=None, tags=None, add_tags=None, remove_tags=None, filename=None,
                      owner=None, of=None, generated_from=None) -> dict:
@@ -3001,12 +3017,6 @@ class HawkService:
             raise NotFound(str(exc)) from None
         except ComfyError as exc:
             raise Unavailable(str(exc)) from None
-
-    async def open_video(self, job_id: str):
-        return await self._view(*self.video_location(job_id))
-
-    async def open_segment(self, job_id: str, number: int):
-        return await self._view(*self.segment_location(job_id, number))
 
     async def job_thumb(self, job_id: str, width: int = 640) -> bytes:
         """A JPEG frame from a finished render (1 s in), cached."""
