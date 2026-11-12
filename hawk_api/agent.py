@@ -385,7 +385,7 @@ def repeat_reason(new: str, earlier: list[str]) -> str:
 #: re-sent with every reply, and a "rule" to make a video that was delivered hours ago pulls every later reply back
 #: to it. These go to the story instead.
 _FINISHED = re.compile(
-    r"\b(has|have|had|was|were) (just )?(filmed|delivered|sent|made|shot|recorded|finished|completed|given|taken)\b"
+    r"\b(has|have|had|was|were) (just )?(filmed|delivered|sent|made|shot|recorded|finished|completed)\b"
     r"|\b(ordered|asked|told|promised) .{0,40}\b(to )?(film|make|record|shoot|send)\b"
     r"|\bmake an? [\w-]+[- ](minute|second|min|sec)\b",
     re.IGNORECASE)

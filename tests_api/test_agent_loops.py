@@ -44,7 +44,8 @@ class Memory(unittest.TestCase):
                 self.assertTrue(is_finished_event(text))
         for text in ("Maya always dresses before Arjun's father comes home.",
                      "Maya must vary her expressions and clothes in every photo session.",
-                     "Arjun promised Maya a prize if she makes him laugh by modelling."):
+                     "Arjun promised Maya a prize if she makes him laugh by modelling.",
+                     "Arjun has given Maya free rein to do whatever she wants with him."):
             with self.subTest(text=text):
                 self.assertFalse(is_finished_event(text))
 
