@@ -44,6 +44,7 @@ MAX_STEPS = 40
 SUBJECT_FIELDS = ("prompt", "script", "story", "text", "brief")
 USER_OWNER_WORDS = ("user", "you", "me", "myself")
 MAX_CAST = 4  # characters in one chat
+MAX_AKA = 5  # former names kept per character, so their old messages still find them
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
 MAX_TALK_MAKES = 5  # things any one character may have made during one "let them talk" (default 2)
@@ -524,6 +525,9 @@ def find_member(cast: list[dict], speaker: str) -> int | None:
     names = [display_name(member, index, len(cast)).lower() for index, member in enumerate(cast)]
     for index, member in enumerate(cast):
         if key in (member.get("id", "").lower(), names[index]):
+            return index
+    for index, member in enumerate(cast):  # a name they had before a rename
+        if key in (str(old).lower() for old in member.get("aka") or []):
             return index
     for test in (lambda name: name.split()[0] == key.split()[0],  # same first name: "Sonia" / "Nisha ji"
                  lambda name: name.startswith(key) or key.startswith(name)):  # a shortened name: "Ana"
@@ -1212,6 +1216,16 @@ class AgentService:
             entry["canon"] = clean_canon(canon if canon is not None else before.get("canon"))
             past = member.get("past")  # None keeps what they brought from other chats
             entry["past"] = clean_past(past if past is not None else before.get("past"))
+            # Former names: the messages they wrote carry the name they had then, so a renamed character keeps
+            # their face on them (a chat that renamed Mrs. Khanna to Anjali showed the logo on all her old lines).
+            aka = [str(n) for n in before.get("aka") or []]
+            old_name = str(before.get("name") or "").strip()
+            if old_name and old_name.lower() != entry["name"].lower():
+                aka.append(old_name)
+            aka = [n for i, n in enumerate(aka) if n.lower() != entry["name"].lower()
+                   and n.lower() not in (m.lower() for m in aka[:i])][-MAX_AKA:]
+            if aka:
+                entry["aka"] = aka
             refs = member.get("refs")  # None keeps the character's identity pictures
             entry["refs"] = self._check_refs(refs) if refs is not None else self._check_refs(before.get("refs"), strict=False)
             shown = display_name(entry, index, len(cast))

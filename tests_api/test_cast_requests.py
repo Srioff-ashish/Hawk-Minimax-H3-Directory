@@ -110,6 +110,18 @@ class InTheChat(AgentHarness):
         errors = [m["content"].get("error") for m in view["messages"] if m["role"] == "tool"]
         self.assertIn("pass speaker", errors[0])
 
+    async def test_a_renamed_character_keeps_their_former_names(self):
+        chat = await self.new_chat(cast=[{"name": "Rebel", "persona": "R."}, {"name": "Mrs. Khanna", "persona": "K."}])
+        khanna = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()["session"]["cast"][1]["id"]
+        for new in ("Anjali", "Anal"):
+            await self.http.patch(f"/v1/agent/sessions/{chat}", json={"cast": [
+                {"id": "main", "name": "Rebel", "persona": "R."}, {"id": khanna, "name": new, "persona": "K."}]})
+        member = (await self.http.get(f"/v1/agent/sessions/{chat}")).json()["session"]["cast"][1]
+        self.assertEqual(member["display_name"], "Anal")
+        self.assertEqual(member["aka"], ["Mrs. Khanna", "Anjali"], "her old lines still find her face")
+        from hawk_api.agent import find_member
+        self.assertEqual(find_member([{"name": "Rebel"}, member], "Mrs. Khanna"), 1)
+
     async def test_renaming_takes_the_current_name(self):
         def reply(body):
             if not any(m["role"] == "assistant" for m in body["messages"]):

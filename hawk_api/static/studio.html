@@ -6289,7 +6289,8 @@
   function memberFor(speaker, session = currentSession()) {
     const cast = castOf(session);
     const key = (speaker || "").trim().toLowerCase();
-    if (key) return cast.find((m) => (m.display_name || "").toLowerCase() === key) || null;
+    if (key) return cast.find((m) => (m.display_name || "").toLowerCase() === key)
+      || cast.find((m) => (m.aka || []).some((n) => String(n).toLowerCase() === key)) || null;  // renamed since
     return cast.length > 1 ? null : cast[0] || null;  // in a group chat an unnamed reply is the director, not the lead
   }
   function whoHtml(speaker, session = currentSession()) {
