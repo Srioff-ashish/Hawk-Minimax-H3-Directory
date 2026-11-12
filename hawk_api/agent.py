@@ -1196,6 +1196,100 @@ class AgentService:
             raise NotFound("There is no reply to forget in this chat yet.")
         return self.forget_message(session_id, last["id"], "hide")
 
+    def regenerate(self, session_id: str) -> dict:
+        """Answer the user's last message again: the newest reply is hidden (still shown greyed, restorable) and a
+        fresh run starts on the same message. There was no way to get a different reply except writing again."""
+        session = self.get_session(session_id)
+        if session["status"] in ("running", "stopping") or session_id in self._tasks:
+            raise Conflict("The agent is still working on this chat. Wait, or stop it first.")
+        messages = self.store.messages(session_id)
+        last_user = next((m for m in reversed(messages) if m["role"] == "user"), None)
+        if last_user is None:
+            raise NotFound("There is no message to answer again.")
+        replies = [m for m in messages if m["id"] > last_user["id"] and m["role"] in ("assistant", "tool")]
+        if replies:
+            self.store.set_excluded(session_id, [m["id"] for m in replies], True)
+            self._rebuild_after_forgetting(session_id, [m["id"] for m in replies])
+        session = self.get_session(session_id)
+        session["status"] = "running"
+        self.store.save_session(session)
+        self._stop.discard(session_id)
+        self._awaiting_choice.pop(session_id, None)
+        self._tasks[session_id] = asyncio.create_task(self._run(session_id))
+        return {"session": session, "hidden": [m["id"] for m in replies]}
+
+    # ------------------------------------------------------------ people across chats
+
+    def people(self) -> list[dict]:
+        """Everyone who appears in any chat, grouped by name, with what each chat knows about them and how many
+        pictures they made or are in. The same person used to be set up again in every chat with nothing linking
+        them; this is the list a new chat picks from."""
+        grouped: dict[str, dict] = {}
+        for session in self.store.list_sessions(limit=500):
+            cast = cast_of(session)
+            for index, member in enumerate(cast):
+                name = display_name(member, index, len(cast))
+                if not name:
+                    continue
+                key = name.casefold()
+                person = grouped.setdefault(key, {"name": name, "chats": [], "avatar_asset_id": "",
+                                                   "library": False, "album": 0})
+                person["chats"].append({
+                    "session_id": session["id"], "title": session.get("title") or "", "member_id": member.get("id"),
+                    "persona": (member.get("persona") or "")[:400], "canon": len(clean_canon(member.get("canon"))),
+                    "growth": len(clean_growth(member.get("growth"))), "refs": len(member.get("refs") or []),
+                    "updated_at": session.get("updated_at", 0)})
+                person["avatar_asset_id"] = person["avatar_asset_id"] or member.get("avatar_asset_id") or ""
+        library = getattr(self, "characters", None)
+        if library is not None:
+            try:
+                saved = library.list()
+            except Exception:
+                saved = []
+            for character in saved:
+                key = str(character.get("name") or "").casefold()
+                if not key:
+                    continue
+                person = grouped.setdefault(key, {"name": character["name"], "chats": [], "avatar_asset_id": "",
+                                                   "library": False, "album": 0})
+                person["library"] = True
+                person["library_pictures"] = len(character.get("identity_asset_ids") or [])
+        names = {key for key in grouped}
+        for asset in self.service.store.all_assets():
+            tagged = set()
+            by = asset.get("by") or {}
+            if isinstance(by, dict) and by.get("name"):
+                tagged.add(str(by["name"]).casefold())
+            for who in asset.get("of") or []:
+                if isinstance(who, dict) and who.get("name"):
+                    tagged.add(str(who["name"]).casefold())
+            for key in tagged & names:
+                grouped[key]["album"] += 1
+        for person in grouped.values():
+            person["chats"].sort(key=lambda chat: -chat["updated_at"])
+        return sorted(grouped.values(), key=lambda p: (-len(p["chats"]), p["name"].casefold()))
+
+    def bring_in(self, session_id: str, from_session: str, member: str) -> dict:
+        """Add a character from another chat to this one, with who they are and what they have become: persona,
+        avatar, identity pictures, canon and growth. Feelings and their memory of that chat stay there."""
+        target = self.get_session(session_id)
+        source = self.get_session(from_session)
+        source_cast = cast_of(source)
+        index = find_member(source_cast, member)
+        if index is None:
+            raise NotFound(f"No character {member!r} in that chat.")
+        person = source_cast[index]
+        name = display_name(person, index, len(source_cast))
+        cast = [dict(m) for m in cast_of(target)]
+        if find_member(cast, name) is not None:
+            raise Conflict(f"{name} is already in this chat.")
+        entry = {"name": name, "persona": person.get("persona") or "", "avatar_asset_id": person.get("avatar_asset_id") or "",
+                 "refs": list(person.get("refs") or []), "canon": clean_canon(person.get("canon")),
+                 "growth": clean_growth(person.get("growth")), "feelings": {}}
+        fresh_chat = not self.store.messages(session_id) and len(cast) == 1 and not (cast[0].get("persona") or "").strip()
+        cast = [entry] if fresh_chat else cast + [entry]
+        return self.update_session(session_id, cast=cast)
+
     def view(self, session_id: str, after: int = 0, before: int = 0, limit: int = 0) -> dict:
         """The chat as Studio draws it. ``limit`` opens on the last page rather than the whole transcript and
         ``before`` walks back from there; ``has_older`` says whether there is another page to walk to."""
@@ -1721,12 +1815,13 @@ class AgentService:
 
     async def _run(self, session_id: str, talk_rounds: int = 0, makes: int = 2) -> None:
         self._final[session_id] = "idle"
+        capture: asyncio.Task | None = None
         try:
             if MEMORY_CAPTURE:
-                try:
-                    await asyncio.wait_for(self._capture_memory(session_id), MEMORY_TIMEOUT)
-                except Exception as exc:  # memory never blocks a reply; the next turn reads the same messages again
-                    log.warning("long-term memory capture failed: %s", exc)
+                # Beside the reply, not before it. Run first, it added up to 45 s to every reply (a median of 37-58 s
+                # on the busiest chats); the user's newest message is in the reply's own prompt anyway, so the reply
+                # does not need it captured first. It is awaited before the chat goes idle, so the next turn has it.
+                capture = asyncio.create_task(asyncio.wait_for(self._capture_memory(session_id), MEMORY_TIMEOUT))
             if talk_rounds:
                 await self._talk(session_id, talk_rounds, makes)
                 # The conversation ran ahead of its pictures; wait for them before the chat says it is done,
@@ -1749,6 +1844,13 @@ class AgentService:
             self._note(session_id, f"Agent error: {exc}", "error")
             self._final[session_id] = "error"
         finally:
+            if capture is not None:
+                try:
+                    await capture
+                except asyncio.CancelledError:
+                    capture.cancel()
+                except Exception as exc:  # memory never blocks a reply; the next turn reads the same messages again
+                    log.warning("long-term memory capture failed: %s", exc)
             for task in list(self._makes.pop(session_id, set())):
                 task.cancel()
             self._tasks.pop(session_id, None)
@@ -2332,8 +2434,10 @@ class AgentService:
     async def _add_usage(self, session_id: str, model: str, usage: dict) -> dict:
         """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at Atlas list
         prices, with cached input tokens (a repeated prompt prefix) at the model's cheaper cache-read price."""
-        session = self.get_session(session_id)
         info = await self.atlas.model_info(model) or {}
+        # Read after the await: memory capture runs beside the reply, and a copy read before it would put the
+        # canon back to what it was when this call started.
+        session = self.get_session(session_id)
         prompt, completion = int(usage.get("prompt_tokens") or 0), int(usage.get("completion_tokens") or 0)
         details = usage.get("prompt_tokens_details") or {}
         cached = int((details.get("cached_tokens") if isinstance(details, dict) else 0) or usage.get("prompt_cache_hit_tokens") or 0)
@@ -3205,8 +3309,23 @@ class AgentService:
 
     # ------------------------------------------------------------ identity pictures
 
+    def _library_pictures(self, name: str) -> list[str]:
+        """The character library's identity pictures for a name, when the library has that person.
+
+        The same people were set up twice: in a chat (often with no pictures) and in the library (with one to three).
+        A chat character with nothing of their own uses the library's, so their face is not invented each time."""
+        library = getattr(self, "characters", None)
+        if library is None or not name:
+            return []
+        try:
+            found = library.find(name)
+        except Exception:  # NotFound, or a library that cannot be read: the chat simply has no pictures
+            return []
+        return [asset for asset in found.get("identity_asset_ids") or [] if self.service.store.get_asset(asset)]
+
     def _identity_for(self, session: dict, names: list[str]) -> list[tuple[str, list[str]]]:
-        """(name, pictures) for each named character: their identity pictures, else their avatar."""
+        """(name, pictures) for each named character: their identity pictures, else their avatar, else the
+        library's pictures for the same name."""
         cast = cast_of(session)
         found = []
         for name in names:
@@ -3214,9 +3333,12 @@ class AgentService:
             if index is None:
                 continue
             member = cast[index]
+            shown = display_name(member, index, len(cast))
             pictures = list(member.get("refs") or []) or ([member["avatar_asset_id"]] if member.get("avatar_asset_id") else [])
+            if not pictures:
+                pictures = self._library_pictures(shown)[:MAX_REFS]
             if pictures:
-                found.append((display_name(member, index, len(cast)), pictures))
+                found.append((shown, pictures))
         return found
 
     def _subject_names(self, session: dict, action: dict, asked_by: str, subjects: tuple[str, ...]) -> list[str]:
@@ -3227,15 +3349,26 @@ class AgentService:
         return names
 
     @staticmethod
-    def _label_identity(prompt: str, identity: list[tuple[str, list[str]]]) -> str:
+    def _label_identity(prompt: str, identity: list[tuple[str, list[str]]], start: int = 1) -> str:
         """Say which reference is whose: nothing labels references for an engine except the prompt."""
-        n, parts = 1, []
+        n, parts = start, []
         for name, pictures in identity:
             span = f"<image{n}>" if len(pictures) == 1 else f"<image{n}> to <image{n + len(pictures) - 1}>"
             parts.append(f"{span} {'is' if len(pictures) == 1 else 'are'} {name}")
             n += len(pictures)
         return (prompt.strip() + "\n\n" + "; ".join(parts) + ". Keep each person's face, skin tone, age and body "
                 "exactly as in their own reference pictures; do not restyle them.")
+
+    @staticmethod
+    def _fit_identity(identity: list[tuple[str, list[str]]], budget: int) -> list[tuple[str, list[str]]]:
+        """Trim each person's pictures, last ones first, until they fit in ``budget``; everyone keeps their first."""
+        sized = [(name, list(pictures)) for name, pictures in identity]
+        while sum(len(p) for _, p in sized) > max(budget, len(sized)):
+            longest = max(range(len(sized)), key=lambda i: len(sized[i][1]))
+            if len(sized[longest][1]) <= 1:
+                break
+            sized[longest][1].pop()
+        return sized
 
     def _with_identity(self, session: dict, action: dict, asked_by: str = "",
                        subjects: tuple[str, ...] = ()) -> dict:
@@ -3260,8 +3393,20 @@ class AgentService:
                 asset = found.group(0) if found else ""
                 if asset and asset not in held and asset not in others and self.service.store.get_asset(asset):
                     others.append(asset)
-            args["reference_asset_ids"] = (held + others)[:MAX_ENGINE_REFS]
-            args["prompt"] = self._label_identity(str(args.get("prompt") or ""), identity)
+            # The model's own references are never pushed out: they are often the very picture being edited. The
+            # identity pictures give way instead, down to one per person.
+            others = others[: max(0, MAX_ENGINE_REFS - len(identity))]
+            identity = self._fit_identity(identity, MAX_ENGINE_REFS - len(others))
+            held = [asset for _, pictures in identity for asset in pictures]
+            prompt = str(args.get("prompt") or "")
+            if others and re.search(r"<image\s*\d+>", prompt, re.IGNORECASE):
+                # The prompt already numbers its references ("put the jacket from <image1> on her"), so those keep
+                # their numbers and the people follow them.
+                args["reference_asset_ids"] = others + held
+                args["prompt"] = self._label_identity(prompt, identity, start=len(others) + 1)
+            else:
+                args["reference_asset_ids"] = held + others
+                args["prompt"] = self._label_identity(prompt, identity)
         elif name == "make_video":
             args["identity_asset_ids"] = held[:3]
         else:  # plan_film: the planner numbers what it is given, so the pictures are added, never re-ordered

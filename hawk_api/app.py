@@ -126,6 +126,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     )
 
     agent = AgentService(service, mcp)
+    agent.characters = characters  # a chat character with no pictures borrows their library pictures
     snapshots = DbSnapshotter(exporter)
 
     @asynccontextmanager
@@ -1122,6 +1123,25 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         """Hide the newest reply and the tool results that came with it."""
         result = agent.forget_last(session_id)
         return {**result, "session": agent.public(result["session"])}
+
+    @app.post("/v1/agent/sessions/{session_id}/regenerate", tags=["agent"])
+    async def agent_regenerate(session_id: str):
+        """Answer the last message again: the newest reply is hidden (restorable) and a new run starts."""
+        result = agent.regenerate(session_id)
+        return {**result, "session": agent.public(result["session"])}
+
+    @app.get("/v1/people", tags=["agent"])
+    async def people():
+        """Everyone in any chat or the character library, grouped by name: their chats, memory sizes, album count."""
+        return {"people": await asyncio.to_thread(agent.people)}
+
+    @app.post("/v1/agent/sessions/{session_id}/bring_in", tags=["agent"])
+    async def agent_bring_in(session_id: str, body: dict):
+        """Add a character from another chat with their persona, look, canon and growth."""
+        from_session, member = str(body.get("from_session") or ""), str(body.get("member") or "")
+        if not from_session or not member:
+            raise RequestError("Give from_session and member.")
+        return agent.public(agent.bring_in(session_id, from_session, member))
 
     @app.delete("/v1/agent/sessions/{session_id}", tags=["agent"])
     async def agent_delete(session_id: str):

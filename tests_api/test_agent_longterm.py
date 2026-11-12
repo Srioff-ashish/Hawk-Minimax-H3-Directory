@@ -76,12 +76,16 @@ class LongTermMemory(AgentHarness):
         self.assertEqual(memory["story"], ["Rebel burned all her sarees."])
         directors = [r for r in self.atlas.requests if not (is_memory(r) or is_summary(r) or is_fold(r))]
         self.assertTrue(directors)
-        self.assertIn(SAREE_RULE, all_text(directors[-1]),
-                      "captured before the director is asked, so the very reply that follows already holds it")
-        self.assertIn("PERMANENT MEMORY", all_text(directors[-1]))
+        # Capture runs beside the reply (it used to delay every reply by up to 45 s). The reply that follows sees the
+        # instruction in the user's own message; from the next turn on it is permanent memory in every prompt.
+        self.assertIn("never wear a saree", all_text(directors[-1]).lower())
         captured = memory_note = [m for m in (await self.http.get(f"/v1/agent/sessions/{chat}")).json()["messages"]
                                   if m["role"] == "note" and m["content"].get("kind") == "canon"]
         self.assertEqual([m["content"]["text"] for m in memory_note], [SAREE_RULE], captured)
+        await self.say(chat, "Let's go out tonight.")
+        directors = [r for r in self.atlas.requests if not (is_memory(r) or is_summary(r) or is_fold(r))]
+        self.assertIn(SAREE_RULE, all_text(directors[-1]), "held in permanent memory from the next turn on")
+        self.assertIn("PERMANENT MEMORY", all_text(directors[-1]))
 
     async def test_a_newer_item_replaces_the_one_it_contradicts(self):
         chat = await self.chat(json.dumps({"canon": [], "story": []}))
