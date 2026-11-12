@@ -33,6 +33,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import httpx
 
+from . import netguard
 from . import models_llm
 from .atlas import AtlasError
 from hawk_h3.script import ScriptError, max_segment_seconds, parse_script
@@ -2568,8 +2569,8 @@ class ManhwaManager:
         headers = {"User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9,ko;q=0.8"}
         if cookies:
             headers["Cookie"] = cookies
-        return httpx.AsyncClient(follow_redirects=True, headers=headers, transport=self._transport,
-                                 timeout=httpx.Timeout(30.0, read=120.0))
+        return httpx.AsyncClient(follow_redirects=True, max_redirects=5, headers=headers, transport=self._transport,
+                                 event_hooks=netguard.hooks(), timeout=httpx.Timeout(30.0, read=120.0))
 
     async def _run(self, state: dict, url: str, chapter: str, cookies: str) -> None:
         previous_images: list[str] | None = None

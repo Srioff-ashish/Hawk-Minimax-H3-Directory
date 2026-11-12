@@ -33,6 +33,7 @@ from . import graph as graphs
 from . import google_images
 from . import image_engines
 from . import models_llm
+from . import netguard
 from . import pose_guide
 from .atlas import AtlasClient, AtlasError, routing_block as atlas_routing
 from .auth import sign_path
@@ -530,6 +531,7 @@ class HawkService:
         #: Plans in flight. A plan is written by the gateway rather than queued in ComfyUI, so it runs as a
         #: task; held here so stop() can cancel one instead of leaving a job stuck at "running".
         self._plan_tasks: set[asyncio.Task] = set()
+        self._plan_by_job: dict[str, asyncio.Task] = {}  # so cancel can stop the LLM call, not just relabel it
 
     # ------------------------------------------------------------ properties
 
@@ -1172,7 +1174,8 @@ class HawkService:
         with tempfile.TemporaryFile() as buffer:
             size = 0
             try:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=httpx.Timeout(30.0, read=300.0)) as client:
+                async with httpx.AsyncClient(follow_redirects=True, max_redirects=5, event_hooks=netguard.hooks(),
+                                             timeout=httpx.Timeout(30.0, read=300.0)) as client:
                     async with client.stream("GET", url) as response:
                         if response.status_code != 200:
                             raise RequestError(f"Could not download {url} ({response.status_code}).")
@@ -2411,10 +2414,21 @@ class HawkService:
         job["status"] = "planning"  # the status a plan has always reported while the LLM is writing
         job["started_at"] = time.time()
         self.store.save_job(job)
-        task = asyncio.create_task(self._run_plan(job["id"], request, refs))
-        self._plan_tasks.add(task)
-        task.add_done_callback(self._plan_tasks.discard)
+        self._start_plan_task(job["id"], request, refs)
         return self.store.get_job(job["id"]) or job
+
+    def _start_plan_task(self, job_id: str, request: PlanRequest, refs: list) -> asyncio.Task:
+        task = asyncio.create_task(self._run_plan(job_id, request, refs))
+        self._plan_tasks.add(task)
+        self._plan_by_job[job_id] = task
+
+        def done(finished: asyncio.Task) -> None:
+            self._plan_tasks.discard(finished)
+            if self._plan_by_job.get(job_id) is finished:
+                del self._plan_by_job[job_id]
+
+        task.add_done_callback(done)
+        return task
 
     async def _run_plan(self, job_id: str, request: PlanRequest, refs: list) -> None:
         """Write the script and finish the job. Every failure ends as a failed job, never an unretrieved
@@ -2423,25 +2437,28 @@ class HawkService:
             script, model, usage = await self.plan_text(request, refs)
         except asyncio.CancelledError:
             job = self.store.get_job(job_id)
-            if job and job["status"] not in ("done", "failed"):
+            # Only the job's current task speaks for it: a cancelled run that is still unwinding when the plan is
+            # retried must not mark the new run failed.
+            current = self._plan_by_job.get(job_id) is asyncio.current_task()
+            if job and current and job["status"] not in FINISHED:
                 job.update(status="failed", error="The plan was interrupted by a server restart.", resumable=True)
                 self.store.save_job(job)
             raise
         except (AtlasError, RequestError, Unavailable, NotFound) as exc:
             job = self.store.get_job(job_id)
-            if job:
+            if job and job["status"] not in FINISHED:
                 job.update(status="failed", error=str(exc), resumable=True)
                 self.store.save_job(job)
             return
         except Exception as exc:  # a planner bug must not leave a job running for ever
             log.exception("hawk_api: plan %s failed", job_id)
             job = self.store.get_job(job_id)
-            if job:
+            if job and job["status"] not in FINISHED:
                 job.update(status="failed", error=f"The planner failed: {exc}", resumable=True)
                 self.store.save_job(job)
             return
         job = self.store.get_job(job_id)
-        if job is None or job["status"] == "failed":
+        if job is None or job["status"] in FINISHED:  # cancelled (or failed) while the model was writing
             return
         job["script"] = script
         job["planner_model"] = model
@@ -2628,12 +2645,25 @@ class HawkService:
         job = self.get_job(job_id)
         if job["status"] not in ACTIVE:
             raise Conflict(f"Job {job_id} is already {job['status']}.")
+        if job["kind"] == "plan":
+            # A plan is an LLM call running here, not a ComfyUI prompt: stop the task, and mark the job first so
+            # the task's CancelledError handler sees a finished job and leaves it alone.
+            job.update(status="cancelled", resumable=True, updated_at=time.time())
+            self.store.save_job(job)
+            task = self._plan_by_job.get(job_id)
+            if task is not None and not task.done():
+                task.cancel()
+            return self.store.get_job(job_id) or job
         try:
             await self.comfy.cancel(job["prompt_id"])
         except ComfyError as exc:
             log.warning("hawk_api: cancel reached no ComfyUI (%s)", exc)
-        job.update(status="cancelled", resumable=job["kind"] == "render")
-        self.store.save_job(job)
+        # Re-read: progress events may have saved the job while ComfyUI was being asked, and saving the copy read
+        # before the await would put those back over the cancel.
+        job = self.get_job(job_id)
+        if job["status"] in ACTIVE:
+            job.update(status="cancelled", resumable=job["kind"] == "render")
+            self.store.save_job(job)
         return job
 
     async def retry(self, job_id: str) -> dict:
@@ -2649,9 +2679,7 @@ class HawkService:
             job.update(status="planning", error=None, resumable=False, script=None, started_at=time.time(),
                        updated_at=time.time())
             self.store.save_job(job)
-            task = asyncio.create_task(self._run_plan(job["id"], request, refs))
-            self._plan_tasks.add(task)
-            task.add_done_callback(self._plan_tasks.discard)
+            self._start_plan_task(job["id"], request, refs)
             return self.store.get_job(job["id"]) or job
         # The graph loads its references from ComfyUI's input folder, which a restarted runtime has emptied:
         # put them back first, or the resubmit fails with "Invalid image file".
