@@ -33,6 +33,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 import httpx
 
+from . import db
 from . import netguard
 from . import models_llm
 from .atlas import AtlasError
@@ -803,8 +804,7 @@ class ManhwaStore:
     """
 
     def __init__(self, path: str):
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._lock = threading.Lock()
+        self._db, self._lock = db.connect(path)
         with self._lock:
             self._db.executescript(self._SCHEMA)
             self._db.commit()

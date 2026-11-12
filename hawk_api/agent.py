@@ -25,6 +25,7 @@ import threading
 import time
 import uuid
 
+from . import db
 from . import cast_talk
 from . import image_engines
 from . import models_llm
@@ -448,9 +449,7 @@ class AgentStore:
     """
 
     def __init__(self, path: str):
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._lock = threading.Lock()
+        self._db, self._lock = db.connect(path)
         with self._lock:
             self._db.executescript(self._SCHEMA)
             columns = {row[1] for row in self._db.execute("PRAGMA table_info(agent_messages)")}

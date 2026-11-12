@@ -25,6 +25,7 @@ import threading
 import time
 import uuid
 
+from . import db
 from .jobs import NotFound, RequestError, Unavailable
 from .schemas import PlannerOptions, ReferenceIn, RenderSettings, VideoRequest
 
@@ -745,46 +746,79 @@ BUSY = ("drawing", "checking", "rendering", "joining")
 
 
 class StoryboardStore:
-    """``DATA_DIR/storyboards.json``: every board, small enough to keep in one file."""
+    """Every board, one row each in ``jobs.sqlite3`` (table ``storyboards``).
+
+    Boards used to live in ``storyboards.json``, rewritten whole on every save. A story chapter points at its board,
+    so when that file went missing (a runtime restored without it, a failed write) the chapter failed with
+    "No storyboard ..." and could never recover. In the database they are covered by the same snapshot as the
+    chapters that point at them. An old ``storyboards.json`` is copied in on first start, kept as a backup, and
+    renamed so it is not imported twice."""
+
+    _SCHEMA = """
+    CREATE TABLE IF NOT EXISTS storyboards (
+        id TEXT PRIMARY KEY, data TEXT NOT NULL, status TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS storyboards_updated ON storyboards(updated_at);
+    """
 
     def __init__(self, data_dir: str):
-        self.path = os.path.join(data_dir, "storyboards.json")
-        self._lock = threading.Lock()
+        self.data_dir = data_dir
+        self.path = os.path.join(data_dir, "storyboards.json")  # the old file, read once for the migration
+        self._db, self._lock = db.connect(os.path.join(data_dir, "jobs.sqlite3"))
+        with self._lock:
+            self._db.executescript(self._SCHEMA)
+            self._db.commit()
+        self._import_json()
 
-    def _load(self) -> dict:
+    def _import_json(self) -> None:
+        if not os.path.isfile(self.path):
+            return
         try:
             with open(self.path, "r", encoding="utf-8") as handle:
                 data = json.load(handle)
-            return data if isinstance(data, dict) else {}
         except (OSError, json.JSONDecodeError):
-            return {}
+            log.warning("hawk_api: %s is unreadable; left in place, nothing imported", self.path)
+            return
+        boards = [b for b in (data.values() if isinstance(data, dict) else []) if isinstance(b, dict) and b.get("id")]
+        backup = os.path.join(self.data_dir, "backup-" + time.strftime("%Y%m%d"))
+        os.makedirs(backup, exist_ok=True)
+        shutil.copy2(self.path, os.path.join(backup, "storyboards.json"))
+        with self._lock:
+            for board in boards:  # a board already in the table (newer) is kept
+                self._db.execute("INSERT OR IGNORE INTO storyboards VALUES (?, ?, ?, ?, ?)",
+                                 (board["id"], json.dumps(board), str(board.get("status") or ""),
+                                  float(board.get("created_at") or time.time()),
+                                  float(board.get("updated_at") or time.time())))
+            self._db.commit()
+        os.replace(self.path, self.path + ".imported")
+        log.info("hawk_api: %d board(s) moved from storyboards.json into the database (backup in %s)",
+                 len(boards), backup)
 
     def all(self) -> list[dict]:
-        return sorted(self._load().values(), key=lambda board: -board.get("updated_at", 0))
+        with self._lock:
+            rows = self._db.execute("SELECT data FROM storyboards ORDER BY updated_at DESC").fetchall()
+        return [json.loads(row[0]) for row in rows]
 
     def get(self, board_id: str) -> dict | None:
-        return self._load().get(board_id)
+        with self._lock:
+            row = self._db.execute("SELECT data FROM storyboards WHERE id = ?", (board_id,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def save(self, board: dict) -> dict:
+        board["updated_at"] = time.time()
         with self._lock:
-            data = self._load()
-            board["updated_at"] = time.time()
-            data[board["id"]] = board
-            os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-            tmp = f"{self.path}.tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, indent=1)
-            os.replace(tmp, self.path)
+            self._db.execute(
+                "INSERT INTO storyboards VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+                "data = excluded.data, status = excluded.status, updated_at = excluded.updated_at",
+                (board["id"], json.dumps(board), str(board.get("status") or ""),
+                 float(board.get("created_at") or board["updated_at"]), board["updated_at"]))
+            self._db.commit()
         return board
 
     def delete(self, board_id: str) -> None:
         with self._lock:
-            data = self._load()
-            data.pop(board_id, None)
-            tmp = f"{self.path}.tmp"
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(data, handle, indent=1)
-            os.replace(tmp, self.path)
+            self._db.execute("DELETE FROM storyboards WHERE id = ?", (board_id,))
+            self._db.commit()
 
 
 class StoryboardManager:

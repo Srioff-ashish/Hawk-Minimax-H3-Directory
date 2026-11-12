@@ -27,6 +27,7 @@ import uuid
 
 from hawk_h3.script import ScriptError, max_segment_seconds, parse_script
 
+from . import db
 from . import models_llm
 from .atlas import AtlasError
 from .jobs import NotFound, RequestError, Unavailable
@@ -212,8 +213,7 @@ class StoryStore:
     """
 
     def __init__(self, path: str):
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._lock = threading.Lock()
+        self._db, self._lock = db.connect(path)
         with self._lock:
             self._db.executescript(self._SCHEMA)
             self._db.commit()
@@ -1113,6 +1113,12 @@ class StoryManager:
         story = self._story(story_id)
         chapter = self._chapter(story_id, chapter_id)
         settings = {**SETTINGS_DEFAULTS, **(story.get("settings") or {})}
+        if chapter.get("board_id") and self.boards.store.get(chapter["board_id"]) is None:
+            # The board this chapter was waiting on is gone (it lived in a JSON file a restored runtime could lose).
+            # The chapter's scenes are all a board is made from, so make it again rather than fail for good.
+            log.warning("hawk_api: chapter %s lost board %s; making a new one from its scenes",
+                        chapter_id, chapter["board_id"])
+            chapter = self._set(chapter_id, board_id=None)
         if not chapter.get("board_id"):  # a resume keeps the board it had
             board = self._chapter_film_board(story, chapter, settings)
             chapter = self._set(chapter_id, board_id=board["id"], status="rendering")

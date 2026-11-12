@@ -26,6 +26,7 @@ from .characters import CharacterManager
 from .storyboard import StoryboardManager, compose_sheet, identity_pack, make_film, suggest_shots
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
+from .atlas import AtlasError
 from .comfy_client import ComfyError
 from .config import Settings
 from .image_engines import SettingsError
@@ -182,6 +183,19 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.exception_handler(Unavailable)
     async def _unavailable(_request, exc: Unavailable):
         return JSONResponse({"error": str(exc)}, status_code=503)
+
+    # Errors that used to escape as a bare 500 with no reason: say what failed, so Studio and the notebook can show it.
+    @app.exception_handler(ComfyError)
+    async def _comfy_error(_request, exc: ComfyError):
+        return JSONResponse({"error": f"ComfyUI: {exc}"}, status_code=503)
+
+    @app.exception_handler(LoraError)
+    async def _lora_error(_request, exc: LoraError):
+        return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.exception_handler(AtlasError)
+    async def _model_error(_request, exc: AtlasError):
+        return JSONResponse({"error": str(exc)}, status_code=502)
 
     # ------------------------------------------------------------- info
 

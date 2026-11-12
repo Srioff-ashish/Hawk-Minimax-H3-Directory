@@ -1,10 +1,12 @@
 # Hawk H3 API gateway (hawk_api/). Not needed for the ComfyUI nodes themselves.
-fastapi>=0.110
-uvicorn[standard]>=0.29
-httpx>=0.27
-websockets>=12
-python-multipart>=0.0.9
-pydantic>=2.6
-mcp>=1.10
-pillow>=10  # thumbnails for Studio and the agent chat
-c2pa-python>=0.38  # reads the content credential on uploaded AI images (verify-ai-credential)
+# Upper bounds stop a fresh Colab runtime jumping to a new major version unannounced; they sit above today's
+# releases (Nov 2026), so nothing installed now is downgraded. Raise them deliberately after testing.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+httpx>=0.27,<1
+websockets>=12,<18
+python-multipart>=0.0.9,<0.1
+pydantic>=2.6,<3
+mcp>=1.10,<3
+pillow>=10  # thumbnails; ComfyUI owns this one, so it is not capped here
+c2pa-python>=0.38,<1  # reads the content credential on uploaded AI images (verify-ai-credential)

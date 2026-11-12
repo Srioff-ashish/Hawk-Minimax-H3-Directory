@@ -27,6 +27,7 @@ import httpx
 
 from hawk_h3.script import ScriptError, build_jobs, max_segment_seconds, parse_script, reference_counts_line, repair_planned_script
 
+from . import db
 from . import billing
 from . import content_credentials
 from . import graph as graphs
@@ -336,9 +337,7 @@ class Store:
     """
 
     def __init__(self, path: str):
-        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-        self._db = sqlite3.connect(path, check_same_thread=False)
-        self._lock = threading.Lock()
+        self._db, self._lock = db.connect(path)
         with self._lock:
             self._db.executescript(self._SCHEMA)
             self._db.commit()
