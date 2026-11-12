@@ -1141,6 +1141,11 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         result = agent.forget_last(session_id)
         return {**result, "session": agent.public(result["session"])}
 
+    @app.post("/v1/agent/sessions/{session_id}/memory/tidy", tags=["agent"])
+    async def agent_memory_tidy(session_id: str):
+        """Move finished tasks out of permanent memory into the story and merge items that say the same thing."""
+        return agent.tidy_memory(session_id)
+
     @app.post("/v1/agent/sessions/{session_id}/regenerate", tags=["agent"])
     async def agent_regenerate(session_id: str):
         """Answer the last message again: the newest reply is hidden (restorable) and a new run starts."""

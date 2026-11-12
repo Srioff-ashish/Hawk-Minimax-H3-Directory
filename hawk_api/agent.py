@@ -108,7 +108,8 @@ canon -- lasting truths about one character:
 - change: a lasting change in who they are or what they have: a new role or relationship, a name or title, something
   they now always wear or own (a collar), a body change, a decision that changes the story.
 - fact: a concrete fact later scenes depend on (a place, a possession, a promise, a secret someone holds).
-Not moods, not one-off actions, not anything already in the current canon below. When something new contradicts an
+Not moods, not one-off actions, not finished tasks or one-off orders ("filmed the video", "asked her to make an
+11-minute video") -- those are story lines -- and not anything already in the current canon below, even reworded. When something new contradicts an
 existing item, write the new item and give "replaces": that item's number. Use the character's name exactly as listed.
 
 story -- 0 to 3 lines for the events in these messages that later scenes depend on (who did what, what changed).
@@ -336,6 +337,85 @@ def cast_of(session: dict) -> list[dict]:
         return cast
     return [{"id": "main", "name": session.get("name", ""), "persona": session.get("persona", ""),
              "avatar_asset_id": session.get("avatar_asset_id", ""), "growth": []}]
+
+
+REPEAT_RECENT = 3  # earlier replies a new one is compared with
+REPEAT_OPENING_WORDS = 6  # the same first words as a recent reply is a repeat, whatever follows
+REPEAT_OVERLAP = 0.5  # share of word triples a reply may have in common with a recent one
+CANON_SAME = 0.5  # word-triple overlap at which a new canon item is the same as an old one
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[\w']+", str(text or "").lower())
+
+
+def _triples(words: list[str]) -> set[tuple[str, ...]]:
+    return {tuple(words[i:i + 3]) for i in range(max(0, len(words) - 2))}
+
+
+def overlap(a: str, b: str) -> float:
+    """How much of the shorter text is in the longer one, by word triples (0..1). Robust to small rewordings,
+    which is exactly what a looping model produces: the same reply with a word or two changed."""
+    ta, tb = _triples(_words(a)), _triples(_words(b))
+    if not ta or not tb:
+        return 1.0 if _words(a) and _words(a) == _words(b) else 0.0
+    return len(ta & tb) / min(len(ta), len(tb))
+
+
+def repeat_reason(new: str, earlier: list[str]) -> str:
+    """Why ``new`` repeats one of the ``earlier`` replies, or "" when it does not."""
+    words = _words(new)
+    if not words:
+        return ""
+    for position, old in enumerate(earlier):
+        old_words = _words(old)
+        if not old_words:
+            continue
+        if words == old_words:
+            return "repeated the previous one word for word" if position == 0 else "repeated an earlier reply word for word"
+        n = min(REPEAT_OPENING_WORDS, len(words), len(old_words))
+        if n >= 4 and words[:n] == old_words[:n]:
+            return "opened exactly the way a previous reply did"
+        if len(words) >= 8 and overlap(new, old) >= REPEAT_OVERLAP:
+            return "mostly repeated a previous reply with a few words changed"
+    return ""
+
+
+#: A finished task or a one-off order is something that happened, not a lasting truth: kept as permanent memory it is
+#: re-sent with every reply, and a "rule" to make a video that was delivered hours ago pulls every later reply back
+#: to it. These go to the story instead.
+_FINISHED = re.compile(
+    r"\b(has|have|had|was|were) (just )?(filmed|delivered|sent|made|shot|recorded|finished|completed|given|taken)\b"
+    r"|\b(ordered|asked|told|promised) .{0,40}\b(to )?(film|make|record|shoot|send)\b"
+    r"|\bmake an? [\w-]+[- ](minute|second|min|sec)\b",
+    re.IGNORECASE)
+
+
+def is_finished_event(text: str) -> bool:
+    return bool(_FINISHED.search(str(text or "")))
+
+
+def tidy_canon(canon: list[dict]) -> tuple[list[dict], list[str], int]:
+    """(kept items, finished events moved out as story lines, duplicates merged). Of two items that say the same
+    thing the newer wording stays, in the older one's place; a rule absorbing a fact stays a rule."""
+    kept: list[dict] = []
+    events: list[str] = []
+    merged = 0
+    for item in canon:
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        if is_finished_event(text):
+            events.append(text)
+            continue
+        twin = next((i for i, old in enumerate(kept) if overlap(old["text"], text) >= CANON_SAME), None)
+        if twin is None:
+            kept.append(dict(item))
+            continue
+        merged += 1
+        kind = "rule" if "rule" in (kept[twin].get("kind"), item.get("kind")) else item.get("kind") or kept[twin].get("kind")
+        kept[twin] = {**kept[twin], **item, "kind": kind}
+    return kept, events, merged
 
 
 def clean_canon(items) -> list[dict]:
@@ -1974,23 +2054,27 @@ class AgentService:
         lines = content.get("lines") or []
         return "\n".join(str(line.get("say", "")) for line in lines) if lines else str(content.get("say") or "")
 
-    def _said_before(self, session_id: str, reply: dict) -> bool:
-        """Whether this reply is word for word the one already in the chat.
+    def _said_before(self, session_id: str, reply: dict) -> str:
+        """Why this reply repeats one of the last few in the chat, or "" when it does not.
 
-        Two identical replies are self-reinforcing: the pair is the clearest pattern in the prompt, so the
-        third comes back identical too, and by then nothing the user types changes the answer.
+        Repeats are self-reinforcing: two similar replies are the clearest pattern in the prompt, so the third comes
+        back the same, and by then nothing the user types changes the answer. Only exact copies used to be caught;
+        a live chat looped for many turns on replies that all opened "Toh kya hua? Main toh bas..." with a word or
+        two changed, so near-copies and same openings count too.
         """
         said = self._spoken(reply).strip()
         if not said:
-            return False
-        # Only the tail: the previous reply is a handful of messages back at most, behind that turn's tool
-        # results and growth notes. Forgotten messages are left out by default, which is right -- a reply the
-        # user hid is not in the prompt, so repeating it is not the trap this is looking for.
+            return ""
+        # Only the tail. Forgotten messages are left out by default, which is right -- a reply the user hid is not
+        # in the prompt, so repeating it is not the trap this is looking for.
+        earlier = []
         for message in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)):
             if message["role"] != "assistant" or message["content"].get("invalid"):
                 continue
-            return self._spoken(message["content"]).strip() == said
-        return False
+            earlier.append(self._spoken(message["content"]))
+            if len(earlier) >= REPEAT_RECENT:
+                break
+        return repeat_reason(said, earlier)
 
     async def _director_turn(self, session_id: str, max_steps: int, private_to: str = "", asked_by: str = "",
                              subjects: tuple[str, ...] = ()) -> dict | None:
@@ -2040,10 +2124,11 @@ class AgentService:
                     reply["narrator"] = True  # nobody is speaking: the UI shows it without a character's name
             # Word for word the last reply: ask again rather than store it, because storing it is what makes
             # the next one identical too. Not stored, so the retry sees the conversation it was meant to.
-            if not repeats and not reply["actions"] and self._said_before(session_id, reply):
+            why = "" if repeats or reply["actions"] else self._said_before(session_id, reply)
+            if why:
                 repeats += 1
-                self._note(session_id, "Your last reply repeated the previous one word for word. Answer what was "
-                                       "just said instead, and move the scene on rather than restating it.", "repair")
+                self._note(session_id, f"Your last reply {why}. Answer what the user just said or did, open "
+                                       "differently, and move the scene on rather than restating it.", "repair")
                 continue
             repeats, answered = 0, True
             content = {"raw": text[:8000], **reply, "usage": call}
@@ -2189,10 +2274,17 @@ class AgentService:
         prose = await self.model_for("prose", session)
         director = next((m for m in await self.models_for("director", session) if m != prose), prose)
         attempts = [prose, prose, director]
+        own, others = self._recent_talk(session_id, member["id"])
+        nudged = False
         text, call, failure = "", None, None
-        for model in attempts:
+        position = 0
+        while position < len(attempts):
+            model = attempts[position]
+            position += 1
             try:
-                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS, temperature=0.8, purpose="character turn")
+                text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=TURN_MAX_TOKENS,
+                                                    temperature=REPEAT_TEMPERATURE if nudged else 0.8,
+                                                    purpose="character turn")
             except AtlasError as exc:
                 # A refusal, a rate limit, or an empty reply -- deepseek-v4-pro returned one on the pod and it
                 # ended the whole talk, because the error escaped before any of the parsing fallbacks below
@@ -2203,6 +2295,17 @@ class AgentService:
             call = await self._add_usage(session_id, model, usage)
             turn = cast_talk.parse_turn(text)
             if turn is not None:
+                # A character that says what it said last round, or opens the way someone just did ("It feels
+                # like..." three times in a row), is a talk going round in circles. Asked once more, then accepted.
+                why = "" if nudged else (repeat_reason(turn["say"], own) or self._same_opening(turn["say"], others))
+                if why:
+                    nudged = True
+                    messages.append({"role": "assistant", "content": text[:2000]})
+                    messages.append({"role": "user", "content": f"That line {why}. Say something new instead: react to "
+                                     "the last thing said, add a new thought, a question, a disagreement or a decision, "
+                                     "in different words. Same JSON format."})
+                    attempts.insert(position, model)
+                    continue
                 return record(turn, call)
             messages.append({"role": "assistant", "content": text[:2000]})
             messages.append({"role": "user", "content": 'Reply with only the JSON object: {"say": "...", "to": "..."}'})
@@ -2212,6 +2315,33 @@ class AgentService:
         # a character that says nothing looks to the user exactly like a broken chat.
         salvaged = cast_talk.spoken_anyway(text, names)
         return record(salvaged, call) if salvaged is not None else None
+
+    def _recent_talk(self, session_id: str, member_id: str) -> tuple[list[str], list[str]]:
+        """(this character's last few lines, what the others said since the user last spoke), newest first."""
+        own, others = [], []
+        for message in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)):
+            if message["role"] == "user":
+                break
+            content = message["content"]
+            if message["role"] != "assistant" or content.get("invalid"):
+                continue
+            for line in content.get("lines") or []:
+                said = str(line.get("say") or "")
+                if content.get("speaker_id") == member_id or line.get("speaker_id") == member_id:
+                    own.append(said)
+                else:
+                    others.append(said)
+        return own[:REPEAT_RECENT], others[:6]
+
+    @staticmethod
+    def _same_opening(said: str, others: list[str]) -> str:
+        words = _words(said)
+        for line in others:
+            theirs = _words(line)
+            n = min(4, len(words), len(theirs))
+            if n >= 4 and words[:n] == theirs[:n]:
+                return "opened with the same words someone else just used"
+        return ""
 
     def _transcript(self, session: dict, member_id: str, names: list[str], upto: int | None = None) -> str:
         """The chat as one character heard it, after its memory (whispers to others left out), newest last."""
@@ -3307,6 +3437,7 @@ class AgentService:
         canons = [clean_canon(m.get("canon")) for m in cast]
         replaced: set[tuple[int, int]] = set()
         added: list[tuple[str, str]] = []
+        moved: list[str] = []
         for item in data.get("canon") or []:
             if not isinstance(item, dict) or not str(item.get("text") or "").strip():
                 continue
@@ -3315,15 +3446,26 @@ class AgentService:
                 if len(cast) > 1:
                     continue
                 who = 0
+            text = " ".join(str(item["text"]).split())
+            if is_finished_event(text):  # something that happened: a story line, not a lasting truth
+                moved.append(text)
+                continue
             number = item.get("replaces")
             if isinstance(number, int) and 1 <= number <= len(numbered):
                 replaced.add(numbered[number - 1])
-            canons[who].append({"text": item["text"], "kind": item.get("kind") or "fact", "at": time.time()})
-            added.append((names[who] if who < len(names) else "", " ".join(str(item["text"]).split())))
+            # The same thing again in other words replaces the old item instead of piling up beside it (a live chat
+            # held three near-identical rules about one habit, which over-weighted it in every reply).
+            for position, old in enumerate(canons[who]):
+                if (who, position) not in replaced and overlap(old["text"], text) >= CANON_SAME:
+                    replaced.add((who, position))
+                    if old.get("kind") == "rule":
+                        item = {**item, "kind": "rule"}
+            canons[who].append({"text": text, "kind": item.get("kind") or "fact", "at": time.time()})
+            added.append((names[who] if who < len(names) else "", text))
         for index, member in enumerate(cast):
             kept = [c for position, c in enumerate(canons[index]) if (index, position) not in replaced]
             member["canon"] = clean_canon(kept)
-        beats = clean_story(story + [b for b in data.get("story") or [] if isinstance(b, str)])
+        beats = clean_story(story + [b for b in data.get("story") or [] if isinstance(b, str)] + moved)
         fresh["cast"] = cast
         fresh["story"] = beats
         fresh["canon_upto"] = max(upto, fresh.get("canon_upto", 0))
@@ -3355,6 +3497,26 @@ class AgentService:
                                 "past": clean_past(m.get("past"))}
                                for i, m in enumerate(cast)],
                 "story": clean_story(session.get("story")), "captured_upto": session.get("canon_upto", 0)}
+
+    def tidy_memory(self, session_id: str) -> dict:
+        """Clean every character's permanent memory without a model call: finished tasks and one-off orders move to
+        the story, and items that say the same thing are merged (newest wording kept). Returns what changed."""
+        session = self.get_session(session_id)
+        cast = [dict(m) for m in cast_of(session)]
+        report, beats = [], []
+        for index, member in enumerate(cast):
+            before = clean_canon(member.get("canon"))
+            kept, events, merged = tidy_canon(before)
+            member["canon"] = clean_canon(kept)
+            beats += events
+            report.append({"name": display_name(member, index, len(cast)), "before": len(before),
+                           "after": len(member["canon"]), "moved_to_story": len(events), "merged": merged})
+        self.update_session(session_id, cast=cast)
+        if beats:
+            fresh = self.get_session(session_id)
+            fresh["story"] = clean_story(clean_story(fresh.get("story")) + beats)
+            self.store.save_session(fresh)
+        return {**self.memory_view(session_id), "tidied": report}
 
     def set_memory(self, session_id: str, *, member: str = "", canon=None, refs=None, story=None,
                    add: list[str] | None = None, past=None) -> dict:

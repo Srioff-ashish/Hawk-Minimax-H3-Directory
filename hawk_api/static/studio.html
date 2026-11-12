@@ -6589,7 +6589,7 @@
     agent.memory = data;
     const people = data.characters || [];
     const html = `<div class="row" style="justify-content:space-between"><span class="label" style="margin:0">📌 Permanent memory</span>`
-      + `<span class="hint" style="margin:0">in every prompt; rules are never dropped on their own</span></div>`
+      + `<span class="hint" style="margin:0">in every prompt; rules are never dropped on their own <button class="btn btn-sm btn-ghost" type="button" data-canon-tidy title="Move finished tasks (a video that was made, an order that was carried out) into the story, and merge items that say the same thing. No model call.">🧹 Tidy</button></span></div>`
       + people.map((m) => `<div><div class="growth-who">${esc(m.name || "Agent")} · ${m.canon.length}</div><ul>`
         + m.canon.map((c, i) => `<li><span><b>${esc(c.kind)}</b> ${esc(c.text)}</span><button type="button" title="Wrong or out of date — remove it" aria-label="Remove" data-canon-member="${esc(m.name)}" data-canon-index="${i}">×</button></li>`).join("")
         + `</ul>`
@@ -6605,9 +6605,15 @@
     const remove = event.target.closest("button[data-canon-index]");
     const save = event.target.closest("button[data-canon-save]");
     const forget = event.target.closest("button[data-past-index]");
-    if (!agent.current || !(remove || save || forget)) return;
+    const tidy = event.target.closest("button[data-canon-tidy]");
+    if (!agent.current || !(remove || save || forget || tidy)) return;
     try {
-      if (forget) {
+      if (tidy) {
+        const out = await post(`/v1/agent/sessions/${agent.current}/memory/tidy`, {});
+        const said = (out.tidied || []).filter((c) => c.before !== c.after)
+          .map((c) => `${c.name}: ${c.before} → ${c.after}${c.moved_to_story ? `, ${c.moved_to_story} to the story` : ""}${c.merged ? `, ${c.merged} merged` : ""}`);
+        toast(said.length ? "Memory tidied" : "Nothing to tidy", said.join(" · ") || "No finished tasks or duplicates found.", "ok", 6000);
+      } else if (forget) {
         const member = forget.dataset.pastMember;
         const person = (agent.memory?.characters || []).find((m) => m.name === member);
         const past = (person?.past || []).filter((_, i) => i !== Number(forget.dataset.pastIndex));
