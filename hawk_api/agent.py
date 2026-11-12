@@ -2674,11 +2674,13 @@ class AgentService:
             parts.append({"type": "text", "text": f"Image asset_id {asset_id}:"})
             parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
         session = self.get_session(session_id)
-        # The chat's own model first when it can see, then the vision role. That role used to be a hardcoded
-        # pair of Atlas ids, so on any other provider both 404ed and a text-only chat could not inspect at all.
+        # The vision role first: it is the model chosen for looking, and usually a fraction of the director's price
+        # (a vision model at $0.10/M against a director at $2/M). The chat's own model is the fallback when it can
+        # see, for a pod whose vision role resolves to nothing usable.
+        models = list(await self.models_for("vision", session))
         chat_model = await self.model_for("director", session)
-        models = [chat_model] if ((await self.atlas.model_info(chat_model)) or {}).get("vision") else []
-        models += [m for m in await self.models_for("vision", session) if m not in models]
+        if chat_model not in models and ((await self.atlas.model_info(chat_model)) or {}).get("vision"):
+            models.append(chat_model)
         failures = []
         for model in models:
             try:

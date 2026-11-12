@@ -1111,7 +1111,8 @@ class AgentApi(AgentHarness):
         parts = reviews[0]["messages"][0]["content"]
         self.assertEqual(sum(1 for p in parts if p["type"] == "image_url"), 2)
         self.assertTrue(parts[2]["image_url"]["url"].startswith("data:image/"))
-        self.assertEqual(reviews[0]["model"], "xai/grok-4.6", "the chat's model can see images")
+        # The vision role is asked first: it is the model picked for looking, and much cheaper than a director.
+        self.assertEqual(reviews[0]["model"], "xai/grok-4.3", "the vision role answers before the chat's model")
         self.assertIn("inspect_image", self.atlas.requests[0]["messages"][0]["content"])
 
     async def test_rejected_take_waits_for_the_user_to_choose(self):
@@ -1195,8 +1196,8 @@ class AgentApi(AgentHarness):
         self.assertEqual(made, ["krea2", "z-image", "seedream"], "each failed take moves auto one engine up")
         inspected = [c["result"] for c in tools if c["tool"] == "inspect_image"]
         # the vision chain is qwen3.6 (not served here), then grok-4.3, then grok-4.6
-        self.assertEqual(inspected[0]["model"], "xai/grok-4.3", "falls back when the chat's model fails")
-        self.assertIn("content policy", inspected[0]["skipped_models"][0])
+        self.assertEqual(inspected[0]["model"], "xai/grok-4.3", "the vision role is asked first")
+        self.assertFalse(inspected[0].get("skipped_models"), "the chat's model is not paid for when vision answers")
         self.assertIn("turbo", inspected[0]["next_engine"])
         self.assertIn("seedream", tools[4]["result"]["engine_note"])
         self.assertEqual(reviewers, ["xai/grok-4.3"] * 3)

@@ -1569,7 +1569,10 @@
             <span class="hint">Every box below takes <b>one id or a comma-separated list, best first</b>. A model id
               belongs to a provider, so the later ids are what run when the provider in force does not serve the
               earlier ones — that is how one setting works on both Atlas and OpenRouter. What each role will
-              actually send is shown under its box.</span>
+              actually send is shown under its box. Write <b>openrouter:</b> or <b>atlas:</b> before an id to run
+              it on that provider whichever one is switched on (e.g. <code>openrouter:x-ai/grok-4.6</code>). With
+              both keys set, a call that hits a rate limit or an outage on one provider is tried once on the
+              other.</span>
             <div class="grid grid-2">
               <div class="field"><label class="label" for="llmPlannerModel">Planner Model — writes the film's segment script</label>
                 <input class="input mono" id="llmPlannerModel" list="llmModelList" placeholder="Leave empty for default">

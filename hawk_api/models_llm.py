@@ -129,6 +129,11 @@ def resolve_many(role: str, setting, catalogue: list[dict] | None, *, vision: bo
 
     found: list[str] = []
     for candidate in wanted + [c for c in spec.chain if c not in wanted]:
+        if re.match(r"^\s*(atlas|openrouter)\s*:", candidate, re.IGNORECASE):
+            # Pinned to a provider ("openrouter:x-ai/grok-4.6"): this catalogue is the other provider's, so it
+            # cannot judge it. The chat router sends it where it says and corrects the spelling there.
+            found.append(candidate.strip())
+            continue
         if candidate in by_id:
             found.append(candidate)
             continue

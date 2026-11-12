@@ -115,6 +115,28 @@ class AtlasClient:
     def service(self) -> str:
         return "openrouter" if "openrouter.ai" in self.base_url else "atlas"
 
+    @property
+    def label(self) -> str:
+        """The provider's name for messages: an OpenRouter failure used to be reported as "Atlas error"."""
+        return "OpenRouter" if self.service == "openrouter" else "Atlas"
+
+    def _http(self) -> httpx.AsyncClient:
+        """One connection pool per client and event loop, instead of a new TLS handshake for every call."""
+        import asyncio as _asyncio
+
+        loop = _asyncio.get_running_loop()
+        pool = getattr(self, "_pool", None)
+        if pool is None or pool[0] is not loop or pool[1].is_closed:
+            client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=30.0),
+                                       limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+            self._pool = (loop, client)
+        return self._pool[1]
+
+    async def aclose(self) -> None:
+        pool = getattr(self, "_pool", None)
+        if pool is not None and not pool[1].is_closed:
+            await pool[1].aclose()
+
     def _record(self, model: str, purpose: str, started: float, outcome: str, *, response: httpx.Response | None = None,
                 body: dict | None = None, error: str = "") -> None:
         """Hand one attempt to on_call. Never raises: a broken log must not break the call it describes."""
@@ -161,12 +183,11 @@ class AtlasClient:
         if cached and not refresh and time.monotonic() - stamp < MODEL_CACHE_SECONDS:
             return cached
         try:
-            async with httpx.AsyncClient(timeout=30.0) as http:
-                response = await http.get(f"{self.base_url}/models", headers=self._headers())
+            response = await self._http().get(f"{self.base_url}/models", headers=self._headers(), timeout=30.0)
         except httpx.HTTPError as exc:
-            raise AtlasError(f"Could not reach Atlas: {exc}") from exc
+            raise AtlasError(f"Could not reach {self.label}: {exc}") from exc
         if response.status_code != 200:
-            raise AtlasError(f"Atlas /models failed ({response.status_code}): {response.text[:300]}")
+            raise AtlasError(f"{self.label} /models failed ({response.status_code}): {response.text[:300]}")
         data = response.json()
         items = data.get("data", data) if isinstance(data, dict) else data
         models = []
@@ -294,7 +315,8 @@ class AtlasClient:
     ) -> tuple[str, dict]:
         """One chat completion. Returns ``(text, usage)``. ``purpose`` labels the call in the call log."""
         if not self.configured:
-            raise AtlasError("No Atlas API key on the server. Set ATLAS_API_KEY and restart the API.")
+            raise AtlasError(f"No {self.label} API key on the server. Add one under Settings, or set "
+                             f"{'OPENROUTER_API_KEY' if self.service == 'openrouter' else 'ATLAS_API_KEY'}.")
         payload: dict = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature, "stream": False}
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -302,7 +324,8 @@ class AtlasClient:
             payload["provider"] = self.routing
         url = f"{self.base_url}/chat/completions"
         last_error = ""
-        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, connect=30.0)) as http:
+        http = self._http()
+        if True:  # kept as a block so the retry loop below reads as it always did
             attempt = 0
             while True:
                 started = time.monotonic()
@@ -311,7 +334,7 @@ class AtlasClient:
                 except httpx.HTTPError as exc:
                     self._record(model, purpose, started, "network", error=f"{type(exc).__name__}: {exc}")
                     if attempt >= max_retries:
-                        raise AtlasError(f"Could not reach Atlas: {exc}") from exc
+                        raise AtlasError(f"Could not reach {self.label}: {exc}") from exc
                     last_error = str(exc)
                 else:
                     if response.status_code == 200:
@@ -351,12 +374,12 @@ class AtlasClient:
                         payload.pop("provider")
                         continue
                     if response.status_code not in RETRY_STATUSES or attempt >= max_retries:
-                        raise AtlasError(f"Atlas error {response.status_code} for {model}: {body[:600] or '(empty body)'}")
+                        raise AtlasError(f"{self.label} error {response.status_code} for {model}: {body[:600] or '(empty body)'}")
                     last_error = f"{response.status_code}: {body[:200]}"
                 attempt += 1
                 await asyncio.sleep(min(2**attempt, 30) * (0.5 + random.random() / 2))
                 if attempt > max_retries:
-                    raise AtlasError(f"Atlas request failed: {last_error}")
+                    raise AtlasError(f"{self.label} request failed: {last_error}")
 
     @staticmethod
     def _parse(response: httpx.Response, json_mode: bool = True) -> tuple[str, dict]:

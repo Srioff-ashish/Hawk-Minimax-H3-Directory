@@ -37,6 +37,7 @@ from . import models_llm
 from . import netguard
 from . import pose_guide
 from .atlas import AtlasClient, AtlasError, routing_block as atlas_routing
+from .llm_router import ChatRouter
 from .auth import sign_path
 from .prompts import PLATFORM_RULES, PromptStore
 from .comfy_client import ComfyClient, ComfyError, ComfyNotFound, ComfyValidationError
@@ -593,7 +594,7 @@ class HawkService:
         self._llm_clients.clear()
 
     @property
-    def atlas(self) -> AtlasClient:
+    def atlas(self) -> "ChatRouter":
         """The chat service for planning and agent turns, built from the settings as they stand.
 
         Resolved on every access rather than once at startup, so a change in Studio reaches the next request
@@ -609,14 +610,24 @@ class HawkService:
         # OpenRouter when it is chosen, and also when it is the only key the pod has: a runtime given an
         # OPENROUTER_API_KEY and no ATLAS_API_KEY would otherwise call Atlas unauthenticated and report
         # itself as having no key at all.
+        openrouter = (llm.openrouter_url, openrouter_key, atlas_routing(llm.openrouter_routing), llm.openrouter_routing)
+        atlas = (self.settings.atlas_url, atlas_key, None, "")
         if llm.llm_provider == "openrouter" or (openrouter_key and not atlas_key):
             # Atlas serves its own models, so only OpenRouter gets a routing block: there, one model id is
             # served by many services at different prices and different weights, and left unfiltered the
             # same call can come back at a different quality each time.
-            url, key, routing = llm.openrouter_url, openrouter_key, atlas_routing(llm.openrouter_routing)
+            primary, secondary = openrouter, atlas
         else:
-            url, key, routing = self.settings.atlas_url, atlas_key, None
-        return self._llm_client(url, key, routing, llm.openrouter_routing if routing else "")
+            primary, secondary = atlas, openrouter
+        # The other provider, when it has a key, takes a call the first one could not serve right now (a rate
+        # limit, an outage) and answers any model id written "atlas:..." / "openrouter:...". See llm_router.
+        router_key = ("router", primary[:2], primary[3], secondary[:2] if secondary[1] else None)
+        router = self._llm_clients.get(router_key)
+        if router is None:
+            first = self._llm_client(*primary)
+            second = self._llm_client(*secondary) if secondary[1] else None
+            router = self._llm_clients[router_key] = ChatRouter(first, second)
+        return router
 
     @property
     def image_atlas(self) -> AtlasClient:
@@ -635,8 +646,12 @@ class HawkService:
     def google(self) -> google_images.GoogleImageClient:
         """The Gemini client for the Nano Banana engines and their SFW check, from the key in force.
 
-        Rebuilt on every access: it holds nothing but the key, so a key saved in Studio applies at once."""
-        return google_images.GoogleImageClient(self.llm().google_api_key or self.settings.google_api_key)
+        Kept per key, so its connection is reused; a key saved in Studio is a new key and gets a new client."""
+        key = self.llm().google_api_key or self.settings.google_api_key
+        found = self._llm_clients.get(("google", key))
+        if found is None:
+            found = self._llm_clients[("google", key)] = google_images.GoogleImageClient(key)
+        return found
 
     def _llm_client(self, url: str, key: str, routing: dict | None, routing_key: str) -> AtlasClient:
         """One client per (url, key, routing), kept because a client carries a cached model list."""
