@@ -193,8 +193,10 @@ AGENT_TOOLS = [
         "name": "set_persona",
         "description": "Set who a character is. To create several characters, call it once per character with speaker "
         "set to that character's name (a new speaker adds a character, up to 4; in a fresh chat the first one replaces "
-        "the unnamed default). Pass speaker to change an existing character too. Without speaker (and a name that "
-        "isn't in the cast) it changes the lead, i.e. you. name is the display name shown in the chat (e.g. Maya).",
+        "the unnamed default). Pass speaker to change an existing character too. A name that isn't in the cast adds "
+        "that character; it never renames anyone. To rename a character pass speaker=<their current name> and "
+        "name=<the new one>. Without speaker or name it changes the lead, i.e. you. Saying someone joined does not "
+        "add them: only this tool does.",
         "args": {"persona": "string (required)", "name": "string, optional", "speaker": "string, optional"},
     },
     {
@@ -395,6 +397,39 @@ def is_finished_event(text: str) -> bool:
     return bool(_FINISHED.search(str(text or "")))
 
 
+#: Memory about the chat's own machinery: who is in the cast, which asset is whose avatar. The cast list is the
+#: truth for that, and a live chat stored "Mrs. Khanna has now been added to the chat group" when no tool had run,
+#: so the character believed she had joined and nobody added her.
+_CHAT_MECHANICS = re.compile(
+    r"\b(added|joined|removed|invited|included)\b.{0,30}\b(chat|group|cast)\b"
+    r"|\b(avatar|avataar|identity pictures?|references?)\b.{0,30}\b(asset|is|are|set)\b.{0,20}\b[0-9a-f]{12}\b"
+    r"|\b(avatar|avataar)\b.{0,15}\basset\b",
+    re.IGNORECASE)
+
+
+def is_chat_mechanics(text: str) -> bool:
+    return bool(_CHAT_MECHANICS.search(str(text or "")))
+
+
+#: The user asking for a change to the cast itself (add, remove, persona, avatar, pictures). That needs a tool, and
+#: the prose model answers in voice and almost never calls one: asked to "include her in chat group" it said she
+#: was in and the memory keeper saved that as fact. Such a turn goes to the director model from its first step.
+_CAST_REQUEST = re.compile(
+    r"\b(add|include|bring|invite|put|join|daal|dal|shamil|jod|remove|nikaal|nikal|kick)\w*\b.{0,40}"
+    r"\b(chat|group|cast|conversation)\b"
+    r"|\b(chat|group|cast)\b.{0,20}\b(mein|me|main)\b.{0,15}\b(daal|dal|add|la|laa|shamil|jod)\w*\b"
+    r"|\b(add|create|make|new|naya|nayi)\w*\b.{0,15}\b(character|persona|charcter|charactor)s?\b"
+    r"|\b(set|change|fix|correct|update|theek|thik|sahi|badal|laga|lagao|use)\w*\b.{0,30}"
+    r"\b(persona|ava+t?a*r|avtar|dp|identity|references?|refs?)\b"
+    r"|\b(persona|ava+t?a*r|avtar|identity|references?|refs?)\b.{0,30}"
+    r"\b(set|change|fix|correct|update|theek|thik|sahi|badal|laga|lagao)\w*\b",
+    re.IGNORECASE)
+
+
+def asks_cast_change(text: str) -> bool:
+    return bool(_CAST_REQUEST.search(str(text or "")))
+
+
 def tidy_canon(canon: list[dict]) -> tuple[list[dict], list[str], int]:
     """(kept items, finished events moved out as story lines, duplicates merged). Of two items that say the same
     thing the newer wording stays, in the older one's place; a rule absorbing a fact stays a rule."""
@@ -403,7 +438,7 @@ def tidy_canon(canon: list[dict]) -> tuple[list[dict], list[str], int]:
     merged = 0
     for item in canon:
         text = str(item.get("text") or "").strip()
-        if not text:
+        if not text or is_chat_mechanics(text):
             continue
         if is_finished_event(text):
             events.append(text)
@@ -1155,13 +1190,16 @@ class AgentService:
         clean, names = [], set()
         known = {member.get("id"): member for member in cast_of(session)}
         for index, member in enumerate(cast):
+            member_id = str(member.get("id") or uuid.uuid4().hex[:8])
+            before = known.get(member_id, {})
+            avatar = member.get("avatar_asset_id")  # None keeps the face they have; "" removes it
             entry = {
-                "id": str(member.get("id") or uuid.uuid4().hex[:8]),
+                "id": member_id,
                 "name": str(member.get("name") or "").strip()[:40],
                 "persona": str(member.get("persona") or "").strip(),
-                "avatar_asset_id": self._check_avatar(str(member.get("avatar_asset_id") or "")),
+                "avatar_asset_id": self._check_avatar(str(avatar)) if avatar is not None
+                else str(before.get("avatar_asset_id") or ""),
             }
-            before = known.get(entry["id"], {})
             growth = member.get("growth")  # None keeps what the character has grown into so far
             entry["growth"] = clean_growth(growth if growth is not None else before.get("growth"))
             feelings = member.get("feelings")  # the same for private feelings about the user and the others
@@ -2048,6 +2086,15 @@ class AgentService:
             return model, text, usage
         raise AtlasError("No director model is available: the provider lists none of the configured ids.")
 
+    def _last_user_text(self, session_id: str) -> str:
+        """What the user said last in this chat ("" when the turn was not started by them)."""
+        for message in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)):
+            if message["role"] == "user":
+                return str(message["content"].get("text") or "")
+            if message["role"] == "assistant":
+                return ""
+        return ""
+
     @staticmethod
     def _spoken(content: dict) -> str:
         """Everything a reply actually said, for comparing one turn against the one before it."""
@@ -2085,6 +2132,7 @@ class AgentService:
         steps = repairs = repeats = 0
         answered = False  # this turn has stored a reply, so anything after it is reading tool results
         reply = None
+        needs_tools = asks_cast_change(self._last_user_text(session_id))
         while True:
             if self._halted(session_id, started, steps, max_steps):
                 return None
@@ -2100,7 +2148,7 @@ class AgentService:
             # has its persona as one member. A chat with neither is someone making a video, not a character.
             speaks = bool(session.get("cast")) or bool(str(session.get("persona") or "").strip())
             model, text, usage = await self._director_call(
-                session_id, session, messages, prose=speaks and not answered and not repairs,
+                session_id, session, messages, prose=speaks and not answered and not repairs and not needs_tools,
                 temperature=REPEAT_TEMPERATURE if repeats else None)
             steps += 1
             call = await self._add_usage(session_id, model, usage)
@@ -3070,6 +3118,11 @@ class AgentService:
         name = str(args.get("name") or "").strip()
         if not speaker and name and tool != "remove_character" and find_member(cast, name) is not None:
             speaker = name  # a character named without speaker: edit that one, not the lead
+        elif not speaker and name and tool != "remove_character" and display_name(cast[0], 0, 1):
+            # A new name without speaker is a new character, not the lead renamed. Read the other way, a live chat
+            # asked to add Mrs. Khanna overwrote its lead Rebel with her: persona, name and all. Renaming the lead
+            # takes speaker=<their current name>.
+            speaker = name
         index = find_member(cast, speaker) if speaker else 0
         if tool == "remove_character":
             if index is None:
@@ -3447,6 +3500,8 @@ class AgentService:
                     continue
                 who = 0
             text = " ".join(str(item["text"]).split())
+            if is_chat_mechanics(text):  # the cast list says who is in the chat, not memory
+                continue
             if is_finished_event(text):  # something that happened: a story line, not a lasting truth
                 moved.append(text)
                 continue
