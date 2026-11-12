@@ -516,7 +516,17 @@ def near_duplicate(a: int, b: int, bits: int = 12) -> bool:
     return bin(a ^ b).count("1") <= bits
 
 
-def real_prompt(tile: dict | None, extra: str = "", context: dict | None = None) -> str:
+def look_for(person: dict, roster: dict | None) -> str:
+    """How a person looks in this panel. The user's own description in the roster (edited or added by hand) wins over
+    the catalogue's guess for one tile; otherwise the tile's description, then the roster's."""
+    entry = (roster or {}).get(person.get("name") or "") or {}
+    mine = str(entry.get("appearance") or "").strip()
+    if mine and (entry.get("user_edited") or entry.get("added_by_user")):
+        return mine
+    return str(person.get("appearance") or "").strip() or mine
+
+
+def real_prompt(tile: dict | None, extra: str = "", context: dict | None = None, roster: dict | None = None) -> str:
     """REAL_PROMPT plus what the catalogue says is in the panel, so the people keep their looks."""
     parts = [REAL_PROMPT]
     given = context or {}
@@ -528,8 +538,8 @@ def real_prompt(tile: dict | None, extra: str = "", context: dict | None = None)
             parts.append(f"Scene: {tile['scene']}")
         if tile.get("setting"):
             parts.append(f"Setting: {tile['setting']}.")
-        people = [f"{p.get('name')}: {p.get('appearance')}" for p in tile.get("characters") or []
-                  if p.get("appearance")]
+        people = [f"{p.get('name')}: {look_for(p, roster)}" for p in tile.get("characters") or []
+                  if look_for(p, roster)]
         if people:
             parts.append("People: " + "; ".join(people) + ".")
     if extra.strip():
@@ -988,7 +998,7 @@ def film_frame(tile: dict, roster: dict) -> dict:
     people = [p for p in tile.get("characters") or [] if p.get("name")]
     wearing = []
     for person in people:
-        look = (person.get("appearance") or (roster.get(person["name"]) or {}).get("appearance") or "").strip()
+        look = look_for(person, roster)
         if look:
             wearing.append(f"{person['name']}: {look.rstrip('.')}")
     scene = (tile.get("scene") or "").strip()
@@ -1653,7 +1663,7 @@ class ManhwaManager:
                 row = {"tile_id": (tile or {}).get("id", ""), "panel_asset_id": panel["id"], "page": asset.get("filename"),
                        "panel": number}
                 refs: list[tuple[str, str]] = []
-                prompt, negative = real_prompt(tile, extra, context), REAL_NEGATIVE
+                prompt, negative = real_prompt(tile, extra, context, roster), REAL_NEGATIVE
                 if models:
                     written = await self._panel_prompt(jpeg, tile, roster, models, context, summary)
                     if written.get("skip"):
@@ -1694,7 +1704,7 @@ class ManhwaManager:
                     if state["negative"].strip():
                         negative = f"{negative}, {state['negative'].strip()}"
                     ids = await self._make_photo(state, panel["id"], jpeg, prompt, negative, row, qa_models,
-                                                 refs if models else [])
+                                                 refs if models else [], extra=extra)
                 except SkipPanel as exc:
                     row.update(status="skipped", error=f"Not converted: {exc}"[:400])
                     state["skipped"] += 1
@@ -1712,8 +1722,12 @@ class ManhwaManager:
                                thumb_url=self.service.asset_view(shown).get("thumb_url") if shown else None)
                     state["converted"] += 1
                     if tile is not None:
+                        # The prompt and the check's score are kept with the photograph (they used to live only in
+                        # the run's memory), so a redo can start from what was sent.
                         tile.setdefault("real", []).append({"panel_asset_id": panel["id"], "asset_ids": ids,
-                                                            "page_asset_id": asset["id"], "panel": number})
+                                                            "page_asset_id": asset["id"], "panel": number,
+                                                            "prompt": str(row.get("prompt") or prompt)[:2000],
+                                                            "qa_score": row.get("qa_score"), "at": time.time()})
                         self.store.save_pages(chapter_id, series, pages)
                 state["results"].append(row)
                 state["panels_done"] += 1
@@ -1739,6 +1753,8 @@ class ManhwaManager:
         tile's scene, characters and dialogue -- the dialogue only on the first panel of a tile, so a line is
         not spoken twice."""
         shots, spoken = [], set()
+        chapter = self.store.get_chapter(chapter_id) or {}
+        roster = self.store.characters(chapter.get("series", "")) if chapter.get("series") else {}
         for tile in self.store.pages(chapter_id):
             latest: dict[str, str] = {}
             for made in tile.get("real") or []:
@@ -1746,8 +1762,9 @@ class ManhwaManager:
                 if ids:
                     latest[made.get("panel_asset_id") or ids[0]] = ids[0]
             for asset_id in latest.values():
+                people = [{**p, "appearance": look_for(p, roster)} for p in tile.get("characters") or []]
                 shot = {"asset_id": asset_id, "tile_id": tile["id"], "scene": tile.get("scene", ""),
-                        "characters": tile.get("characters") or [], "dialogue": []}
+                        "characters": people, "dialogue": []}
                 if tile["id"] not in spoken:
                     shot["dialogue"] = tile.get("dialogue") or []
                     spoken.add(tile["id"])
@@ -1997,7 +2014,7 @@ class ManhwaManager:
         return {"error": "; ".join(failures) or "No vision model is configured."}
 
     async def _make_photo(self, state: dict, panel_id: str, jpeg: bytes, prompt: str, negative: str, row: dict,
-                          qa_models: list[str], refs: list[tuple[str, str]] | None = None) -> list[str]:
+                          qa_models: list[str], refs: list[tuple[str, str]] | None = None, extra: str = "") -> list[str]:
         """Make the panel's photograph; with the quality check on, a vision model scores it against the panel and,
         below the bar, rewrites the prompt (pose, limbs, camera) for another try. The best attempt is kept, the
         others are deleted. Raises SkipPanel when someone reads as a minor, deleting what was made."""
@@ -2042,7 +2059,10 @@ class ManhwaManager:
                 break
             revised = " ".join(str(verdict.get("revised_prompt") or "").split())
             if len(revised) >= 40:
-                prompt = revised[:2000]
+                # The checker rewrites the whole prompt; the text the user asked to add to every prompt goes back on,
+                # or a retake silently loses it.
+                added = extra.strip()
+                prompt = (revised + (" " + added if added and added not in revised else ""))[:2000]
             state["retried"] += 1
         row.update(qa=attempts, qa_score=best[0] if best else None, prompt=best[2] if best else prompt)
         return best[1] if best else []
@@ -2338,14 +2358,32 @@ class ManhwaManager:
             self.set_portrait(series, name, ids[0])
             state["done"].append({"name": name, "asset_id": ids[0]})
 
+    async def _qwen_ready(self, action: str = "generate") -> bool:
+        """Whether Qwen Image 2.1 can run here. Photographs and portraits were hard-wired to it, so on a pod without
+        its weights every one failed; when it is missing they go to the image ladder instead. Unknown (ComfyUI not
+        answering, a test double) keeps the old behaviour."""
+        local = getattr(self.service, "local_images", None)
+        status_of = getattr(local, "status", None)
+        if status_of is None:
+            return True
+        try:
+            status = await status_of("qwen21")
+        except Exception:
+            return True
+        if not status.get("installed"):
+            return False
+        return action != "edit" or bool((status.get("edit") or {}).get("installed"))
+
     async def _portrait_from_text(self, name: str, appearance: str, conf: dict) -> dict:
         prompt = strip_relations(f"A photorealistic head-and-shoulders portrait photograph of {name}: {appearance}. "
                                  "Facing the camera, calm expression, fully clothed, plain light-grey studio background, "
                                  "soft even light, 85mm lens. Only one person, no text.")
         for attempt in range(BUSY_RETRIES + 1):
             try:
-                return await self.service.generate_images(prompt, engine="qwen21", steps=conf["steps"], cfg=conf["cfg"],
-                                                          negative=REAL_NEGATIVE)
+                if await self._qwen_ready():
+                    return await self.service.generate_images(prompt, engine="qwen21", steps=conf["steps"],
+                                                              cfg=conf["cfg"], negative=REAL_NEGATIVE)
+                return await self.service.generate_images(prompt, engine="auto", negative=REAL_NEGATIVE)
             except RequestError as exc:
                 if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
                     raise
@@ -2417,9 +2455,19 @@ class ManhwaManager:
                              steps: int | None = None, cfg: float | None = None, refs: list[str] | None = None) -> dict:
         for attempt in range(BUSY_RETRIES + 1):
             try:
-                return await self.service.generate_images(prompt, reference_asset_ids=[panel_id, *(refs or [])],
-                                                          engine="qwen21",
-                                                          loras=loras, negative=negative, steps=steps, cfg=cfg)
+                if await self._qwen_ready("edit"):
+                    return await self.service.generate_images(prompt, reference_asset_ids=[panel_id, *(refs or [])],
+                                                              engine="qwen21",
+                                                              loras=loras, negative=negative, steps=steps, cfg=cfg)
+                # Not installed: the edit ladder, without the Qwen-only LoRAs and sampler values (on another engine
+                # a LoRA of the wrong family draws garbage rather than failing).
+                result = await self.service.generate_images(prompt, reference_asset_ids=[panel_id, *(refs or [])],
+                                                            engine="auto", negative=negative)
+                if isinstance(result, dict):
+                    result.setdefault("warnings", []).append(
+                        "Qwen Image 2.1 is not installed here, so this photograph was made on the image ladder "
+                        "without the Anime2Real and realism LoRAs.")
+                return result
             except RequestError as exc:
                 if "busy" not in str(exc).lower() or attempt == BUSY_RETRIES:
                     raise

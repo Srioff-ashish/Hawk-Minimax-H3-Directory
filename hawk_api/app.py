@@ -380,7 +380,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
                                     prompt=body.prompt, realism=body.realism, age_slider=body.age_slider,
                                     max_panels=body.max_panels, plan_after=body.plan_after, analyze=body.analyze,
                                     prompt_model=body.prompt_model, steps=body.steps, cfg=body.cfg,
-                                    negative=body.negative, qa=body.qa, qa_retries=body.qa_retries)
+                                    negative=body.negative, qa=body.qa, qa_retries=body.qa_retries,
+                                    skip_done=body.skip_done)
 
     @app.post("/v1/manhwa/pipelines", tags=["manhwa"], status_code=202)
     async def manhwa_pipeline(body: ManhwaPipelineIn):

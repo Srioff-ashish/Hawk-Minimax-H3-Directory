@@ -85,6 +85,7 @@ of film:
 - "description": what the camera sees -- who is where, what they do, their expressions, the camera angle -- in 2-4
   sentences, concrete and visual.
 - "setting": where and when, the light.
+- "camera": the framing and angle in a few words (close-up, wide, over the shoulder, low angle...).
 - "characters": the names of everyone visible (use the cast's names).
 - "dialogue": every line spoken in the scene, in order: {{"speaker": a name or "narration", "text": the exact line}}.
 Every character is an adult (18 or older).
@@ -101,7 +102,7 @@ Conversation for this chapter:
 {conversation}
 
 Reply with only JSON:
-{{"title": "chapter title", "summary": "2-4 sentences", "scenes": [{{"description": "", "setting": "",
+{{"title": "chapter title", "summary": "2-4 sentences", "scenes": [{{"description": "", "setting": "", "camera": "",
 "characters": [], "dialogue": [{{"speaker": "", "text": ""}}]}}]}}
 """
 
@@ -154,7 +155,10 @@ def _clean(value, limit: int = CONTEXT_MAX) -> str:
 
 
 def clean_scene(item: dict) -> dict:
+    # camera is kept: the panel and the planner read it, and dropping it here made every panel a medium shot at eye
+    # level whatever the scene said.
     return {"description": _clean(item.get("description"), 1500), "setting": _clean(item.get("setting"), 400),
+            "camera": _clean(item.get("camera"), 200),
             "characters": [_clean(n, 80) for n in item.get("characters") or [] if _clean(n, 80)][:8],
             "dialogue": [{"speaker": _clean(d.get("speaker"), 80) or "narration", "text": str(d.get("text") or "").strip()[:600]}
                          for d in item.get("dialogue") or [] if isinstance(d, dict) and str(d.get("text") or "").strip()]}
@@ -1050,10 +1054,20 @@ class StoryManager:
                         c["image_asset_ids"] = [ids[0]]
                 self.store.save_story(fresh)
 
+    async def _qwen_ready(self) -> bool:
+        """Qwen Image 2.1 when it is installed; the image ladder when it is not (it used to fail every portrait)."""
+        status_of = getattr(getattr(self.service, "local_images", None), "status", None)
+        if status_of is None:
+            return True
+        try:
+            return bool((await status_of("qwen21")).get("installed"))
+        except Exception:
+            return True
+
     async def _generate(self, prompt: str) -> dict:
         for attempt in range(11):
             try:
-                return await self.service.generate_images(prompt, engine="qwen21")
+                return await self.service.generate_images(prompt, engine="qwen21" if await self._qwen_ready() else "auto")
             except RequestError as exc:
                 if "busy" not in str(exc).lower() or attempt == 10:
                     raise

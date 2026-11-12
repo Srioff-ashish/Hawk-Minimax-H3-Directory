@@ -415,6 +415,8 @@ class ManhwaConvertIn(BaseModel):
                                      "deepseek-ai/deepseek-v4.1-flash (reads images, about a quarter of Grok's price).")
     qa: bool | None = Field(None, description="Quality check with retries (default from the settings).")
     qa_retries: int | None = Field(None, ge=0, le=5)
+    skip_done: bool = Field(False, description="Leave panels that already have a photograph as they are, and make "
+                            "only the missing ones. Off redoes every panel asked for.")
 
 
 class ManhwaContextIn(BaseModel):

@@ -2024,7 +2024,9 @@
     const body = hit.status === "failed" ? `<p class="hint">Not described: ${esc(hit.error || "the model refused")}</p>`
       : `<p>${esc(hit.scene || "")}</p>${who.length ? `<div class="hint">${esc(who.join(", "))}${hit.setting ? " · " + esc(hit.setting) : ""}</div>` : ""}${said}`;
     const real = (hit.real || []).map((r) => `<a href="${esc(r.file_url || r.thumb_url)}" target="_blank" rel="noopener" title="Photograph made from this tile"><img src="${esc(r.thumb_url)}" alt="" loading="lazy"></a>`).join("");
-    return `<div class="mh-hit">${img}<div>${where}${body}${real ? `<div class="mh-real">${real}</div>` : ""}</div></div>`;
+    const redo = hit.open_chapter && hit.id && hit.status !== "failed"
+      ? `<button class="btn btn-sm btn-ghost" type="button" data-convert-chapter="${esc(hit.open_chapter)}" data-convert-tile="${esc(hit.id)}" title="Make this tile's photographs again, and nothing else">${real ? "Redo photos" : "Make photos"}</button>` : "";
+    return `<div class="mh-hit">${img}<div>${where}${body}${real ? `<div class="mh-real">${real}</div>` : ""}${redo}</div></div>`;
   }
 
   async function loadManhwa() {
@@ -2139,8 +2141,8 @@
   async function mhOpenChapter(id) {
     try {
       const chapter = await api(`/v1/manhwa/chapters/${encodeURIComponent(id)}`);
-      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm btn-primary" type="button" data-film-chapter="${esc(chapter.id)}" title="The chapter as a live-action film: panels to live-action Seedream Flash sheets ($0.018 per 4) with the cast's portraits, checked, then filmed after you approve the panels on the Storyboard page">Live-action film</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Turn every panel into a photograph with Qwen Image 2.1 on this GPU, using the Photograph settings">Make photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
-        + chapter.pages.map(mhPage).join("");
+      $("mhResults").innerHTML = `<div><div class="row"><strong>${esc(chapter.series)} · ch ${esc(chapter.chapter)}</strong> <span class="badge plain">${esc(chapter.status)}</span> <a class="hint" href="${esc(chapter.url)}" target="_blank" rel="noopener">source</a><div class="spacer"></div><button class="btn btn-sm" type="button" data-plan-chapter="${esc(chapter.id)}" title="Plan a film from the photographs already made: one plan per 9 photographs, one segment each, the dialogue spoken word for word">Plan video</button><button class="btn btn-sm btn-primary" type="button" data-film-chapter="${esc(chapter.id)}" title="The chapter as a live-action film: panels to live-action Seedream Flash sheets ($0.018 per 4) with the cast's portraits, checked, then filmed after you approve the panels on the Storyboard page">Live-action film</button><button class="btn btn-sm" type="button" data-convert-chapter="${esc(chapter.id)}" title="Make a photograph of every panel that does not have one yet (Qwen Image 2.1 on this GPU when installed, otherwise the image ladder), using the Photograph settings. Panels already done are left alone.">Make photographs</button><button class="btn btn-sm btn-ghost" type="button" data-convert-chapter="${esc(chapter.id)}" data-convert-all="1" title="Make every panel's photograph again, including the ones already done">Redo all photographs</button><button class="btn btn-sm btn-danger" type="button" data-delete-chapter="${esc(chapter.id)}" data-series="${esc(chapter.series)}">Delete chapter</button></div><p style="margin:6px 0 0">${esc(chapter.summary || "")}</p>${mhContextForm(chapter)}<div id="mhConv" class="hint" hidden style="margin-top:6px"></div>${mhPlans(chapter.plans, chapter.renders, chapter.id, chapter.film)}</div>`
+        + chapter.pages.map((page) => mhPage({ ...page, open_chapter: chapter.id })).join("");
     } catch (error) { toast("Could not open the chapter", error.message, "bad"); }
   }
 
@@ -2325,7 +2327,8 @@
         .finally(() => { film.disabled = false; film.textContent = "Live-action film"; });
     }
     const convert = event.target.closest("[data-convert-chapter]");
-    if (convert) mhConvert(convert.dataset.convertChapter);
+    if (convert) mhConvert(convert.dataset.convertChapter, !convert.dataset.convertAll && !convert.dataset.convertTile,
+                           convert.dataset.convertTile ? [convert.dataset.convertTile] : []);
     const stop = event.target.closest("[data-cancel-conversion]");
     if (stop) post(`/v1/manhwa/conversions/${stop.dataset.cancelConversion}/cancel`, {}).then(mhConvShow).catch((e) => toast("Could not cancel", e.message, "bad"));
   });
@@ -2470,6 +2473,7 @@
       const scenes = c.scenes.map((sc, n) => `<div class="st-scene" data-scene="${n}"><strong class="hint">Scene ${n + 1}</strong>
         <textarea class="textarea" data-s="description" rows="2" placeholder="What the camera sees">${esc(sc.description)}</textarea>
         <div class="grid grid-2"><input class="input" data-s="setting" value="${esc(sc.setting || "")}" placeholder="Setting" style="height:30px"><input class="input" data-s="characters" value="${esc((sc.characters || []).join(", "))}" placeholder="Who is in it" style="height:30px"></div>
+        <input class="input" data-s="camera" value="${esc(sc.camera || "")}" placeholder="Camera: close-up, wide, low angle…" style="height:30px">
         <textarea class="textarea" data-s="dialogue" rows="2" placeholder="One line each — Name: what they say (or narration: …)">${esc(stDialogueText(sc.dialogue))}</textarea></div>`).join("");
       const imgs = (c.image_views || []).map((i) => `<figure><img src="${esc(i.thumb_url || "")}" alt=""><span>${esc(i.label || "")}</span><button class="btn btn-sm" type="button" data-st-unimg="${esc(i.asset_id)}">×</button></figure>`).join("");
       return `<form class="st-chapter" data-st-ch="${esc(c.id)}" autocomplete="off">
@@ -2486,7 +2490,7 @@
           ${c.video_url ? `<a class="btn btn-sm" href="${esc(c.video_url)}" target="_blank" rel="noopener">▶ Chapter video</a>` : ""}${(c.history || []).length ? `<span class="hint">${c.history.length} earlier version${c.history.length === 1 ? "" : "s"}</span>` : ""}<div class="spacer"></div>
           <button class="btn btn-sm btn-danger" type="button" data-st-chdel${busy ? " disabled" : ""}>Delete</button>
           <button class="btn btn-sm" type="submit"${busy ? " disabled" : ""}>Save</button>
-          ${c.render_job_id ? `<button class="btn btn-sm" type="button" data-st-video="redo"${busy ? " disabled" : ""} title="Make a new video and put it in this chapter's place in the main video">Redo video</button>`
+          ${c.render_job_id || c.film_asset_id ? `<button class="btn btn-sm" type="button" data-st-video="redo"${busy ? " disabled" : ""} title="Make a new video and put it in this chapter's place in the main video">Redo video</button>`
             : `<button class="btn btn-sm btn-primary" type="button" data-st-video="make"${busy ? " disabled" : ""} title="Plan, render and append to the main video">Make video</button>`}</div>
       </form>`;
     }).join("") : `<span class="hint">Chat some ideas, then press Draft chapter.</span>`;
@@ -2497,6 +2501,7 @@
       title: form.querySelector('[data-c="title"]').value, summary: form.querySelector('[data-c="summary"]').value,
       scenes: [...form.querySelectorAll("[data-scene]")].map((el) => ({
         description: el.querySelector('[data-s="description"]').value, setting: el.querySelector('[data-s="setting"]').value,
+        camera: el.querySelector('[data-s="camera"]')?.value || "",
         characters: el.querySelector('[data-s="characters"]').value.split(",").map((x) => x.trim()).filter(Boolean),
         dialogue: stDialogueParse(el.querySelector('[data-s="dialogue"]').value),
       })),
@@ -2664,7 +2669,7 @@
     const form = e.target.closest("[data-st-ch]"); if (!form) return;
     const id = form.dataset.stCh;
     if (e.target.closest("[data-st-addscene]")) {
-      const body = stChapterBody(form); body.scenes.push({ description: "New scene", setting: "", characters: [], dialogue: [] });
+      const body = stChapterBody(form); body.scenes.push({ description: "New scene", setting: "", camera: "", characters: [], dialogue: [] });
       await putJson(stPath(`/chapters/${id}`), body, "PATCH"); document.activeElement.blur(); await stShow(true);
     }
     const toBoard = e.target.closest("[data-st-board]");
@@ -3248,9 +3253,10 @@
     } catch (error) { toast("Could not plan", error.message, "bad"); }
   }
 
-  async function mhConvert(chapterId) {
+  async function mhConvert(chapterId, onlyMissing = true, tileIds = []) {
     try {
-      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, {});
+      if (!onlyMissing && !tileIds.length && !await confirmAction("Redo every photograph?", "Every panel is made again, including the ones already done.", "Redo all")) return;
+      const state = await post(`/v1/manhwa/chapters/${encodeURIComponent(chapterId)}/convert`, { skip_done: onlyMissing, tile_ids: tileIds });
       toast("Converting panels", `With ${state.loras.map((l) => l.name.split("/").pop().replace(/\.safetensors$/, "")).join(", ")}`);
       mhConvShow(state);
     } catch (error) { toast("Could not start", error.message, "bad"); }
