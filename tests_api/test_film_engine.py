@@ -188,7 +188,7 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         system, user = service.chats[-1]
         images = [p for p in user["content"] if p.get("type") == "image_url"]
         self.assertEqual(len(images), 4, "both people first, then the two panels")
-        self.assertIn("matches NONE of the identity references", system["content"])
+        self.assertIn("meant to be one of the pictured people", system["content"])
         self.assertIn("first 2 images", user["content"][0]["text"])
         self.assertIn("Jun, a man; Mina, a woman.", user["content"][0]["text"])
 
@@ -204,7 +204,7 @@ class Engine(unittest.IsolatedAsyncioTestCase):
         system, user = service.chats[-1]
         self.assertIn("first 1 image -- image 1: Rebel", user["content"][0]["text"])
         self.assertIn("No picture (judge by description only): Arjun.", user["content"][0]["text"])
-        self.assertIn("never fail a panel because they match no reference", system["content"])
+        self.assertIn("NEVER fail a panel because someone in it matches no", system["content"])
 
     async def test_review_stops_before_the_film_until_approved(self):
         service = EngineService(sheet_png(2, 1, 2048, 2048, border=40))

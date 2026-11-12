@@ -23,6 +23,7 @@ import shutil
 import tempfile
 import threading
 import time
+import random
 import uuid
 
 from . import db
@@ -469,6 +470,14 @@ async def rebuild_asset(service, asset: dict) -> bytes | None:
     return None
 
 
+def part_key(panels: list, identity: list, beats: list[str], character: str, settings: RenderSettings,
+             segment_seconds: float, mood: str, music: str, modes: list[str], lines: list, music_over: bool) -> str:
+    """A hash of everything that makes one render part what it is: equal keys render the same film."""
+    data = json.dumps([panels, identity, beats, character, settings.model_dump(), segment_seconds, mood, music, modes,
+                       lines, music_over], sort_keys=True, default=str)
+    return hashlib.sha256(data.encode()).hexdigest()[:24]
+
+
 async def render_film(service, panel_asset_ids: list, identity_asset_ids, beats: list[str], character: str,
                       settings: RenderSettings | None = None, segment_seconds: float = 6.0, mood: str = "",
                       music: str = "", modes: list[str] | None = None, dialogue: list[list[str]] | None = None,
@@ -635,14 +644,36 @@ CHECK_PROMPT = """You check storyboard panels before they are animated. The firs
 how many is said below, and whose each one is when known (they may be different people: a man and a woman, a group).
 The images after them are panels, in the order listed. A panel may show any one or several of these people, or
 nobody. For each panel decide whether it is usable, and say briefly what is wrong if it is not. A panel fails when:
-- a person in it matches NONE of the identity references (a face, hair, skin tone or build that belongs to nobody in
-  the references). Showing only one of the people, or a different one of them, is fine. People listed below as
-  having no picture are judged by their description only: never fail a panel because they match no reference;
+- someone who is clearly meant to be one of the pictured people (same role, gender and description) looks like a
+  different person from their reference: wrong face, hair, skin tone or build. Showing only one of the pictured
+  people, or a different one of them, is fine. Anyone else in the panel (a partner, extras, a crowd, any man or woman
+  the references do not cover) is judged by the shot text only: NEVER fail a panel because someone in it matches no
+  reference -- most shots include people who have no picture;
 - anatomy is broken: extra or missing fingers, limbs or nipples, twisted joints, a melted or doubled face;
 - there are artifacts: garbled text, a watermark, a duplicated person, a cut-off head where a face matters;
 - it breaks the platform rule given below, when one is given.
 Do not fail a panel for its style, its nudity (unless the platform rule forbids it) or the shot it chose.
 Reply with JSON only: {"panels": [{"shot": <number>, "ok": true or false, "issues": "<short, empty when ok>"}]}"""
+
+
+#: A rejection that only says someone in the panel matched no reference. Measured on a live pod, almost every dropped
+#: panel was this ("unmatched man (no identity reference)"), on boards whose other people simply had no picture:
+#: 11 of 12 panels on one board, 7 of 8 on another, all perfectly usable. It is never a reason to drop a panel.
+_ONLY_UNMATCHED = re.compile(
+    r"\b(unmatched|unrecogni[sz]ed|unidentified|unknown|extra|additional)\b.*\b(man|men|woman|women|person|people|"
+    r"figure|male|female)s?\b|match(es|ing)? (none|no) (of )?(the )?identity|no (matching )?identity ref",
+    re.IGNORECASE)
+_REAL_DEFECT = re.compile(
+    r"anatom|finger|hand|limb|arm|leg|nipple|joint|twist|melt|doubl|duplicat|fused|extra (head|face)|artifact|"
+    r"garbled|text|watermark|logo|cut.?off|crop|blur|platform|face (is|looks) (wrong|different)|does not (look|match) "
+    r"(like )?(her|his|the)|wrong face|different (face|person)|build does not|size",
+    re.IGNORECASE)
+
+
+def only_unmatched_people(issues: str) -> bool:
+    """True when a rejection's only complaint is that someone matched no identity reference."""
+    text = str(issues or "")
+    return bool(_ONLY_UNMATCHED.search(text)) and not _REAL_DEFECT.search(text)
 
 
 async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]:
@@ -681,7 +712,9 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
                 continue
             parts.append({"type": "image_url", "image_url": {"url": f"data:{kind};base64," + base64.b64encode(data).decode()}})
         ask = (f"Identity references: the first {len(references)} image{'s' if len(references) > 1 else ''}"
-               + (" -- " + ", ".join(whose) if len(whose) == len(references) else "")
+               + (" -- " + ", ".join(whose) if len(whose) == len(references) else
+                  (" -- " + ", ".join(board.get("characters") or []) + " (in that order where there are enough)"
+                   if board.get("characters") else " -- the main character(s); everyone else has no picture"))
                + (f" ({board['character'][:600]})" if board.get("character") else "") + ".\n"
                + (f"No picture (judge by description only): {', '.join(board['unpictured'])}.\n"
                   if board.get("unpictured") else "")
@@ -704,7 +737,12 @@ async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]
                 except (TypeError, ValueError, AttributeError):
                     continue
                 if shot in batch and verdict.get("ok") is False:
-                    failed[shot] = str(verdict.get("issues") or "rejected").strip()[:300]
+                    issues = str(verdict.get("issues") or "rejected").strip()[:300]
+                    if only_unmatched_people(issues):
+                        log.info("storyboard check: kept shot %d despite %r (people with no picture are fine)",
+                                 shot + 1, issues)
+                        continue
+                    failed[shot] = issues
             break
     return failed
 
@@ -994,7 +1032,18 @@ class StoryboardManager:
             if not shots:
                 raise StoryboardError("Give at least one shot.")
             panels = board["panels"] + [None] * max(0, len(shots) - len(board["panels"]))
+            changed = [i for i, text in enumerate(shots) if i < len(board["shots"]) and panels[i] and text != board["shots"][i]]
             board["shots"], board["panels"] = shots, panels[: len(shots)]
+            if changed:
+                # The panel was drawn for the old text. Kept (it may still be right), but said, instead of silently
+                # filming a picture of something else.
+                listed = ", ".join(str(i + 1) for i in changed)
+                board["note"] = (f"Shot{'s' if len(changed) > 1 else ''} {listed} changed after the panel was drawn: "
+                                 "redo the panel if it no longer matches. (To add or remove a shot without moving the "
+                                 "others' panels, use the shot's own + and × buttons.)")
+        if fields.get("dialogue") is not None:
+            board["dialogue"] = [[str(line).strip() for line in (lines or []) if str(line).strip()]
+                                 for lines in fields["dialogue"]]
         if fields.get("motions") is not None:
             board["motions"] = [m.strip() for m in fields["motions"]]
         if fields.get("modes") is not None:
@@ -1099,7 +1148,9 @@ class StoryboardManager:
                                     collection=collection, tags=[f"board:{board_id}"])
             return indices, made, cut
 
-        results = await asyncio.gather(*(one(c) for c in chunks))
+        outcomes = await asyncio.gather(*(one(c) for c in chunks), return_exceptions=True)
+        failures = [(chunk, out) for chunk, out in zip(chunks, outcomes) if isinstance(out, BaseException)]
+        results = [out for out in outcomes if not isinstance(out, BaseException)]
         board = self.board(board_id)
         notes = []
         for indices, made, cut in results:
@@ -1112,6 +1163,15 @@ class StoryboardManager:
                 notes.append(cut["note"])
         board["note"] = " ".join(dict.fromkeys(notes))
         self.store.save(board)
+        if failures:
+            # The sheets that worked are kept (they used to be thrown away with the one that failed); the shots of a
+            # failed sheet stay empty, and Draw missing draws just those.
+            shots = ", ".join(str(i + 1) for chunk, _ in failures for i in chunk)
+            first = failures[0][1]
+            if isinstance(first, asyncio.CancelledError):
+                raise first
+            raise StoryboardError(f"Shot{'s' if ',' in shots else ''} {shots} could not be drawn ({first}). The other "
+                                  "panels are kept: press Draw missing to try those again.")
 
     async def _check(self, board_id: str) -> None:
         """A vision model looks at every panel once. A rejected panel is left out of the video, not drawn again:
@@ -1131,7 +1191,110 @@ class StoryboardManager:
             else:
                 checks[str(index)] = {"ok": True, "issues": ""}
         board.update(checks=checks, modes=modes)
+        dropped = sum(1 for i in todo if i in failed)
+        if todo and dropped * 2 > len(todo) and board.get("then_render") and board.get("review", "auto") == "auto":
+            # More than half the drawn panels rejected: filming now would make the film mostly from text, which is
+            # not what anyone drew the board for. Stop and show it instead of going ahead silently.
+            board["review"] = "ask"
+            board["note"] = (f"The check rejected {dropped} of {len(todo)} panels, so this board stopped for you to look "
+                             "before filming. Redo the panels you want back, or press Make film to go ahead.")
         self.store.save(board)
+
+    @staticmethod
+    def _beat(board: dict, index: int) -> str:
+        """What the planner is told about one shot: its motion and the frame it was drawn from.
+
+        It used to get the motion alone, so a shot's setting, clothes and camera reached the video only through the
+        panel picture -- and a shot without a usable panel (mode none, or dropped by the check) was filmed from a
+        one-line motion with no setting at all."""
+        shot = board["shots"][index] if index < len(board["shots"]) else ""
+        motion = board["motions"][index] if index < len(board.get("motions") or []) else ""
+        motion = (motion or "").strip()
+        if not motion:
+            return shot
+        if not shot or shot.strip() in motion:
+            return motion
+        return f"{motion.rstrip('.')}. In frame: {shot.strip()}"
+
+    def _finished_part(self, board: dict, key: str) -> str | None:
+        """The job of an earlier render of exactly this part, when it finished and its video still exists."""
+        job_id = (board.get("finished_parts") or {}).get(key)
+        if not job_id:
+            return None
+        job = self.service.store.get_job(job_id) or {}
+        return job_id if job.get("status") == "done" else None
+
+    # ------------------------------------------------------------ shots as units
+
+    _ALIGNED = ("shots", "motions", "modes", "dialogue", "panels")
+
+    def _aligned(self, board: dict) -> dict:
+        size = len(board["shots"])
+        out = {}
+        for key in self._ALIGNED:
+            values = list(board.get(key) or [])
+            filler = {"modes": "frame", "dialogue": [], "panels": None, "motions": ""}.get(key, "")
+            out[key] = (values + [filler if not isinstance(filler, list) else [] for _ in range(size)])[:size]
+        return out
+
+    def _put_aligned(self, board: dict, rows: dict, checks: dict) -> None:
+        for key in self._ALIGNED:
+            board[key] = rows[key]
+        board["checks"] = checks
+
+    def insert_shot(self, board_id: str, at: int, shot, motion: str = "", lines: list[str] | None = None,
+                    mode: str = "frame") -> dict:
+        """A new shot at position ``at`` (0-based; past the end appends). Every later shot keeps its own panel,
+        mode, lines and check -- a list edited as one block of text used to shift every later panel by one."""
+        board = self.board(board_id)
+        if board["status"] in BUSY:
+            raise StoryboardError(f"The board is {board['status']}; wait for it to finish.")
+        text = describe_frame(shot)
+        if not text:
+            raise StoryboardError("Describe the shot.")
+        rows = self._aligned(board)
+        at = max(0, min(int(at), len(rows["shots"])))
+        for key, value in (("shots", text), ("motions", (motion or "").strip()), ("modes", mode if mode in MODES else "frame"),
+                           ("dialogue", [l.strip() for l in lines or [] if l.strip()]), ("panels", None)):
+            rows[key].insert(at, value)
+        checks = {str(int(k) + (1 if int(k) >= at else 0)): v for k, v in (board.get("checks") or {}).items()}
+        self._put_aligned(board, rows, checks)
+        return self.view(self.store.save(board))
+
+    def delete_shot(self, board_id: str, index: int) -> dict:
+        board = self.board(board_id)
+        if board["status"] in BUSY:
+            raise StoryboardError(f"The board is {board['status']}; wait for it to finish.")
+        rows = self._aligned(board)
+        if not 0 <= index < len(rows["shots"]):
+            raise StoryboardError(f"There is no shot {index + 1}.")
+        if len(rows["shots"]) == 1:
+            raise StoryboardError("A board needs at least one shot.")
+        for key in self._ALIGNED:
+            rows[key].pop(index)
+        checks = {}
+        for k, v in (board.get("checks") or {}).items():
+            if int(k) != index:
+                checks[str(int(k) - (1 if int(k) > index else 0))] = v
+        self._put_aligned(board, rows, checks)
+        return self.view(self.store.save(board))
+
+    def move_shot(self, board_id: str, index: int, to: int) -> dict:
+        board = self.board(board_id)
+        if board["status"] in BUSY:
+            raise StoryboardError(f"The board is {board['status']}; wait for it to finish.")
+        rows = self._aligned(board)
+        size = len(rows["shots"])
+        if not (0 <= index < size and 0 <= to < size):
+            raise StoryboardError("Both positions must be shots on this board.")
+        order = list(range(size))
+        order.insert(to, order.pop(index))
+        for key in self._ALIGNED:
+            rows[key] = [rows[key][i] for i in order]
+        old = board.get("checks") or {}
+        checks = {str(new): old[str(was)] for new, was in enumerate(order) if str(was) in old}
+        self._put_aligned(board, rows, checks)
+        return self.view(self.store.save(board))
 
     @staticmethod
     def _restore(board: dict, index: int) -> None:
@@ -1225,7 +1388,10 @@ class StoryboardManager:
         if "megapixels" not in settings.model_fields_set:  # the quality preset decides unless a size was asked for
             update["megapixels"] = QUALITY.get(quality, 0.98)
         settings = settings.model_copy(update=update)
-        board["render"] = {"jobs": [], "settings": settings.model_dump(), "segment_seconds": segment_seconds,
+        if settings.seed is None:  # one seed per board, so an unchanged part renders identically and can be reused
+            settings = settings.model_copy(update={"seed": int(board.get("seed") or random.randint(1, 2**31 - 1))})
+            board["seed"] = settings.seed
+        board["render"] = {"jobs": [], "keys": [], "settings": settings.model_dump(), "segment_seconds": segment_seconds,
                            "mood": mood, "music": music, "film_asset_id": None, "drive": "",
                            "explicit_unet": bool(settings.unet_name)}
         board.update(status="rendering", error="")
@@ -1275,21 +1441,38 @@ class StoryboardManager:
                 if number < len(board["render"]["jobs"]):
                     continue
                 indices = part["shots"]
-                motions = [(board["motions"][i] if i < len(board["motions"]) and board["motions"][i] else board["shots"][i])
-                           for i in indices]
+                motions = [self._beat(board, i) for i in indices]
                 lines = [(board.get("dialogue") or [])[i] if i < len(board.get("dialogue") or []) else [] for i in indices]
                 settings = base.model_copy(update={"unet_name": part["unet"]}) if part.get("unet") else base
-                job = await render_film(self.service, [board["panels"][i] for i in indices], board["identity_asset_ids"],
-                                        motions, board["character"], settings, render["segment_seconds"],
-                                        render["mood"], render["music"], [modes[i] for i in indices], lines, music_over)
+                key = part_key([board["panels"][i] for i in indices], board["identity_asset_ids"], motions,
+                               board["character"], settings, render["segment_seconds"], render["mood"],
+                               render["music"], [modes[i] for i in indices], lines, music_over)
+                reused = self._finished_part(board, key)
+                if reused:
+                    # Nothing in this part changed since it was last rendered: the film keeps that render instead of
+                    # paying for it again. Fixing shot 4 re-renders shot 4's part, not the whole film.
+                    job = {"id": reused}
+                else:
+                    job = await render_film(self.service, [board["panels"][i] for i in indices],
+                                            board["identity_asset_ids"], motions, board["character"], settings,
+                                            render["segment_seconds"], render["mood"], render["music"],
+                                            [modes[i] for i in indices], lines, music_over)
                 board = self.board(board_id)
                 board["render"]["jobs"].append(job["id"])
+                board["render"].setdefault("keys", []).append(key)
                 self.store.save(board)
             board = self.board(board_id)
-            for job_id in board["render"]["jobs"]:
+            for number, job_id in enumerate(board["render"]["jobs"]):
                 done = await self._wait(job_id)
                 if done.get("status") != "done":
-                    raise RequestError(f"Render {job_id[:8]} did not finish: {done.get('error') or done.get('status')}")
+                    raise RequestError(f"Render {job_id[:8]} (part {number + 1} of {len(board['render']['jobs'])}) did "
+                                       f"not finish: {done.get('error') or done.get('status')}. Finished parts are kept: "
+                                       "Make film again renders only what is missing or changed.")
+                keys = board["render"].get("keys") or []
+                if number < len(keys):
+                    board = self.board(board_id)
+                    board.setdefault("finished_parts", {})[keys[number]] = job_id
+                    self.store.save(board)
             self._set(board_id, status="joining")
             await self._join(board_id)
         except asyncio.CancelledError:

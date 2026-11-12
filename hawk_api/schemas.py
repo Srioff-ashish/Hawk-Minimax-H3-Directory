@@ -622,6 +622,15 @@ class StoryboardPatch(BaseModel):
     aspect_ratio: AspectRatio | None = None
     shots: list[Shot] | None = Field(None, max_length=40)
     motions: list[str] | None = None
+    dialogue: list[list[str]] | None = Field(None, description="Per shot, the lines spoken word for word, in order.")
+
+
+class StoryboardShotIn(BaseModel):
+    at: int = Field(..., ge=0, description="Position (0-based) the new shot takes; later shots keep their panels.")
+    shot: Shot
+    motion: str = ""
+    lines: list[str] = Field(default_factory=list)
+    mode: Literal["frame", "look", "none"] = "frame"
 
 
 class StoryboardPanelIn(BaseModel):

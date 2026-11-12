@@ -2821,8 +2821,8 @@
 
   function sbPanelsPaint(v, busy) {
     $("sbNote").innerHTML = (v.error ? `<div class="alert bad">${errorHtml(v.error)}</div>` : "") + (v.note ? `<div class="alert warn">${esc(v.note)}</div>` : "")
-      + (v.status === "drawing" ? `<div class="alert">Drawing ${Math.ceil(v.shots.length / 8)} sheet${v.shots.length > 8 ? "s" : ""} on Seedream Flash… about 30 seconds.</div>` : "")
-      + (v.status === "checking" ? `<div class="alert">Checking every panel; rejected ones are drawn again…</div>` : "")
+      + (v.status === "drawing" ? `<div class="alert">Drawing ${Math.ceil(v.shots.length / 4)} sheet${v.shots.length > 4 ? "s" : ""} on Seedream Flash (4 shots each)… about 30 seconds.</div>` : "")
+      + (v.status === "checking" ? `<div class="alert">Checking every panel. A rejected panel is left out of the film and marked here; Redo puts it back…</div>` : "")
       + (v.status === "review" ? `<div class="alert warn">Waiting for your approval: check the panels, then press <b>Make film</b>.</div>` : "");
     $("sbPanels").innerHTML = v.shots.map((shot, n) => {
       const p = (v.panel_views || [])[n];
@@ -2833,7 +2833,10 @@
         <textarea class="textarea" data-sb-shot>${esc(shot)}</textarea>
         <div class="row" style="gap:4px"><button class="btn btn-sm" type="button" data-sb-redo${busy ? " disabled" : ""} title="Draw this shot again on its own ($0.018), keeping its setting">Redo</button>
           <button class="btn btn-sm" type="button" data-sb-fresh${busy ? " disabled" : ""} title="Draw it again from scratch">New</button>
-          <button class="btn btn-sm" type="button" data-sb-media${busy ? " disabled" : ""} title="Use an image from Media">Media</button></div>
+          <button class="btn btn-sm" type="button" data-sb-media${busy ? " disabled" : ""} title="Use an image from Media">Media</button>
+          <span style="flex:1"></span>
+          <button class="btn btn-sm btn-ghost" type="button" data-sb-insert${busy ? " disabled" : ""} title="Add a new shot after this one. Every other shot keeps its own panel.">+</button>
+          <button class="btn btn-sm btn-ghost" type="button" data-sb-remove${busy ? " disabled" : ""} title="Remove this shot and its panel. The others keep theirs.">×</button></div>
       </div>`;
     }).join("") || `<span class="hint">No shots yet.</span>`;
     $("sbSheets").innerHTML = (v.sheet_views || []).filter((s) => s.asset).map((s, i) => `<figure><a href="${esc(s.asset.file_url)}" target="_blank" rel="noopener"><img src="${esc(s.asset.thumb_url)}" alt=""></a><span>sheet ${i + 1}</span></figure>`).join("");
@@ -2857,6 +2860,12 @@
     $("sbFilm").innerHTML = jobs || film ? `<div class="grid" style="gap:6px">${jobs}${film}</div>` : "";
   }
 
+  function sbSyncShots() {  // the board is the truth after a shot is added or removed; the big boxes follow it
+    const v = board.view; if (!v) return;
+    $("sbShots").value = (v.shots || []).join("\n");
+    $("sbMotions").value = (v.motions || []).join("\n");
+  }
+
   function sbBody() {
     const shots = sbLines("sbShots").filter(Boolean);
     const motions = sbLines("sbMotions");
@@ -2866,7 +2875,8 @@
              style: $("sbStyle").value.trim(), characters: $("sbChar").value ? [$("sbChar").value] : null,
              platform: $("sbPlatform").value || "", quality: $("sbQuality").value, check: $("sbCheck").checked,
              music_prompt: $("sbMusic").value.trim(), music_asset_id: $("sbMusicAsset").value.trim() || null,
-             modes: modes.length === shots.length ? modes : null };
+             modes: modes.length === shots.length ? modes
+               : (board.suggestedModes && board.suggestedModes.length === shots.length ? board.suggestedModes : null) };
   }
 
   async function sbSave(draw) {
@@ -2941,6 +2951,7 @@
       if (out.style) $("sbStyle").value = out.style;
       $("sbShots").value = out.shots.join("\n");
       $("sbMotions").value = out.motions.join("\n");
+      board.suggestedModes = Array.isArray(out.modes) && out.modes.length === out.shots.length ? out.modes : null;
       if (!$("sbTitle").value.trim()) $("sbTitle").value = idea.slice(0, 80);
       toast("Shots written", `${out.shots.length} shots by ${String(out.model || "").split("/").pop()}. Edit them, then Draw sheets.`);
     } finally { $("sbWrite").disabled = false; $("sbWrite").textContent = "Write shots for me"; }
@@ -2986,6 +2997,16 @@
       button.disabled = true; button.textContent = "Drawing…";
       try { await post(sbPath(`/panels/${n}`), { shot, keep_setting: !!redo }); toast(`Shot ${n} redrawn`, "$0.018"); }
       finally { await sbShow(); }
+    }
+    if (e.target.closest("[data-sb-insert]")) {
+      const text = prompt(`New shot after shot ${n}: describe what is in the frame`);
+      if (text && text.trim()) { await post(sbPath("/shots"), { at: n, shot: text.trim() }); await sbShow(); sbSyncShots(); }
+      return;
+    }
+    if (e.target.closest("[data-sb-remove]")) {
+      if (!await confirmAction(`Remove shot ${n}?`, "Its panel goes with it; every other shot keeps its own.", "Remove")) return;
+      await api(sbPath(`/shots/${n}`), { method: "DELETE" }); await sbShow(); sbSyncShots();
+      return;
     }
     if (e.target.closest("[data-sb-media]")) await stPicker($("sbPanelPicker"), async (id) => {
       await post(sbPath(`/panels/${n}`), { asset_id: id }); $("sbPanelPicker").hidden = true; await sbShow();

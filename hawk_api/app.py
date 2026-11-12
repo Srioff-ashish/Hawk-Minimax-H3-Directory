@@ -37,7 +37,7 @@ from .prompts import PROMPT_NAMES
 from .schemas import (
     AgentMemoryIn, AgentMessageIn, AgentSessionIn, AgentTalkIn, AICredentialCheck, AssetBulk, AssetUpdate, DriveExportSettings, DriveImportIn, ImageEngineSettings,
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
-    UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardPanelIn, StoryboardRenderIn,
+    UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardShotIn, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
     CharacterPackIn, FilmIn, HiddenMessageIn, HiddenShotIn, ManhwaFilmIn
 )
@@ -650,6 +650,21 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.delete("/v1/storyboards/{board_id}", tags=["storyboard"])
     async def board_delete(board_id: str):
         return boards.delete(board_id)
+
+    @app.post("/v1/storyboards/{board_id}/shots", tags=["storyboard"])
+    async def board_shot_insert(board_id: str, body: StoryboardShotIn):
+        """Insert a shot; every other shot keeps its own panel, mode, lines and check."""
+        return boards.insert_shot(board_id, body.at, body.shot, body.motion, body.lines, body.mode)
+
+    @app.delete("/v1/storyboards/{board_id}/shots/{number}", tags=["storyboard"])
+    async def board_shot_delete(board_id: str, number: int):
+        """Remove shot `number` (from 1) with its panel; the others keep theirs."""
+        return boards.delete_shot(board_id, number - 1)
+
+    @app.post("/v1/storyboards/{board_id}/shots/{number}/move", tags=["storyboard"])
+    async def board_shot_move(board_id: str, number: int, to: int):
+        """Move shot `number` to position `to` (both from 1), with its panel, mode, lines and check."""
+        return boards.move_shot(board_id, number - 1, to - 1)
 
     @app.post("/v1/storyboards/{board_id}/draw", tags=["storyboard"], status_code=202)
     async def board_draw(board_id: str, missing_only: bool = False):
