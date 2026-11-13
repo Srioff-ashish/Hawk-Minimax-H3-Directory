@@ -6539,10 +6539,14 @@
     if (open) {
       agent.personaFor = agent.current;
       $("agentPersona").value = currentSession()?.persona || "";
-      agent.castDraft = castOf().slice(1).map((m) => ({ id: m.id, name: m.name || m.display_name, persona: m.persona, avatar_asset_id: m.avatar_asset_id || "", avatar_url: m.avatar_url }));
+      agent.castDraft = draftFromCast();
       renderCastExtra();
       $("agentPersona").focus();
     }
+  }
+  //: The characters after the lead, as the Persona panel edits them.
+  function draftFromCast() {
+    return castOf().slice(1).map((m) => ({ id: m.id, name: m.name || m.display_name, persona: m.persona, avatar_asset_id: m.avatar_asset_id || "", avatar_url: m.avatar_url }));
   }
   $("agentPersonaBtn").onclick = () => togglePersona($("agentPersonaPanel").hidden);
   $("agentPersonaClose").onclick = () => togglePersona(false);
@@ -6554,7 +6558,9 @@
     const text = $("agentPersona").value;
     if (!agent.current) { if (!(await newAgentChat())) return; agent.personaFor = agent.current; }
     if (agent.personaFor !== agent.current) { togglePersona(false); return toast("Chat changed", "Open Persona again to edit this chat's persona.", "warn"); }
-    const draft = agent.castDraft || [];
+    // No draft means nobody was edited here: keep the chat's characters. An empty list saved only the lead and
+    // removed everyone else (a live chat lost two characters and the one just brought in this way).
+    const draft = agent.castDraft ?? draftFromCast();
     let fields = { persona: text, name: $("agentName").value.trim() };
     if (draft.length || castOf().length > 1) {
       const lead = castOf()[0] || {};
@@ -6664,7 +6670,8 @@
     try {
       const full = $("castBringFull").checked;
       updateAgentHeader(await post(`/v1/agent/sessions/${agent.current}/bring_in`, { from_session, member, full }));
-      agent.castDraft = null;
+      agent.castDraft = draftFromCast();  // the panel now lists them too, so Save keeps them
+      renderCastExtra();
       toast(`${member} joined`, full ? "With everything they remember of that chat, their feelings, look, permanent memory and growth."
         : "With their persona, look, permanent memory and growth.", "ok", 4500);
     } catch (error) { toast(`Could not bring in ${member}`, error.message, "bad"); }
