@@ -406,7 +406,10 @@ _CHAT_MECHANICS = re.compile(
     r"|\b(avatar|avataar|identity pictures?|references?)\b.{0,30}\b(asset|is|are|set)\b.{0,20}\b[0-9a-f]{12}\b"
     r"|\b(avatar|avataar)\b.{0,15}\basset\b"
     r"|\bname in (the )?(chat|group)\b"
-    r"|\b(avatar|avataar)\b.{0,40}\b(set|created|added)\b.{0,30}\b(chat|group)\b",
+    r"|\b(avatar|avataar|profile (photo|pic|picture))\b"
+    # An asset id: which picture is whose is the cast's and the library's to know, and the ids pile up and
+    # contradict each other (one chat saved "her image is 2e8f250a35d0" three ways in one turn).
+    r"|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12}\b",
     re.IGNORECASE)
 
 

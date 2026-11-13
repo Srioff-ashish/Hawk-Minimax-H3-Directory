@@ -34,11 +34,14 @@ class Detect(unittest.TestCase):
     def test_chat_mechanics_are_not_memory(self):
         for text in ("Mrs. Khanna has now been added to the chat group.", "Her avatar asset is 25309665bef5.",
                      "Her name in chat is now Anal, replacing Anjali.",
-                     "Her avatar is now created and set in the group alongside Rebel's and Sakshi's avatars."):
+                     "Her avatar is now created and set in the group alongside Rebel's and Sakshi's avatars.",
+                     "Her avatar is the image the user attached in chat.", "Her image in the group picture is 2e8f250a35d0.",
+                     "Her real, unedited face is now her profile photo in the mohalla group."):
             with self.subTest(text=text):
                 self.assertTrue(is_chat_mechanics(text))
         for text in ("Must bring Mrs. Khanna to the master's bed.", "Calls the user boss.",
-                     "Rebel's best friend Sakshi lives next door."):
+                     "Rebel's best friend Sakshi lives next door.", "Her chinal colour is Royal Cobalt.",
+                     "Every morning at 7 she sends a selfie.", "Was born in 1980 in Ludhiana."):
             with self.subTest(text=text):
                 self.assertFalse(is_chat_mechanics(text))
         kept, _, _ = tidy_canon([{"text": "Mrs. Khanna has now been added to the chat group.", "kind": "fact"},
