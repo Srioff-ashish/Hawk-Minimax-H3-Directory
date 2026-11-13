@@ -53,6 +53,36 @@ class InTheChat(AgentHarness):
         prompt = json.dumps(director[0]["messages"])
         self.assertIn("What it shows: A woman in a red saree", prompt)
 
+    async def test_pictures_shared_earlier_are_looked_at_when_asked_about_later(self):
+        looks = []
+
+        def reply(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list) and LOOK_PROMPT in str(first[0].get("text")):
+                looks.append(body)
+                return "not json"  # the first look fails, as a busy vision model does
+            return json.dumps({"say": "Hmm.", "actions": [], "done": True})
+
+        self.atlas.reply = reply
+        uploaded = await self.http.post("/v1/assets", files={"files": ("three.png", tiny_png(), "image/png")})
+        asset = uploaded.json()["assets"][0]["id"]
+        chat = await self.new_chat(persona="You are Ritz.", name="Ritz")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "yeh tum teeno ki pic hai", "attachments": [asset]})
+        await self.settle(chat)
+
+        def reply2(body):
+            first = body["messages"][0]["content"]
+            if isinstance(first, list) and LOOK_PROMPT in str(first[0].get("text")):
+                looks.append(body)
+                return json.dumps({"items": [{"asset_id": asset, "seen": "Three women in sarees on a terrace."}]})
+            return json.dumps({"say": "Teen auratein saree mein.", "actions": [], "done": True})
+
+        self.atlas.reply = reply2
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "okay describe each of the pic"})
+        view = await self.settle(chat)
+        first_user = next(m for m in view["messages"] if m["role"] == "user")
+        self.assertEqual(first_user["content"]["attachments"][0].get("seen"), "Three women in sarees on a terrace.")
+
     async def test_audio_is_not_looked_at_and_the_character_is_told_it_cannot_hear(self):
         bodies = []
 

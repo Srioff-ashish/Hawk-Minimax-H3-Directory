@@ -41,10 +41,13 @@ log = logging.getLogger("hawk_api.agent")
 MAX_STEPS = 40
 #: Args a subject's name could plausibly appear in. Matching the whole args blob instead let a lora
 #: filename or a negative prompt decide who owned a picture.
-SUBJECT_FIELDS = ("prompt", "script", "story", "text", "brief")
+# make_video names its people in "character" and "shots": without them a video's subjects were never found, its
+# identity pictures were never attached, and whatever ids the director remembered went through as they were.
+SUBJECT_FIELDS = ("prompt", "script", "story", "text", "brief", "character", "shots")
 USER_OWNER_WORDS = ("user", "you", "me", "myself")
 MAX_CAST = 4  # characters in one chat
 MAX_AKA = 5  # former names kept per character, so their old messages still find them
+MAX_VIDEO_FACES = 3  # identity pictures make_video takes
 MAX_LINES = 8  # spoken lines in one reply of a group chat
 MAX_TALK_ROUNDS = 10
 MAX_TALK_MAKES = 5  # things any one character may have made during one "let them talk" (default 2)
@@ -258,8 +261,12 @@ SUMMARY_PROMPT = (
     "Summarise the conversation so far for your own future context. Keep: the user's goals and preferences, the persona "
     "or cast (each character's name, personality and avatar asset id, and how they relate), how each character feels about "
     "the user and about each other and the moments that caused it, "
-    "decisions made, every asset id, job id and video link, what is finished and what is still open. Plain text, at most 400 words."
+    "decisions made, and what happened in the order it happened. Ids only for what is still open (a render being "
+    "waited on, a picture the user has not answered about), never links: they expire, and the cast list already "
+    "holds every avatar and identity picture. What is finished and what is still open. Plain text, at most 450 words."
 )
+# A live chat's summary spent half its words on picture ids, job ids and an expired signed link, because this
+# asked for "every asset id, job id and video link"; each compaction squeezed the story out to keep them.
 
 #: Appended to both summarisers. They already make exactly one call each, so the facts ride along in it and the
 #: graph costs no extra request -- which was the requirement, not an optimisation.
@@ -453,6 +460,21 @@ _ENGINE_NAMED = re.compile(
     r"\b(krea ?2|krea|z-?image|z image|zit|p-?h3|qwen ?2\.1|qwen21|qwen|seedream[- ](?:flash|lite)|seedream|"
     r"nano[- ]banana(?:[- ](?:pro|lite))?)\b|\bengine\s*[:=]?\s*\"?(turbo|flash|lite)\b",
     re.IGNORECASE)
+
+
+#: A character saying they will make, send or render a picture or video ("main abhi bhejti hoon pic", "give me a few
+#: minutes to bake the render") -- in a talk only a "make" field gets anything made.
+_PROMISE = re.compile(
+    r"\b(i'?ll|i will|let me|give me|main|mai|abhi|chalo|let's)\b.{0,50}"
+    r"\b(render|bake|shoot|click|send|bhej|bana|banati|banaungi|bhejti|bhejungi|record|film|snap|make|take|do)\w*\b.{0,40}"
+    r"\b(video|clip|pic|pics|photo|photos|picture|tasveer|selfie|render|shot|reel|film)s?\b"
+    r"|\b(video|clip|pic|photo|picture|tasveer|selfie|render|reel)\b.{0,30}"
+    r"\b(bhejti|bhejungi|banati|banaungi|bana rahi|bhej rahi|coming up|on its way|rendering)\b",
+    re.IGNORECASE)
+
+
+def promises_a_make(say: str) -> bool:
+    return bool(_PROMISE.search(str(say or "")))
 
 
 def attachment_line(f: dict) -> str:
@@ -2068,13 +2090,18 @@ class AgentService:
         self.store.add_message(session_id, "note", {"text": text, "kind": kind})
 
     async def _look_at_attachments(self, session_id: str) -> None:
-        """Have the vision model look once at the pictures and video frames the user just attached."""
-        last = next((m for m in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)) if m["role"] == "user"), None)
-        if last is None:
-            return
-        content = last["content"]
-        files = [f for f in content.get("attachments") or [] if f.get("kind") in ("image", "video") and "seen" not in f]
-        files = files[:LOOK_MAX]
+        """Have the vision model look once at the pictures and video frames the user attached recently.
+
+        Recent, not only the newest message: a live chat shared three pictures, then asked two messages later to
+        describe them, and the character invented the outfits -- the pictures had never been looked at."""
+        recent = [m for m in self.store.messages(session_id, limit=REPEAT_LOOKBACK) if m["role"] == "user"]
+        owners: list[tuple[dict, dict]] = []  # (message, attachment), newest message first
+        for message in reversed(recent):
+            for f in message["content"].get("attachments") or []:
+                if f.get("kind") in ("image", "video") and "seen" not in f:
+                    owners.append((message, f))
+        owners = owners[:LOOK_MAX]
+        files = [f for _, f in owners]
         if not files:
             return
         parts: list[dict] = [{"type": "text", "text": LOOK_PROMPT}]
@@ -2111,7 +2138,8 @@ class AgentService:
                     if match is not None:
                         match["seen"] = " ".join(str(item.get("seen") or "").split())[:800]
                 break
-        self.store.set_content(session_id, last["id"], content)
+        for message in {id(m): m for m, _ in owners}.values():
+            self.store.set_content(session_id, message["id"], message["content"])
 
     async def _run(self, session_id: str, talk_rounds: int = 0, makes: int = 2) -> None:
         self._final[session_id] = "idle"
@@ -2347,7 +2375,8 @@ class AgentService:
                 cast = cast_of(session)
                 names = [display_name(m, i, len(cast)) for i, m in enumerate(cast)]
                 index = cast_talk.next_speaker(cast, names, last_index, last_text, spoke)
-                turn = await self._character_turn(session, index)
+                can_make = makes > 0 and spent.get(index, 0) < makes and sum(spent.values()) < MAX_TALK_MAKES_TOTAL
+                turn = await self._character_turn(session, index, can_make=can_make)
                 steps += 1
                 if turn is None:
                     self._note(session_id, f"{names[index]} couldn't answer in the expected format; the talk stopped.", "error")
@@ -2393,8 +2422,9 @@ class AgentService:
                 return find_member(cast, line.get("speaker", "")), line.get("say", "")
         return None, ""
 
-    async def _character_turn(self, session: dict, index: int) -> dict | None:
-        """One character speaks: a small call with only what this character knows."""
+    async def _character_turn(self, session: dict, index: int, can_make: bool = False) -> dict | None:
+        """One character speaks: a small call with only what this character knows. can_make: they may still ask
+        for a picture or video this talk, so a line that promises one without asking is sent back once."""
         session_id = session["id"]
         cast = cast_of(session)
         member = cast[index]
@@ -2453,7 +2483,7 @@ class AgentService:
         director = next((m for m in await self.models_for("director", session) if m != prose), prose)
         attempts = [prose, prose, director]
         own, others = self._recent_talk(session_id, member["id"])
-        nudged = False
+        nudged = promised = False
         text, call, failure = "", None, None
         position = 0
         while position < len(attempts):
@@ -2482,6 +2512,16 @@ class AgentService:
                     messages.append({"role": "user", "content": f"That line {why}. Say something new instead: react to "
                                      "the last thing said, add a new thought, a question, a disagreement or a decision, "
                                      "in different words. Same JSON format."})
+                    attempts.insert(position, model)
+                    continue
+                # "Give me a few minutes to bake the render" with no "make": the user waits for something nobody
+                # asked for. Asked once to either ask for it properly or not promise it.
+                if can_make and not promised and not turn.get("make") and promises_a_make(turn["say"]):
+                    promised = True
+                    messages.append({"role": "assistant", "content": text[:2000]})
+                    messages.append({"role": "user", "content": 'That line promises a picture or video, but only "make" '
+                                     'gets anything made. Either add "make" with a full description of it (and "act" '
+                                     'and "of"), or say the line without promising it. Same JSON format.'})
                     attempts.insert(position, model)
                     continue
                 return record(turn, call)
@@ -3844,7 +3884,26 @@ class AgentService:
                 args["reference_asset_ids"] = held + others
                 args["prompt"] = self._label_identity(prompt, identity)
         elif name == "make_video":
-            args["identity_asset_ids"] = held[:3]
+            # Every picture of every person, cut at three, gave a three-woman video two pictures of the first and
+            # one of the second, and the third no face at all -- while the script numbered one picture per person,
+            # so the second was drawn with the first's face and the third with the second's. People go in the order
+            # the script names them, one picture each first, and the script is told which picture is whose.
+            text = str(args.get("character") or "")
+            lowered = text.lower()
+
+            def first_named(item: tuple[str, list[str]]) -> int:
+                at = lowered.find(item[0].lower())
+                return at if at >= 0 else len(lowered) + 1
+
+            identity = self._fit_identity(sorted(identity, key=first_named)[:MAX_VIDEO_FACES], MAX_VIDEO_FACES)
+            args["identity_asset_ids"] = [asset for _, pictures in identity for asset in pictures]
+            labels, number = [], 1
+            for person, pictures in identity:
+                last = number + len(pictures) - 1
+                labels.append(f"<Picture {number}> is {person}" if last == number
+                              else f"<Picture {number}> to <Picture {last}> are {person}")
+                number = last + 1
+            args["character"] = (text.rstrip() + " " if text.strip() else "") + "(" + "; ".join(labels) + ".)"
         else:  # plan_film: the planner numbers what it is given, so the pictures are added, never re-ordered
             references = list(args.get("references") or [])
             have = {str((r or {}).get("asset_id")) for r in references if isinstance(r, dict)}
