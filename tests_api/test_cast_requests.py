@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from hawk_api.agent import asks_cast_change, is_chat_mechanics, tidy_canon  # noqa: E402
+from hawk_api.agent import asks_cast_change, is_chat_mechanics, named_engine, tidy_canon  # noqa: E402
 from test_agent import AgentHarness, tiny_png  # noqa: E402
 
 PROSE = "deepseek-ai/deepseek-v4.1-flash"
@@ -47,6 +47,19 @@ class Detect(unittest.TestCase):
         kept, _, _ = tidy_canon([{"text": "Mrs. Khanna has now been added to the chat group.", "kind": "fact"},
                                  {"text": "Calls the user boss.", "kind": "rule"}])
         self.assertEqual([k["text"] for k in kept], ["Calls the user boss."])
+
+
+class Engines(unittest.TestCase):
+    def test_named_engines(self):
+        for text, engine in (("Use engine krea2.", "krea2"), ("with engine krea2", "krea2"), ("use Krea 2 for it", "krea2"),
+                             ("Same scene. Use engine zimage.", "zimage"), ("z-image se banao", "zimage"),
+                             ("Use engine seedream.", "seedream"), ("seedream flash please", "seedream-flash"),
+                             ("engine: turbo", "turbo"), ("try qwen 2.1", "qwen21"), ("make it on ph3", "ph3")):
+            with self.subTest(text=text):
+                self.assertEqual(named_engine(text), engine)
+        for text in ("make the best photo", "a fast one", "local market at night", "turbo base video", "next morning"):
+            with self.subTest(text=text):
+                self.assertEqual(named_engine(text), "")
 
 
 class InTheChat(AgentHarness):
@@ -124,6 +137,20 @@ class InTheChat(AgentHarness):
         self.assertEqual(member["aka"], ["Mrs. Khanna", "Anjali"], "her old lines still find her face")
         from hawk_api.agent import find_member
         self.assertEqual(find_member([{"name": "Rebel"}, member], "Mrs. Khanna"), 1)
+
+    async def test_a_named_engine_is_the_one_that_runs(self):
+        calls = iter([[{"tool": "generate_image", "args": {"prompt": "a street at night", "engine": "auto"}}]])
+
+        def reply(body):
+            actions = next(calls, [])
+            return json.dumps({"say": "Ok.", "actions": actions, "done": not actions})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(persona="You are Tara.", name="Tara")
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "A street at night. Use engine zimage."})
+        view = await self.settle(chat)
+        tool = next(m["content"] for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "generate_image")
+        self.assertEqual(tool["args"]["engine"], "zimage", "the director sent auto; the user's engine ran")
 
     async def test_renaming_takes_the_current_name(self):
         def reply(body):

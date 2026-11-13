@@ -436,6 +436,28 @@ def asks_cast_change(text: str) -> bool:
     return bool(_CAST_REQUEST.search(str(text or "")))
 
 
+#: Engine names a user types. Only distinctive ones: "best", "fast" or "local" in a sentence are not a choice
+#: of engine; "turbo" and "flash" count only right after the word engine.
+_ENGINE_NAMED = re.compile(
+    r"\b(krea ?2|krea|z-?image|z image|zit|p-?h3|qwen ?2\.1|qwen21|qwen|seedream[- ](?:flash|lite)|seedream|"
+    r"nano[- ]banana(?:[- ](?:pro|lite))?)\b|\bengine\s*[:=]?\s*\"?(turbo|flash|lite)\b",
+    re.IGNORECASE)
+
+
+def named_engine(text: str) -> str:
+    """The image engine the user asked for by name in this message, as a canonical id, or "".
+
+    The director overrode named engines with beliefs of its own ("Krea 2 keeps people clothed", "z-image can't
+    see faces, use turbo") and sent auto or a cloud engine instead, so what the user asked for never ran."""
+    found = _ENGINE_NAMED.search(str(text or ""))
+    if not found:
+        return ""
+    word = (found.group(1) or found.group(2) or "").lower().replace(" ", "-")
+    word = {"krea-2": "krea2", "z-image": "zimage", "zit": "zimage", "p-h3": "ph3", "qwen-2.1": "qwen21",
+            "nano-banana-pro": "nano-banana-pro", "flash": "seedream-flash", "lite": "seedream-lite"}.get(word, word)
+    return image_engines.resolve(word)
+
+
 def tidy_canon(canon: list[dict]) -> tuple[list[dict], list[str], int]:
     """(kept items, finished events moved out as story lines, duplicates merged). Of two items that say the same
     thing the newer wording stays, in the older one's place; a rule absorbing a fact stays a rule."""
@@ -1022,6 +1044,7 @@ class AgentService:
         #: engine is pinned, so the retake would fail instead of falling through.
         self._not_sfw: set[str] = set()
         self._awaiting_choice: dict[str, dict] = {}  # per chat: inspection wants a retake, the user has not picked yet
+        self._named_engine: dict[str, str] = {}  # per chat: the image engine the user named this turn
         self._makes: dict[str, set[asyncio.Task]] = {}  # per chat: pictures still rendering beside the talk
         self._final: dict[str, str] = {}  # per running chat: the status it ends with
         settings = service.settings
@@ -2151,7 +2174,9 @@ class AgentService:
         steps = repairs = repeats = 0
         answered = False  # this turn has stored a reply, so anything after it is reading tool results
         reply = None
-        needs_tools = asks_cast_change(self._last_user_text(session_id))
+        asked = self._last_user_text(session_id)
+        needs_tools = asks_cast_change(asked)
+        self._named_engine[session_id] = named_engine(asked)
         while True:
             if self._halted(session_id, started, steps, max_steps):
                 return None
@@ -2865,6 +2890,10 @@ class AgentService:
         stepped = await self._step_up_engine(session_id, args) if name == "generate_image" else None
         if stepped:
             args = {**args, "engine": stepped}
+        named = self._named_engine.get(session_id, "") if name == "generate_image" else ""
+        overridden = named and image_engines.resolve(str(args.get("engine") or "")) != named
+        if overridden:  # the user named an engine: that one runs, whatever the director preferred
+            args, stepped = {**args, "engine": named}, None
         try:
             if name == "generate_image" and session_id in self._awaiting_choice:
                 # A model that argues with the gate would otherwise spend the whole step budget on refusals.
@@ -2900,7 +2929,10 @@ class AgentService:
             result, ok = {"_error": str(exc) or type(exc).__name__}, False
         if stepped and ok and isinstance(result, dict):
             result = {**result, "engine_note": f"An earlier take failed inspection, so engine auto used {stepped} this time."}
-        owner = self._take_ownership(self.get_session(session_id), action, result, asked_by, subjects) if ok else None
+        if overridden and ok and isinstance(result, dict):
+            result = {**result, "engine_note": f"The user asked for engine {named}, so {named} ran. Use it for "
+                                               "their requests this turn rather than choosing another."}
+        owner =self._take_ownership(self.get_session(session_id), action, result, asked_by, subjects) if ok else None
         content = {"tool": name, "args": args, "ok": ok, "result": result if ok else None,
                    "error": None if ok else result.get("_error")}
         if owner:
