@@ -134,6 +134,17 @@ INSPECT_PROMPT = (
     'Reply with only JSON: {"images": [{"asset_id": "...", "score": 1-10, "issues": ["..."], "verdict": "keep" or "retry"}], '
     '"best": "<asset_id>", "advice": "one or two sentences: how to fix (prompt changes), and whether a higher-quality model is worth it"}'
 )
+#: What the user attached is looked at once, when it arrives. Before, the characters got only an id and a
+#: filename: they described their own pictures from memory, guessed at others from the filename, and described
+#: how an audio file sounded though nothing in the chat can hear.
+LOOK_PROMPT = (
+    "Describe each attached picture (in the order given) for someone who cannot see it: who is in it (apparent age, "
+    "build, hair, expression), what they wear, what they are doing, the setting, time of day, light and mood, and any "
+    "text. A frame from a video is marked as one: describe the frame. Plain and factual, 2-4 sentences each. "
+    'Reply with only JSON: {"items": [{"asset_id": "...", "seen": "..."}]}'
+)
+LOOK_MAX = 4  # attachments looked at per message
+LOOK_SECONDS = 60
 MAX_RUN_SECONDS = 3 * 3600
 MANUAL_KEEP_MESSAGES = 4  # the Compact button keeps this many messages word for word
 #: A whole message wrapped in asterisks is narration: the scene, not a line spoken to the characters.
@@ -444,6 +455,25 @@ _ENGINE_NAMED = re.compile(
     re.IGNORECASE)
 
 
+def attachment_line(f: dict) -> str:
+    """One attachment as the model reads it: what was seen in it, or plainly what it cannot know."""
+    head = f"- {f.get('asset_id')} ({f.get('kind')}: {f.get('filename')})"
+    seen = str(f.get("seen") or "").strip()
+    kind = f.get("kind")
+    if f.get("missing"):
+        return f"{head}. Its file is missing on the server, so it can't be seen or used: tell the user to upload it again."
+    if kind == "image":
+        return f"{head}. What it shows: {seen}" if seen else (
+            f"{head}. Not looked at yet: call inspect_image on it before saying what it shows.")
+    if kind == "video":
+        return (f"{head}. One frame from it shows: {seen} You saw that frame only, not the motion or the sound."
+                if seen else f"{head}. You cannot watch videos: say only what this chat already knows about it.")
+    if kind == "audio":
+        return (f"{head}. You cannot hear audio: never describe how it sounds. Its name and what this chat already "
+                "knows about it are all you have; you can still use it (for example as a film's music).")
+    return head
+
+
 def named_engine(text: str) -> str:
     """The image engine the user asked for by name in this message, as a canonical id, or "".
 
@@ -716,6 +746,12 @@ class AgentStore:
                 "SELECT 1 FROM agent_messages WHERE session_id = ? AND id < ? LIMIT 1",
                 (session_id, message_id),
             ).fetchone() is not None
+
+    def set_content(self, session_id: str, message_id: int, content: dict) -> None:
+        with self._lock:
+            self._db.execute("UPDATE agent_messages SET content = ? WHERE session_id = ? AND id = ?",
+                             (json.dumps(content, ensure_ascii=False), session_id, message_id))
+            self._db.commit()
 
     def get_message(self, session_id: str, message_id: int) -> dict | None:
         with self._lock:
@@ -2031,6 +2067,52 @@ class AgentService:
     def _note(self, session_id: str, text: str, kind: str = "info") -> None:
         self.store.add_message(session_id, "note", {"text": text, "kind": kind})
 
+    async def _look_at_attachments(self, session_id: str) -> None:
+        """Have the vision model look once at the pictures and video frames the user just attached."""
+        last = next((m for m in reversed(self.store.messages(session_id, limit=REPEAT_LOOKBACK)) if m["role"] == "user"), None)
+        if last is None:
+            return
+        content = last["content"]
+        files = [f for f in content.get("attachments") or [] if f.get("kind") in ("image", "video") and "seen" not in f]
+        files = files[:LOOK_MAX]
+        if not files:
+            return
+        parts: list[dict] = [{"type": "text", "text": LOOK_PROMPT}]
+        for f in files:
+            try:
+                data, mime = await self.service.asset_file(f["asset_id"], 640)  # a video gives a frame
+            except Exception as exc:  # a missing file is said, not guessed at
+                f["seen"] = ""
+                f["missing"] = str(exc)[:200]
+                continue
+            label = "a frame from video" if f["kind"] == "video" else "picture"
+            parts.append({"type": "text", "text": f"{label} {f['asset_id']}:"})
+            parts.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64," + base64.b64encode(data).decode("ascii")}})
+        if len(parts) > 1:
+            session = self.get_session(session_id)
+            for model in await self.models_for("vision", session):
+                try:
+                    text, usage = await self.atlas.chat(model, [{"role": "user", "content": parts}], json_mode=True,
+                                                        max_tokens=INSPECT_MAX_TOKENS, temperature=0.2, max_retries=1,
+                                                        purpose="look at attachments")
+                except AtlasError as exc:
+                    log.warning("looking at attachments with %s failed: %s", model, exc)
+                    continue
+                await self._add_usage(session_id, model, usage, step=False)  # looking is not a director step
+                verdict = parse_json_object(text)
+                items = verdict.get("items") if isinstance(verdict, dict) else None
+                if not isinstance(items, list):
+                    continue
+                looked = [f for f in files if "missing" not in f]
+                for index, item in enumerate(i for i in items if isinstance(i, dict)):
+                    match = next((f for f in looked if f["asset_id"] == str(item.get("asset_id"))), None)
+                    if match is None and index < len(looked):
+                        match = looked[index]  # models echo made-up ids; answers come back in the order sent
+                    if match is not None:
+                        match["seen"] = " ".join(str(item.get("seen") or "").split())[:800]
+                break
+        self.store.set_content(session_id, last["id"], content)
+
     async def _run(self, session_id: str, talk_rounds: int = 0, makes: int = 2) -> None:
         self._final[session_id] = "idle"
         capture: asyncio.Task | None = None
@@ -2050,6 +2132,10 @@ class AgentService:
             else:
                 last_user = next((m for m in reversed(self.store.messages(session_id)) if m["role"] == "user"), None)
                 private = (last_user or {}).get("content", {}).get("private_to", "") if last_user else ""
+                try:
+                    await asyncio.wait_for(self._look_at_attachments(session_id), LOOK_SECONDS)
+                except Exception as exc:  # never worth losing the reply over
+                    log.warning("looking at attachments failed: %s", exc)
                 await self._director_turn(session_id, MAX_STEPS, private_to=private)
         except AtlasError as exc:
             self._note(session_id, f"Model error: {exc}", "error")
@@ -2454,7 +2540,8 @@ class AgentService:
             text = content.get("text", "")
             files = content.get("attachments") or []
             if files:
-                text += " [shared " + ", ".join(f"{f['kind']} {f['asset_id']}" for f in files) + "]"
+                text += " [shared " + "; ".join(f"{f['kind']} {f['asset_id']}" + (f" showing: {f['seen']}" if f.get("seen") else "")
+                                                for f in files) + "]"
             if content.get("narration"):
                 return [f"(This happened, and is true from now on: {text})"]
             return [f"User (whispering only to you): {text}" if content.get("private_to") == member_id else f"User: {text}"]
@@ -2711,7 +2798,7 @@ class AgentService:
             return True
         return False
 
-    async def _add_usage(self, session_id: str, model: str, usage: dict) -> dict:
+    async def _add_usage(self, session_id: str, model: str, usage: dict, step: bool = True) -> dict:
         """Add one model call to the chat's totals; returns that call's usage. The cost is an estimate at Atlas list
         prices, with cached input tokens (a repeated prompt prefix) at the model's cheaper cache-read price."""
         info = await self.atlas.model_info(model) or {}
@@ -2734,7 +2821,7 @@ class AgentService:
         totals["completion_tokens"] += completion
         totals["cached_tokens"] = totals.get("cached_tokens", 0) + cached
         totals["reasoning_tokens"] = totals.get("reasoning_tokens", 0) + reasoning
-        totals["steps"] = totals.get("steps", 0) + 1
+        totals["steps"] = totals.get("steps", 0) + (1 if step else 0)
         totals["cost_usd"] = round(totals.get("cost_usd", 0.0) + cost, 6)
         self.store.save_session(session)
         return {"model": model, "in": prompt, "out": completion, "cached": cached,
@@ -3005,7 +3092,7 @@ class AgentService:
             old = index < current
             if role == "user":
                 files = content.get("attachments") or []
-                note = ("\nAttached assets: " + ", ".join(f"{f['asset_id']} ({f['kind']}: {f['filename']})" for f in files)) if files else ""
+                note = ("\nAttached assets:\n" + "\n".join(attachment_line(f) for f in files)) if files else ""
                 whisper = content.get("private_to")
                 if content.get("narration"):
                     push("user", "NARRATION (the scene, not speech to you: this has happened and is true from now on. "

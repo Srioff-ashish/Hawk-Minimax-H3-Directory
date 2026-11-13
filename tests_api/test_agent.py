@@ -595,13 +595,14 @@ class AgentApi(AgentHarness):
         self.assertEqual(session["usage"]["steps"], 4)
         self.assertGreater(session["usage"]["cost_usd"], 0)
 
-        first = self.atlas.requests[0]
+        # The attached picture is looked at first (a vision call whose content is a list of parts); then the director.
+        first = next(r for r in self.atlas.requests if isinstance(r["messages"][0]["content"], str))
         self.assertEqual(first["model"], "deepseek-ai/deepseek-v4.1-flash", "the shipped chain's fallback past v4-pro")
         system = first["messages"][0]["content"]
         self.assertIn("Bollywood ad-film director", system)
         for tool in ("render_film", "plan_film", "list_options", "wait_for_job"):
             self.assertIn(f"- {tool}:", system)
-        self.assertIn(f"Attached assets: {asset}", last_user(first))
+        self.assertIn(f"Attached assets:\n- {asset} (image: face.png)", last_user(first))
 
         later = (await self.http.get(f"/v1/agent/sessions/{chat}", params={"after": messages[-2]["id"]})).json()
         self.assertEqual(len(later["messages"]), 1)
