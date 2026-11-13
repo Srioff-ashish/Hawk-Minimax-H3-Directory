@@ -152,6 +152,35 @@ class InTheChat(AgentHarness):
         tool = next(m["content"] for m in view["messages"] if m["role"] == "tool" and m["content"]["tool"] == "generate_image")
         self.assertEqual(tool["args"]["engine"], "zimage", "the director sent auto; the user's engine ran")
 
+    async def test_a_deleted_picture_does_not_block_the_chat(self):
+        faces = []
+        for color in ((200, 80, 40), (40, 80, 200)):  # different pictures, or the library keeps one
+            uploaded = await self.http.post("/v1/assets", files={"files": ("face.png", tiny_png(color), "image/png")})
+            faces.append(uploaded.json()["assets"][0]["id"])
+        sush, tina = faces
+        chat = await self.new_chat(cast=[{"name": "Sush", "persona": "S.", "avatar_asset_id": sush},
+                                         {"name": "Tina", "persona": "T.", "avatar_asset_id": tina}])
+        self.assertEqual((await self.http.delete(f"/v1/assets/{sush}")).status_code, 200)
+        calls = iter([[{"tool": "generate_image", "args": {"prompt": "Tina and Sush selfie in the studio",
+                                                           "reference_asset_ids": [sush, tina]}}],
+                      [{"tool": "set_avatar", "args": {"asset_id": "", "speaker": "Tina"}}]])
+
+        def reply(body):
+            actions = next(calls, [])
+            return json.dumps({"say": "Ok.", "actions": actions, "done": not actions})
+
+        self.atlas.reply = reply
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "Tina, studio mein Sush ke saath selfie bhej"})
+        view = await self.settle(chat)
+        tools = {m["content"]["tool"]: m["content"] for m in view["messages"] if m["role"] == "tool"}
+        self.assertTrue(tools["generate_image"]["ok"], tools["generate_image"].get("error"))
+        self.assertNotIn(sush, tools["generate_image"]["args"]["reference_asset_ids"])
+        self.assertIn(tina, tools["generate_image"]["args"]["reference_asset_ids"])
+        self.assertTrue(tools["set_avatar"]["ok"], tools["set_avatar"].get("error"))
+        cast = {m["display_name"]: m for m in view["session"]["cast"]}
+        self.assertEqual(cast["Tina"]["avatar_asset_id"], "")
+        self.assertEqual(cast["Sush"]["avatar_asset_id"], "", "the deleted picture is dropped, not kept")
+
     async def test_renaming_takes_the_current_name(self):
         def reply(body):
             if not any(m["role"] == "assistant" for m in body["messages"]):

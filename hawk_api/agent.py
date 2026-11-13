@@ -1247,20 +1247,35 @@ class AgentService:
             lead.update(name=session.get("name", ""), persona=session.get("persona", ""), avatar_asset_id=session.get("avatar_asset_id", ""))
         return self.store.save_session(session)
 
-    def _check_refs(self, refs, strict: bool = True) -> list[str]:
+    def _check_refs(self, refs, strict: bool = True, kept=None) -> list[str]:
         """A character's identity pictures: existing images, no repeats, at most MAX_REFS (face first). strict False
-        (pictures already stored) drops one deleted since rather than refusing every later edit of the cast."""
+        (pictures already stored) drops one deleted since rather than refusing every later edit of the cast; so
+        does any picture in ``kept`` (the ones the character already had)."""
         clean: list[str] = []
+        had = {str(a) for a in kept or []}
         for asset_id in refs if isinstance(refs, list) else []:
             try:
                 asset_id = self._check_avatar(str(asset_id or "").strip())
             except RequestError:
-                if strict:
+                if strict and str(asset_id or "").strip() not in had:
                     raise
                 continue
             if asset_id and asset_id not in clean:
                 clean.append(asset_id)
         return clean[:MAX_REFS]
+
+    def _live_asset(self, raw) -> bool:
+        """An id (or text holding one) that names an asset still in the library."""
+        found = re.search(r"\b[0-9a-f]{12}\b", str(raw or ""))
+        return bool(found and self.service.store.get_asset(found.group(0)))
+
+    def _kept_avatar(self, asset_id: str) -> str:
+        """A picture a character already had: kept if it still exists, else dropped. Checked strictly, one deleted
+        from the library refused every later edit of the cast -- even clearing it, or saving a growth note."""
+        try:
+            return self._check_avatar(asset_id)
+        except RequestError:
+            return ""
 
     def _check_avatar(self, asset_id: str) -> str:
         asset_id = (asset_id or "").strip()
@@ -1283,12 +1298,13 @@ class AgentService:
             member_id = str(member.get("id") or uuid.uuid4().hex[:8])
             before = known.get(member_id, {})
             avatar = member.get("avatar_asset_id")  # None keeps the face they have; "" removes it
+            had = str(before.get("avatar_asset_id") or "")
             entry = {
                 "id": member_id,
                 "name": str(member.get("name") or "").strip()[:40],
                 "persona": str(member.get("persona") or "").strip(),
-                "avatar_asset_id": self._check_avatar(str(avatar)) if avatar is not None
-                else str(before.get("avatar_asset_id") or ""),
+                "avatar_asset_id": self._kept_avatar(had) if avatar is None or str(avatar).strip() == had
+                else self._check_avatar(str(avatar)),
             }
             growth = member.get("growth")  # None keeps what the character has grown into so far
             entry["growth"] = clean_growth(growth if growth is not None else before.get("growth"))
@@ -1311,7 +1327,8 @@ class AgentService:
             if aka:
                 entry["aka"] = aka
             refs = member.get("refs")  # None keeps the character's identity pictures
-            entry["refs"] = self._check_refs(refs) if refs is not None else self._check_refs(before.get("refs"), strict=False)
+            entry["refs"] = (self._check_refs(refs, kept=before.get("refs")) if refs is not None
+                             else self._check_refs(before.get("refs"), strict=False))
             shown = display_name(entry, index, len(cast))
             if len(cast) > 1:
                 if not (entry["name"] or persona_name(entry["persona"])):
@@ -3811,6 +3828,9 @@ class AgentService:
             member = cast[index]
             shown = display_name(member, index, len(cast))
             pictures = list(member.get("refs") or []) or ([member["avatar_asset_id"]] if member.get("avatar_asset_id") else [])
+            # A picture deleted from the library since it was set fails the whole call (a live chat's selfie
+            # failed seven times on Tina's deleted avatar), so only pictures that still exist go.
+            pictures = [asset for asset in pictures if self.service.store.get_asset(asset)]
             if not pictures:
                 pictures = self._library_pictures(shown)[:MAX_REFS]
             if pictures:
@@ -3856,7 +3876,12 @@ class AgentService:
         name, args = action["tool"], dict(action.get("args") or {})
         if name not in ("generate_image", "make_video", "plan_film"):
             return args
-        identity = self._identity_for(session, self._subject_names(session, action, asked_by, subjects))
+        for key in ("reference_asset_ids", "identity_asset_ids"):
+            # The model copies ids of pictures deleted since out of the cast list and old turns; one unknown id
+            # fails the call, and it kept retrying the same dead id. Unknown ones are dropped here.
+            if isinstance(args.get(key), list):
+                args[key] = [raw for raw in args[key] if self._live_asset(raw)]
+        identity =self._identity_for(session, self._subject_names(session, action, asked_by, subjects))
         if not identity:
             return args
         held = [asset for _, pictures in identity for asset in pictures]
