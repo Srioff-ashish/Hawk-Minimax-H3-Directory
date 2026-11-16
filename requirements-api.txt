@@ -10,3 +10,4 @@ pydantic>=2.6,<3
 mcp>=1.10,<3
 pillow>=10  # thumbnails; ComfyUI owns this one, so it is not capped here
 c2pa-python>=0.38,<1  # reads the content credential on uploaded AI images (verify-ai-credential)
+pypdf>=5,<8  # reads a novel uploaded to Story (story_source.py)

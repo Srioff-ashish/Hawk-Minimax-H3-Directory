@@ -29,6 +29,7 @@ from hawk_h3.script import ScriptError, max_segment_seconds, parse_script
 
 from . import db
 from . import models_llm
+from . import story_source
 from .atlas import AtlasError
 from .jobs import NotFound, RequestError, Unavailable
 from .manhwa import (CONTEXT_MAX, build_srt, concat_videos, film_to_drive, is_minor, media_seconds, parse_json,
@@ -79,8 +80,7 @@ Story so far (finished chapters):
 """
 
 DRAFT_PROMPT = """\
-Turn the conversation below into chapter {number} of the story, ready to be filmed. Use what the user decided;
-fill gaps the way the conversation points. Write 3-{max_scenes} scenes in order. Each scene is one continuous shot
+Turn the {material} below into chapter {number} of the story, ready to be filmed. {how} Write 3-{max_scenes} scenes in order. Each scene is one continuous shot
 of film:
 - "description": what the camera sees -- who is where, what they do, their expressions, the camera angle -- in 2-4
   sentences, concrete and visual.
@@ -98,7 +98,7 @@ Cast:
 Earlier chapters:
 {chapters}
 
-Conversation for this chapter:
+{source_label}:
 {conversation}
 
 Reply with only JSON:
@@ -129,6 +129,29 @@ who appear on screen, "narrator" for a voice-over. Every character is an adult (
 Reply with only JSON:
 {{"characters": [{{"name": "", "description": "", "role": "cast"}}],
 "chapters": [{{"title": "", "beats": ""}}]}}
+"""
+
+#: The author's own text, as the draft's material: adapted, not reinvented.
+SOURCE_HOW = ("This is the author's own novel: adapt it faithfully. Keep its events in their order, its characters, "
+              "its places and its tone; turn each spoken line in the text into dialogue word for word, in the language "
+              "it is written in, and add none of your own unless a scene would otherwise be silent. Leave nothing out "
+              "that moves the story; descriptions become what the camera sees. Split it into as many scenes as it "
+              "needs, up to the limit.")
+CONVERSATION_HOW = "Use what the user decided; fill gaps the way the conversation points."
+
+READ_ATTEMPTS = 2
+#: One part of the source at a time for the reading pass, so even a long novel never has to fit in one call.
+READ_CHUNK_CHARS = 40_000
+READ_PROMPT = """\
+This is part {n} of {total} of a novel the user wrote, which will be made into a film. Read it and reply with only
+JSON:
+{{"summary": "what happens in this part: 4-8 plain sentences with the names, places and turning points",
+"characters": [{{"name": "the name the text uses", "description": "how they look, for an image model: adult age, build,
+face, hair, usual clothes -- only what the text says or clearly implies, in one or two sentences", "role": "cast"}}]}}
+List everyone who appears or speaks in this part. "role" is "narrator" only for a voice that tells the story and is
+never seen. Every character is an adult (18 or older).
+
+{text}
 """
 
 PORTRAIT_PROMPT = ("A photorealistic portrait photograph of {name}: {description}. Head and shoulders, "
@@ -214,6 +237,7 @@ class StoryStore:
     CREATE TABLE IF NOT EXISTS story_chapters (
         id TEXT PRIMARY KEY, story_id TEXT NOT NULL, idx INTEGER NOT NULL, data TEXT NOT NULL, created_at REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS story_chapters_story ON story_chapters(story_id, idx);
+    CREATE TABLE IF NOT EXISTS story_sources (story_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at REAL NOT NULL);
     """
 
     def __init__(self, path: str):
@@ -242,7 +266,8 @@ class StoryStore:
 
     def delete_story(self, story_id: str) -> None:
         with self._lock:
-            for table, column in (("story_messages", "story_id"), ("story_chapters", "story_id"), ("stories", "id")):
+            for table, column in (("story_messages", "story_id"), ("story_chapters", "story_id"),
+                                  ("story_sources", "story_id"), ("stories", "id")):
                 self._db.execute(f"DELETE FROM {table} WHERE {column} = ?", (story_id,))
             self._db.commit()
 
@@ -283,6 +308,23 @@ class StoryStore:
             self._db.execute("DELETE FROM story_chapters WHERE id = ?", (chapter_id,))
             self._db.commit()
 
+    def save_source(self, story_id: str, source: dict) -> None:
+        """The author's text, apart from the story row: the story is rewritten on every change and listed whole."""
+        with self._lock:
+            self._db.execute("INSERT OR REPLACE INTO story_sources VALUES (?, ?, ?)",
+                             (story_id, json.dumps(source, ensure_ascii=False), time.time()))
+            self._db.commit()
+
+    def get_source(self, story_id: str) -> dict | None:
+        with self._lock:
+            row = self._db.execute("SELECT data FROM story_sources WHERE story_id = ?", (story_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def delete_source(self, story_id: str) -> None:
+        with self._lock:
+            self._db.execute("DELETE FROM story_sources WHERE story_id = ?", (story_id,))
+            self._db.commit()
+
     def active_chapters(self) -> list[dict]:
         with self._lock:
             rows = self._db.execute("SELECT data FROM story_chapters").fetchall()
@@ -301,11 +343,13 @@ class StoryManager:
         self._busy: dict[str, dict] = {}  # story id -> {"what": "chat" | "draft", "since"}: one co-writer call at a time
         self._jobs: dict[str, asyncio.Task] = {}  # background chat / draft calls, by story
         self._autopilots: dict[str, asyncio.Task] = {}
+        self._reads: dict[str, asyncio.Task] = {}  # reading an imported text, by story
         self.poll = POLL
         self.boards = None  # the StoryboardManager; create_app sets it, so a chapter can have a storyboard
 
     async def stop(self) -> None:
-        tasks = list(self._tasks.values()) + list(self._jobs.values()) + list(self._autopilots.values())
+        tasks = (list(self._tasks.values()) + list(self._jobs.values()) + list(self._autopilots.values())
+                 + list(self._reads.values()))
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -408,6 +452,7 @@ class StoryManager:
             shown = self._image_view(film.get("asset_id"))  # any asset: the view only needs its urls
             film.update(file_url=(shown or {}).get("file_url"))
         return dict(story, characters=characters, chapters=chapters, film=film, busy=self._busy.get(story_id),
+                    source=self._source_view(story_id, chapters),
                     settings={**SETTINGS_DEFAULTS, **(story.get("settings") or {})}, model_choices=list(MODEL_CHOICES))
 
     # ----------------------------------------------------------------- cast
@@ -610,8 +655,10 @@ class StoryManager:
     def start_draft(self, story_id: str) -> dict:
         """Draft the next chapter in the background (it can take minutes); the chapter appears when it is done."""
         self._story(story_id)
-        if not self._since_last_chapter(story_id):
-            raise RequestError("Chat a few ideas first: the chapter is drafted from the conversation since the last one.")
+        if not self._since_last_chapter(story_id) and not self._next_source_parts(story_id):
+            raise RequestError("Chat a few ideas first: the chapter is drafted from the conversation since the last one."
+                               if not self.store.get_source(story_id) else
+                               "Every part of your text is already a chapter. Chat an idea to draft one more.")
         self._claim(story_id, "draft")
         self._background(story_id, "draft", self.draft_chapter(story_id, claimed=True))
         return {"drafting": True}
@@ -631,30 +678,46 @@ class StoryManager:
         self._story(story_id)
         return self.store.messages(story_id)
 
-    async def draft_chapter(self, story_id: str, *, claimed: bool = False, plan: str = "") -> dict:
+    async def draft_chapter(self, story_id: str, *, claimed: bool = False, plan: str = "",
+                            parts: list[int] | None = None) -> dict:
         """The next chapter's scenes, drafted from the conversation since the last chapter -- or, for the autopilot,
-        from that chapter's outline (``plan``). Saved as a draft."""
+        from that chapter's outline (``plan``) -- or from parts of the author's own text (``parts``; with no chat
+        since the last chapter, the next parts not yet made into a chapter). Saved as a draft."""
         if not claimed:
             self._claim(story_id, "draft")
         try:
-            return await self._draft(story_id, plan)
+            return await self._draft(story_id, plan, parts)
         finally:
             if not claimed:
                 self._busy.pop(story_id, None)
 
-    async def _draft(self, story_id: str, plan: str = "") -> dict:
+    async def _draft(self, story_id: str, plan: str = "", parts: list[int] | None = None) -> dict:
         story = self._story(story_id)
         conversation = self._since_last_chapter(story_id)
-        if not conversation and not plan:
+        if parts is None and not plan:
+            # With the author's text imported, the next part is the chapter and the chat since the last one steers
+            # it; only once every part is a chapter does the chat alone make one.
+            parts = self._next_source_parts(story_id)
+        if not conversation and not plan and not parts:
             raise RequestError("Chat a few ideas first: the chapter is drafted from the conversation since the last one.")
         self._renumber(story_id)
         number = self._next_idx(story_id)
-        source = (f"PLAN FOR THIS CHAPTER: {plan}" if plan else
-                  "\n".join(f"{m['role'].upper()}: {m.get('text') or ''}" for m in conversation))
+        if parts:
+            source_text = self._source_text(story_id, parts)
+            # The chat since the last chapter still counts: it is how the user steers the adaptation.
+            notes = "\n".join(f"{m['role'].upper()}: {m.get('text') or ''}" for m in conversation)
+            material = source_text + (f"\n\nTHE USER'S NOTES FOR THIS CHAPTER (follow them):\n{notes}" if notes else "")
+            fields = dict(material="author's text", how=SOURCE_HOW, source_label="The author's text for this chapter",
+                          max_scenes=min(MAX_SCENES, 20), conversation=material[:60000])
+        else:
+            source = (f"PLAN FOR THIS CHAPTER: {plan}" if plan else
+                      "\n".join(f"{m['role'].upper()}: {m.get('text') or ''}" for m in conversation))
+            fields = dict(material="conversation", how=CONVERSATION_HOW, source_label="Conversation for this chapter",
+                          max_scenes=min(MAX_SCENES, 12), conversation=source[:40000])
         text = DRAFT_PROMPT.format(
-            number=number + 1, max_scenes=min(MAX_SCENES, 12), title=story["title"],
+            number=number + 1, title=story["title"],
             premise=story.get("premise") or "(open)", style=story.get("style") or "(not set)",
-            cast=self._cast_text(story), chapters=self._chapters_text(story_id), conversation=source[:40000])
+            cast=self._cast_text(story), chapters=self._chapters_text(story_id), **fields)
         reply, model = await self._ask(await self._models(story, vision=False), [{"role": "user", "content": text}],
                                        json_mode=True, max_tokens=DRAFT_MAX_TOKENS, purpose="story chapter")
         data = parse_json(reply) or {}
@@ -668,11 +731,165 @@ class StoryManager:
                    "title": title or f"Chapter {number + 1}",
                    "summary": _clean(data.get("summary"), 1200), "scenes": scenes, "images": [], "status": "draft",
                    "drafted_by": model, "created_at": time.time(), "history": []}
+        if parts:
+            chapter["source_parts"] = list(parts)
         self.store.save_chapter(chapter)
         self.store.add_message(story_id, "event", {"text": f"Chapter {chapter['idx'] + 1} drafted: {chapter['title']}",
                                                    "chapter_id": chapter["id"]})
         self._learn_cast(story_id, scenes)
         return chapter
+
+    # ----------------------------------------------------------------- the author's own text
+
+    async def import_source(self, story_id: str, filename: str, data: bytes) -> dict:
+        """The author's novel (PDF or text) as the story's source: split into parts at its own chapter headings, then
+        read in the background for the cast and a summary. Each part becomes a chapter when drafted. A new upload
+        replaces the old text; chapters already drafted stay."""
+        story = self._story(story_id)
+        try:
+            text, pages = await asyncio.to_thread(story_source.extract_text, data, filename)
+        except story_source.SourceError as exc:
+            raise RequestError(str(exc)) from None
+        parts = story_source.split_parts(text)
+        if not parts:
+            raise RequestError(f"No text found in {filename}.")
+        task = self._reads.pop(story_id, None)
+        if task is not None:
+            task.cancel()
+        source = {"filename": os.path.basename(filename or "story")[:160], "pages": pages, "chars": len(text),
+                  "parts": parts, "status": "reading", "summaries": [], "error": "", "uploaded_at": time.time()}
+        self.store.save_source(story_id, source)
+        for chapter in self.store.chapters(story_id):  # parts are numbered afresh: old links would point at new text
+            if chapter.pop("source_parts", None) is not None:
+                self.store.save_chapter(chapter)
+        self.store.add_message(story_id, "event", {"text": f"Imported {source['filename']}: {pages or 'text'} "
+                                                           f"{'pages' if pages else ''}, {len(parts)} parts. Reading it "
+                                                           "for the cast and a summary."})
+        self._ensure_reading(story_id)
+        return self.view(story["id"])
+
+    def drop_source(self, story_id: str) -> dict:
+        self._story(story_id)
+        task = self._reads.pop(story_id, None)
+        if task is not None:
+            task.cancel()
+        self.store.delete_source(story_id)
+        for chapter in self.store.chapters(story_id):
+            if chapter.pop("source_parts", None) is not None:
+                self.store.save_chapter(chapter)
+        return self.view(story_id)
+
+    def _ensure_reading(self, story_id: str) -> None:
+        source = self.store.get_source(story_id)
+        if source and source.get("status") == "reading" and story_id not in self._reads:
+            self._reads[story_id] = asyncio.create_task(self._read_source(story_id))
+
+    async def _read_source(self, story_id: str) -> None:
+        """Read the text in chunks: what happens (the premise, when the user wrote none) and who is in it (the cast,
+        with descriptions to draw them from). The user's own descriptions and roles always win."""
+        try:
+            source = self.store.get_source(story_id) or {}
+            parts = source.get("parts") or []
+            chunks, current = [], ""
+            for part in parts:
+                block = (f"[{part['title']}]\n" if part.get("title") else "") + part["text"]
+                if current and len(current) + len(block) > READ_CHUNK_CHARS:
+                    chunks.append(current)
+                    current = ""
+                current += ("\n\n" if current else "") + block
+            if current:
+                chunks.append(current)
+            story = self._story(story_id)
+            models = await self._models(story, vision=False)
+            summaries, people, failed = [], [], 0
+            for n, chunk in enumerate(chunks, 1):
+                data = None
+                for _ in range(READ_ATTEMPTS):
+                    try:
+                        reply, _model = await self._ask(models, [{"role": "user", "content": READ_PROMPT.format(
+                            n=n, total=len(chunks), text=chunk[:READ_CHUNK_CHARS + 4000])}], json_mode=True,
+                            max_tokens=4000, purpose="story reading")
+                    except Unavailable:
+                        continue
+                    data = parse_json(reply)
+                    if isinstance(data, dict):
+                        break
+                if not isinstance(data, dict):
+                    failed += 1
+                    continue
+                if _clean(data.get("summary")):
+                    summaries.append(_clean(data.get("summary"), 1500))
+                people += [p for p in data.get("characters") or [] if isinstance(p, dict)]
+            self._merge_people(story_id, people)
+            story = self._story(story_id)
+            if summaries and not (story.get("premise") or "").strip():
+                story["premise"] = _clean(" ".join(summaries))
+                self.store.save_story(story)
+            source = self.store.get_source(story_id) or source
+            source.update(status="ready", summaries=summaries,
+                          error=f"{failed} of {len(chunks)} parts could not be read by the co-writer." if failed else "")
+            self.store.save_source(story_id, source)
+            cast = len([p for p in people if isinstance(p, dict)])
+            self.store.add_message(story_id, "event", {"text": f"Read {source['filename']}: {len(parts)} parts, "
+                                                               f"{cast} character mentions. Draft chapter makes the next "
+                                                               "part into a chapter."})
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.warning("story %s reading failed: %s", story_id, exc)
+            source = self.store.get_source(story_id)
+            if source:
+                source.update(status="failed", error=str(exc)[:400])
+                self.store.save_source(story_id, source)
+        finally:
+            self._reads.pop(story_id, None)
+
+    def _merge_people(self, story_id: str, people: list) -> None:
+        """New characters join the cast; one already there keeps the user's description and role (an empty
+        description is filled in)."""
+        story = self._story(story_id)
+        known = {c["name"].casefold(): c for c in story.get("characters") or []}
+        for person in people:
+            if not isinstance(person, dict) or not _clean(person.get("name"), 80):
+                continue
+            name, role = _clean(person["name"], 80), person.get("role") if person.get("role") in ROLES else "cast"
+            description = _clean(person.get("description"))
+            if name.casefold() in known:
+                member = known[name.casefold()]
+                if not member.get("description") and description:
+                    member["description"] = description
+                continue
+            known[name.casefold()] = {"name": name, "description": description, "role": role, "image_asset_ids": []}
+            story.setdefault("characters", []).append(known[name.casefold()])
+        self.store.save_story(story)
+
+    def _source_text(self, story_id: str, parts: list[int]) -> str:
+        source = self.store.get_source(story_id) or {}
+        texts = source.get("parts") or []
+        return "\n\n".join((f"[{texts[i]['title']}]\n" if texts[i].get("title") else "") + texts[i]["text"]
+                            for i in parts if 0 <= i < len(texts))
+
+    def _used_parts(self, story_id: str) -> set[int]:
+        return {i for c in self.store.chapters(story_id) for i in c.get("source_parts") or []}
+
+    def _next_source_parts(self, story_id: str) -> list[int]:
+        """The first part of the text not yet made into a chapter, or [] (no text, or all of it used)."""
+        source = self.store.get_source(story_id)
+        if not source:
+            return []
+        used = self._used_parts(story_id)
+        return next(([i] for i in range(len(source.get("parts") or [])) if i not in used), [])
+
+    def _source_view(self, story_id: str, chapters: list[dict]) -> dict | None:
+        source = self.store.get_source(story_id)
+        if not source:
+            return None
+        if source.get("status") == "reading":
+            self._ensure_reading(story_id)  # a restart stopped the reading: carry on
+        made = {i: c["idx"] for c in chapters for i in c.get("source_parts") or []}
+        return {k: source.get(k) for k in ("filename", "pages", "chars", "status", "error", "uploaded_at")} | {
+            "parts": [{"title": p.get("title") or f"Part {n + 1}", "chars": len(p["text"]), "chapter": made.get(n)}
+                      for n, p in enumerate(source.get("parts") or [])]}
 
     def _learn_cast(self, story_id: str, scenes: list[dict]) -> None:
         """New names in a draft join the cast as extras, so the user can describe them and give them a face."""
@@ -896,8 +1113,9 @@ class StoryManager:
         chapter draft its scenes and (with videos) make its video, appended to the main film. Saved as it goes, so a
         restart carries on; stop_autopilot halts it."""
         story = self._story(story_id)
-        if not (story.get("premise") or "").strip():
-            raise RequestError("Write the story's premise first: the autopilot plans the chapters from it.")
+        if not (story.get("premise") or "").strip() and not self.store.get_source(story_id):
+            raise RequestError("Write the story's premise first (or import your text): the autopilot plans the chapters "
+                               "from it.")
         if story_id in self._autopilots or (story.get("autopilot") or {}).get("status") == "running":
             raise RequestError("The autopilot is already running for this story.")
         story["autopilot"] = {"status": "running", "stage": "outlining", "count": max(1, min(int(chapters or 1), 30)),
@@ -932,8 +1150,11 @@ class StoryManager:
             pilot = self._story(story_id)["autopilot"]
             # 1. the outline and the cast (kept, so a resume does not plan again)
             if not pilot.get("outline"):
-                self._pilot(story_id, stage="outlining")
-                pilot = self._pilot(story_id, outline=await self._outline(story_id, pilot["count"]))
+                if self.store.get_source(story_id):
+                    pilot = self._pilot(story_id, outline=await self._source_outline(story_id, pilot["count"]))
+                else:
+                    self._pilot(story_id, stage="outlining")
+                    pilot = self._pilot(story_id, outline=await self._outline(story_id, pilot["count"]))
             # 2. the cast's pictures
             if pilot.get("portraits") and not pilot.get("portraits_done"):
                 self._pilot(story_id, stage="character pictures")
@@ -947,7 +1168,8 @@ class StoryManager:
                     self._pilot(story_id, stage=f"drafting chapter {n + 1} of {len(pilot['outline'])}")
                     while self._busy.get(story_id):  # a chat or draft the user started: let it finish first
                         await asyncio.sleep(self.poll)
-                    chapter = await self.draft_chapter(story_id, plan=f"{item['title']}: {item['beats']}")
+                    chapter = await self.draft_chapter(story_id, plan=f"{item['title']}: {item['beats']}",
+                                                       parts=item.get("parts"))
                     item["chapter_id"] = chapter["id"]
                     pilot = self._pilot(story_id, outline=pilot["outline"])
                 if pilot.get("videos"):
@@ -972,6 +1194,27 @@ class StoryManager:
                         errors=(pilot.get("errors") or []) + [f"{type(exc).__name__}: {exc}"[:400]])
         finally:
             self._autopilots.pop(story_id, None)
+
+    async def _source_outline(self, story_id: str, count: int) -> list[dict]:
+        """The outline of a story made from the author's text: the parts not yet made into chapters, grouped into at
+        most ``count`` chapters in order. Waits for the reading pass, so the cast is known before anyone is drawn."""
+        while (self.store.get_source(story_id) or {}).get("status") == "reading":
+            self._pilot(story_id, stage="reading your text")
+            self._ensure_reading(story_id)
+            await asyncio.sleep(self.poll)
+        source = self.store.get_source(story_id) or {}
+        used = self._used_parts(story_id)
+        texts = source.get("parts") or []
+        left = [i for i in range(len(texts)) if i not in used]
+        if not left:
+            raise RequestError("Every part of your text is already a chapter.")
+        groups = story_source.group_parts(left, [len(texts[i]["text"]) for i in left], count)
+        outline = []
+        for group in groups:
+            titles = [texts[i].get("title") or f"Part {i + 1}" for i in group]
+            outline.append({"title": titles[0] if len(titles) == 1 else f"{titles[0]} to {titles[-1]}",
+                            "beats": "", "parts": group})
+        return outline
 
     async def _outline(self, story_id: str, count: int) -> list[dict]:
         """count chapters of outline. A model that lists fewer is asked again for the rest (a few times), each time
@@ -1010,21 +1253,7 @@ class StoryManager:
             pilot = self._story(story_id).get("autopilot") or {}
             self._pilot(story_id, errors=(pilot.get("errors") or []) +
                         [f"The outline has {len(outline)} of {count} chapters: the co-writer would not plan more."])
-        data = {"characters": people}
-        story = self._story(story_id)
-        known = {c["name"]: c for c in story.get("characters") or []}
-        for person in data.get("characters") or []:
-            if not isinstance(person, dict) or not _clean(person.get("name"), 80):
-                continue
-            name, role = _clean(person["name"], 80), person.get("role") if person.get("role") in ROLES else "cast"
-            if name in known:  # the user's own description and role always win
-                if not known[name].get("description"):
-                    known[name]["description"] = _clean(person.get("description"))
-                continue
-            known[name] = {"name": name, "description": _clean(person.get("description")), "role": role,
-                           "image_asset_ids": []}
-            story.setdefault("characters", []).append(known[name])
-        self.store.save_story(story)
+        self._merge_people(story_id, people)  # the user's own description and role always win
         return outline
 
     async def _make_portraits(self, story_id: str) -> None:

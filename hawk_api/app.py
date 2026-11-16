@@ -22,6 +22,7 @@ from .agent import AgentService
 from .library import DriveBrowser, DriveExporter, ImportManager
 from .manhwa import ManhwaManager
 from .story import StoryManager
+from . import story_source
 from .characters import CharacterManager
 from .storyboard import StoryboardManager, compose_sheet, identity_pack, make_film, suggest_shots
 from .snapshot import DbSnapshotter
@@ -529,6 +530,19 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     async def story_delete(story_id: str):
         """The story, its chat and chapters. Its videos and main film stay in Media."""
         return await stories.delete_story(story_id)
+
+    @app.post("/v1/stories/{story_id}/source", tags=["story"])
+    async def story_source_import(story_id: str, file: UploadFile = File(..., description="Your novel: .pdf, .txt or .md.")):
+        """Your own story as the source: split at its chapter headings, then read in the background for the cast and
+        a summary (GET /v1/stories/{id} -> source.status). Draft chapter (or the autopilot) makes each part a
+        chapter, keeping its events and dialogue. A new upload replaces the old text."""
+        data = await file.read(story_source.MAX_BYTES + 1)
+        return await stories.import_source(story_id, file.filename or "story.pdf", data)
+
+    @app.delete("/v1/stories/{story_id}/source", tags=["story"])
+    async def story_source_drop(story_id: str):
+        """Forget the imported text. Chapters already drafted from it stay."""
+        return stories.drop_source(story_id)
 
     @app.post("/v1/stories/{story_id}/characters", tags=["story"], status_code=201)
     async def story_character_add(story_id: str, body: StoryCharacterIn):

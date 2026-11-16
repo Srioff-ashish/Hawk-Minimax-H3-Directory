@@ -1220,6 +1220,9 @@
               <label class="field"><span class="label">Title</span><input class="input" id="stTitle" maxlength="120"></label>
               <label class="field"><span class="label">Premise <span class="hint">what it is about</span></span><textarea class="textarea" id="stPremise" rows="2" style="min-height:56px" maxlength="2000"></textarea></label>
               <label class="field"><span class="label">Style and tone</span><input class="input" id="stStyle" maxlength="600" placeholder="e.g. slow-burn romance, warm film grain, rainy city nights"></label>
+              <div class="field"><span class="label">Your own story <span class="hint">a novel you wrote (.pdf, .txt, .md): each of its chapters becomes a film chapter, keeping its events and dialogue</span></span>
+                <div class="row"><label class="btn btn-sm" id="stSourceBtn">Import PDF<input type="file" accept=".pdf,.txt,.md,application/pdf,text/plain" id="stSourceFile" hidden></label><div id="stSource" class="hint" style="flex:1;min-width:0"></div><button class="btn btn-sm btn-ghost" type="button" id="stSourceDrop" hidden>Remove</button></div>
+                <div id="stSourceParts" class="grid" style="gap:4px"></div></div>
               <div class="row"><button class="btn btn-sm btn-danger" type="button" id="stDelete">Delete story</button><div class="spacer"></div><button class="btn btn-sm btn-primary" type="submit">Save</button></div>
             </form>
           </section>
@@ -2356,6 +2359,20 @@
     $("stDraft").textContent = busy && busy.what === "draft" ? "Drafting…" : "Draft chapter";
   }
 
+  //: The imported novel: its parts, and which chapter each one became.
+  function stSourcePaint(src) {
+    $("stSourceDrop").hidden = !src;
+    if (!src) { $("stSource").textContent = "No text imported."; $("stSourceParts").innerHTML = ""; return; }
+    const made = src.parts.filter((p) => p.chapter != null).length;
+    const state = src.status === "reading" ? "reading it for the cast and a summary…" : src.status === "failed" ? `could not be read: ${src.error}` : (src.error || "read");
+    $("stSource").textContent = `${src.filename} — ${src.pages ? `${src.pages} pages, ` : ""}${src.parts.length} parts, ${made} made into chapters · ${state}`;
+    $("stSourceParts").innerHTML = `<details><summary class="hint">Parts</summary>${src.parts.map((p, n) => `<div class="row" style="gap:8px;font-size:13px"><strong>${n + 1}.</strong><span style="flex:1;min-width:0;overflow-wrap:anywhere">${esc(p.title)}</span><span class="hint">${Math.round(p.chars / 1000)}k chars</span><span class="badge ${p.chapter != null ? "done" : "plain"}">${p.chapter != null ? `chapter ${p.chapter + 1}` : "not yet"}</span></div>`).join("")}</details>`;
+    const left = src.parts.length - made;
+    if (left && document.activeElement !== $("stApCount") && !story.apCountFor?.startsWith(story.id + ":" + src.uploaded_at)) {
+      $("stApCount").value = Math.min(30, left); story.apCountFor = story.id + ":" + src.uploaded_at;
+    }
+  }
+
   function stPilotPaint(pilot, chapters) {
     const running = pilot && pilot.status === "running";
     $("stApStart").hidden = !!running; $("stApStop").hidden = !running;
@@ -2388,13 +2405,14 @@
       $("stTitle").value = view.title; $("stPremise").value = view.premise || ""; $("stStyle").value = view.style || "";
     }
     stSettingsPaint(view.settings);
+    stSourcePaint(view.source);
     stFilmPaint(view.film);
     if (!document.activeElement?.closest("#stCast")) stCastPaint(view.characters);
     if (!document.activeElement?.closest("#stChapters")) stChaptersPaint(view.chapters);
     if (!keepThread) await stThreadLoad();
     stPilotPaint(view.autopilot, view.chapters);
     const pilot = view.autopilot && view.autopilot.status === "running";
-    const busy = view.chapters.some((c) => ST_ACTIVE.includes(c.status)) || pilot || !!view.busy;
+    const busy = view.chapters.some((c) => ST_ACTIVE.includes(c.status)) || pilot || !!view.busy || view.source?.status === "reading";
     $("storyBusy").hidden = !busy;
     stBusyPaint(view.busy);
     if (busy) story.timer = setTimeout(() => stShow(!view.busy && !pilot).catch(() => {}), view.busy ? 3000 : 5000);
@@ -2587,18 +2605,36 @@
   $("stDraft").onclick = stWrap(async () => {
     if (stNeedStory()) return;
     await post(stPath("/chapters/draft"), {});  // drafted in the background; the chapter appears when it is done
-    toast("Drafting the chapter", "It appears under Chapters when it is ready -- a minute or two.");
+    const fromText = story.view?.source && story.view.source.parts.some((p) => p.chapter == null);
+    toast("Drafting the chapter", fromText ? "From the next part of your text (your chat since the last chapter steers it). It appears under Chapters in a minute or two."
+      : "It appears under Chapters when it is ready -- a minute or two.");
     await stShow();
   }, "Could not draft the chapter");
+
+  // ---- the author's own text
+  $("stSourceFile").onchange = stWrap(async (e) => {
+    const file = e.target.files[0]; e.target.value = "";
+    if (!file || stNeedStory()) return;
+    if (story.view?.source && !await confirmAction("Replace the imported text?", `${story.view.source.filename} is replaced by ${file.name}. Chapters already drafted stay.`, "Replace")) return;
+    const form = new FormData(); form.append("file", file);
+    $("stSource").textContent = `Uploading ${file.name}…`;
+    await api(stPath("/source"), { method: "POST", body: form });
+    toast("Imported", `${file.name} is being read for the cast and a summary. Draft chapter makes its first part into chapter 1.`, "ok", 7000);
+    await stShow();
+  }, "Could not import");
+  $("stSourceDrop").onclick = stWrap(async () => {
+    if (!await confirmAction("Remove the imported text?", "Chapters already drafted from it stay.", "Remove")) return;
+    await api(stPath("/source"), { method: "DELETE" }); await stShow();
+  }, "Could not remove");
 
   // ---- autopilot
   $("stApStart").onclick = stWrap(async () => {
     if (stNeedStory()) return;
-    if (!$("stPremise").value.trim()) { toast("Write the premise first", "The autopilot plans the chapters from it.", "warn"); $("stPremise").focus(); return; }
+    if (!$("stPremise").value.trim() && !story.view?.source) { toast("Write the premise first", "The autopilot plans the chapters from it.", "warn"); $("stPremise").focus(); return; }
     await putJson(stPath(), { premise: $("stPremise").value, style: $("stStyle").value }, "PATCH");
     const count = Math.max(1, Math.min(30, Number($("stApCount").value) || 5));
     await post(stPath("/autopilot"), { chapters: count, portraits: $("stApPortraits").checked, videos: $("stApVideos").checked });
-    toast("Autopilot started", `Planning ${count} chapter${count === 1 ? "" : "s"} from the premise`);
+    toast("Autopilot started", story.view?.source ? `Making ${count} chapter${count === 1 ? "" : "s"} from your text` : `Planning ${count} chapter${count === 1 ? "" : "s"} from the premise`);
     await stShow();
   }, "Could not start the autopilot");
   $("stApStop").onclick = stWrap(async () => {
