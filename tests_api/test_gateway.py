@@ -589,6 +589,16 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader["inputs"]["unet_name"], eros)
         self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
+    async def test_a_render_says_what_size_it_is(self):
+        # A 2.2 MP render ran nine times slower per step than the usual 0.7 MP, and nothing in Studio said so.
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {
+            "aspect_ratio": "16:9", "megapixels": 2.2}})).json()
+        self.assertEqual({k: job["resolution"][k] for k in ("width", "height", "megapixels", "aspect_ratio")},
+                         {"width": 2016, "height": 1152, "megapixels": 2.2, "aspect_ratio": "16:9"})
+        default = (await self.http.get(f"/v1/jobs/{(await self.http.post('/v1/videos', json={'script': 'A'})).json()['id']}")).json()
+        self.assertEqual((default["resolution"]["width"], default["resolution"]["height"]), (1344, 768))
+        self.assertEqual(default["resolution"]["sampler"], "res_multistep")
+
     async def test_eros_beta6_is_offered_and_renders_at_its_own_shift(self):
         # 10Eros-Max beta6: no "ref2va" and no "hybrid" in its name; turbo built in, tuned for shift 10.
         beta6 = "10Eros_Max_h3_8stepTURBO_beta6_int8.safetensors"

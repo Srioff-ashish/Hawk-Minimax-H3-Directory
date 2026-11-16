@@ -4298,6 +4298,8 @@
     if (job.kind === "render") {
       if (job.unet_name) chips.push(`<span class="chip" title="${esc(job.unet_name)}">${esc(shortName(job.unet_name).replace(/^minimax_h3_/, ""))}</span>`);
       if (job.steps) chips.push(`<span class="chip">${job.steps} steps</span>`);
+      const res = job.resolution;
+      if (res) chips.push(`<span class="chip${res.megapixels > 1.2 ? " warn" : ""}" title="${esc(`${res.megapixels} MP, ${res.aspect_ratio}${res.megapixels > 1.2 ? " — renders well above 1 MP take several times longer per step" : ""}`)}">${res.width ? `${res.width}×${res.height}` : `${res.megapixels} MP`}</span>`);
       const loras = (job.status === "done" ? job.loras_applied : job.loras) || [];
       if (loras.length > 1 || (loras.length === 1 && !/turbo/i.test(loras[0].file))) chips.push(`<span class="chip" title="${esc(loras.map((l) => `${l.file} @ ${l.strength}`).join("\n"))}">${loras.length} LoRAs</span>`);
       if (job.music_asset_id) chips.push(`<span class="chip">♪ music bed</span>`);
@@ -4572,6 +4574,12 @@
     if (job.kind === "render") {
       if (job.unet_name) kv.push(["Base model", esc(job.unet_name)], ["Text encoder", esc(job.clip_name)]);
       if (job.steps) kv.push(["Steps", `${job.steps}${job.steps_reason ? ` <span class="hint">— ${esc(job.steps_reason)}</span>` : ""}`]);
+      const res = job.resolution;
+      if (res) {
+        kv.push(["Resolution", `${res.width ? `${res.width}×${res.height}, ` : ""}${res.megapixels} MP <span class="hint">(${esc(res.aspect_ratio)})${res.megapixels > 1.2 ? " — well above 1 MP, so each step takes several times longer" : ""}</span>`]);
+        kv.push(["Frame rate", `24 fps${res.interpolation && res.interpolation !== "off" ? `, then ${esc(res.interpolation)}` : ""}`]);
+        if (res.sampler) kv.push(["Sampler", `${esc(res.sampler)} / ${esc(res.scheduler || "")}`]);
+      }
       if (job.seed != null) kv.push(["Seed", `<span class="mono">${job.seed}</span>`]);
       const loras = (job.status === "done" ? job.loras_applied : job.loras) || [];
       if (loras.length) kv.push([job.status === "done" ? "LoRAs applied" : "LoRAs", loras.map((l) => `${esc(shortName(l.file))} <span class="hint">@ ${l.strength}</span>`).join("<br>")]);

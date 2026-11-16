@@ -205,6 +205,33 @@ def _hash_file(fileobj) -> str | None:
         return None
 
 
+def render_size(aspect: str, megapixels: float) -> tuple[int, int] | None:
+    """Width and height the Director renders at: the same sum as hawk_h3.media.resolve_resolution (which needs
+    torch, so it is not imported here). None for "match first picture", whose shape only ComfyUI sees."""
+    left, _, right = str(aspect or "").partition(":")
+    try:
+        ratio = float(left) / float(right)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    area = float(megapixels) * 1024 * 1024
+    width = (area * ratio) ** 0.5
+    snap = lambda value: max(32, int(round(value / 32)) * 32)  # noqa: E731
+    return snap(width), snap(width / ratio)
+
+
+def job_resolution(job: dict) -> dict | None:
+    """What a render was asked to be: size, megapixels, aspect, sampler -- shown on the video's card and details."""
+    settings = (job.get("request") or {}).get("settings")
+    if not isinstance(settings, dict):
+        return None
+    aspect, megapixels = settings.get("aspect_ratio") or "16:9", float(settings.get("megapixels") or 0.98)
+    size = render_size(aspect, megapixels)
+    view = {"aspect_ratio": aspect, "megapixels": megapixels, "width": size[0] if size else None,
+            "height": size[1] if size else None, "sampler": settings.get("sampler_name"),
+            "scheduler": settings.get("scheduler"), "interpolation": settings.get("interpolation") or "off"}
+    return view
+
+
 def job_title(job: dict) -> str:
     """A short human title: the plan's title, the first segment title(s), or the first prompt line."""
     script = job.get("script") or ""
@@ -2987,6 +3014,7 @@ class HawkService:
                 unet_name=(job.get("models") or {}).get("unet_name"),
                 clip_name=(job.get("models") or {}).get("clip_name"),
                 music_asset_id=((job.get("request") or {}).get("settings") or {}).get("music_asset_id"),
+                resolution=job_resolution(job),
                 final_prompts=job.get("final_prompts"),
                 video_url=None,
                 segment_urls=[],
