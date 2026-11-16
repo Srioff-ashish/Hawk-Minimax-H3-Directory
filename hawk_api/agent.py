@@ -3311,6 +3311,9 @@ class AgentService:
         cast = [dict(member) for member in cast_of(session)]
         speaker = str(args.get("speaker") or "").strip()
         name = str(args.get("name") or "").strip()
+        if tool == "set_persona" and not name and not str(args.get("persona") or "").strip():
+            raise RequestError("set_persona needs the persona text (and speaker for who it is, or name to add someone); "
+                               "nothing was changed.")
         if not speaker and name and tool != "remove_character" and find_member(cast, name) is not None:
             speaker = name  # a character named without speaker: edit that one, not the lead
         elif not speaker and name and tool != "remove_character" and display_name(cast[0], 0, 1):
@@ -3349,7 +3352,11 @@ class AgentService:
             if args.get("name") is not None:
                 member["name"] = str(args["name"])
             if tool == "set_persona":
-                member["persona"] = str(args.get("persona") or "")
+                # A rename alone keeps who they are. An empty persona was written over the old one: a live chat's
+                # director called set_persona with no arguments at all, twice, and its lead's persona was gone.
+                text = str(args.get("persona") or "").strip()
+                if text:
+                    member["persona"] = text
             elif tool == "set_references":
                 ids = args.get("asset_ids") or []
                 member["refs"] = [str(a) for a in (ids if isinstance(ids, list) else [ids])]

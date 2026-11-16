@@ -181,6 +181,25 @@ class InTheChat(AgentHarness):
         self.assertEqual(cast["Tina"]["avatar_asset_id"], "")
         self.assertEqual(cast["Sush"]["avatar_asset_id"], "", "the deleted picture is dropped, not kept")
 
+    async def test_an_empty_set_persona_changes_nothing(self):
+        calls = iter([[{"tool": "set_persona", "args": {}}],
+                      [{"tool": "set_persona", "args": {"speaker": "Rebel", "name": "Rebecca"}}]])
+
+        def reply(body):
+            actions = next(calls, [])
+            return json.dumps({"say": "Ok.", "actions": actions, "done": not actions})
+
+        self.atlas.reply = reply
+        chat = await self.new_chat(cast=[{"name": "Rebel", "persona": "Rebel runs the house."},
+                                         {"name": "Sakshi", "persona": "S."}])
+        await self.http.post(f"/v1/agent/sessions/{chat}/messages", json={"text": "update the persona"})
+        view = await self.settle(chat)
+        errors = [m["content"].get("error") for m in view["messages"] if m["role"] == "tool"]
+        self.assertIn("nothing was changed", errors[0])
+        lead = view["session"]["cast"][0]
+        self.assertEqual((lead["display_name"], lead["persona"]), ("Rebecca", "Rebel runs the house."),
+                         "a rename alone keeps the persona")
+
     async def test_renaming_takes_the_current_name(self):
         def reply(body):
             if not any(m["role"] == "assistant" for m in body["messages"]):
