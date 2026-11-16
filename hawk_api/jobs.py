@@ -50,6 +50,7 @@ from .loras import (
     ResolvedLora,
     choose_steps,
     compare_applied,
+    base_sampler,
     base_shift,
     drop_baked_turbo,
     default_status,
@@ -167,7 +168,10 @@ PLANNER_MAX_TOKENS = 15_000
 #: later blocks' adaln_proj) grafted back in, so it reads references like ref2va does -- 10Eros-Max beta5 is
 #: one, and is named "..._h3_TURBO-hybrid_beta5..." with no "ref2va" in it at all. 10Eros-Max beta6 drops "hybrid"
 #: from the name as well ("..._h3_8stepTURBO_beta6..."): it is a mostly-reference hybrid with a turbo built in.
-MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid"), ("h3", "turbo")), "Base model"),
+#: OliviaRossi's merges of Singularity with 10Eros-Max carry neither: "PRISM_DMAD_PDMD_int8",
+#: "10Eros_Max_SingularityV2_PRISM2_PikaFlex_0.85_int8HQ". Both are H3 ref2va merges, so they count too.
+MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid"), ("h3", "turbo"), ("prism",),
+                                       ("10eros", "singularity")), "Base model"),
                   "text_encoders": ((("qwen3vl", "minimax"),), "Text encoder")}
 
 
@@ -2538,6 +2542,16 @@ class HawkService:
             models = dataclasses.replace(models, shift_video=shift)
             warnings.append(shift_note)
         steps, steps_reason = choose_steps(loras, settings.steps, models.unet_name)
+        sampler_name, scheduler = settings.sampler_name, settings.scheduler
+        tuned = base_sampler(models.unet_name)
+        asked = settings.model_fields_set & {"sampler_name", "scheduler"}
+        if tuned and not asked and (sampler_name, scheduler) != tuned:
+            # The model's own sampler unless the request named one: the defaults suit the stock bases.
+            sampler_name, scheduler = tuned
+            # Saved with the job, so a retry or a resumed render samples the rest the same way.
+            settings.sampler_name, settings.scheduler = sampler_name, scheduler
+            warnings.append(f"Sampler {sampler_name} / {scheduler} schedule: what "
+                            f"{os.path.basename(models.unet_name)} is tuned for.")
         seed = settings.seed if settings.seed is not None else random.randrange(1, 2**48)
         job_id = str(uuid.uuid4())
         music_path = None
@@ -2557,8 +2571,8 @@ class HawkService:
             aspect_ratio=settings.aspect_ratio,
             megapixels=settings.megapixels,
             default_seconds=settings.default_seconds,
-            sampler_name=settings.sampler_name,
-            scheduler=settings.scheduler,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
             continuity=settings.continuity,
             carry_audio=settings.carry_audio,
             ref_image_size=settings.ref_image_size,

@@ -251,8 +251,12 @@ def default_status(config: LoraConfig, available: list[str]) -> list[dict]:
 
 
 def turbo_base(unet_name: str) -> bool:
-    """A base model with a turbo distill baked in, such as 10Eros-Max's TURBO-hybrid builds."""
-    return "turbo" in _stem(unet_name or "")
+    """A base model with a turbo distill baked in, such as 10Eros-Max's TURBO-hybrid builds -- and merges of one
+    whose names drop the word: OliviaRossi's PRISM merges and the 10Eros-Max x Singularity mixes are 10Eros-Max's
+    8-step turbo crossed with Singularity, and their author runs them at 8 steps with no turbo LoRA. Plain
+    Singularity (a ref2va finetune) is not a turbo base and still takes the LoRA."""
+    stem = _stem(unet_name or "")
+    return "turbo" in stem or "prism" in stem or ("10eros" in stem and "singularity" in stem)
 
 
 #: Video shift a base model was tuned for, when it is not the H3 default. Matched on the file name's stem.
@@ -267,6 +271,22 @@ def base_shift(unet_name: str, current: float) -> tuple[float, str]:
         if stem.startswith(prefix) and shift != current:
             return shift, f"Video shift {shift:g} (not {current:g}): the value {os.path.basename(unet_name)} is tuned for."
     return current, ""
+
+
+#: Sampler and schedule a base model was tuned for, when they are not the render defaults (res_multistep /
+#: simple). Matched on words in the file name's stem. The PRISM merges' author samples them with Euler and the
+#: Beta57 schedule; Beta57 comes from a custom-node pack the pod does not install, and ComfyUI's own "beta" is
+#: the nearest built-in schedule.
+BASE_SAMPLERS = ((("prism",), "euler", "beta"), (("10eros", "singularity"), "euler", "beta"))
+
+
+def base_sampler(unet_name: str) -> tuple[str, str] | None:
+    """(sampler, scheduler) this base model was tuned for, or None to keep the render's."""
+    stem = _stem(unet_name or "")
+    for words, sampler, scheduler in BASE_SAMPLERS:
+        if all(word in stem for word in words):
+            return sampler, scheduler
+    return None
 
 
 def drop_baked_turbo(resolved: list[ResolvedLora], unet_name: str) -> tuple[list[ResolvedLora], list[str]]:

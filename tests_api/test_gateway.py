@@ -610,6 +610,33 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader["inputs"]["shift_video"], 12.0, "every other base keeps the default shift")
         self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
+    async def test_a_prism_merge_is_offered_and_renders_with_its_own_sampler(self):
+        # OliviaRossi's Singularity x 10Eros-Max merges: no "h3", "ref2va", "hybrid" or "turbo" in the name, 10Eros-Max's
+        # 8-step turbo inside, and sampled with Euler / Beta57 (ComfyUI's own "beta" here).
+        pika = "10Eros_Max_SingularityV2_PRISM2_PikaFlex_0.85_int8HQ.safetensors"
+        dmad = "PRISM_DMAD_PDMD_int8.safetensors"
+        self.fake.model_files["diffusion_models"] += [pika, dmad]
+        options = (await self.http.get("/v1/options")).json()
+        self.assertIn(pika, options["diffusion_models"])
+        self.assertIn(dmad, options["diffusion_models"])
+
+        def sampling(job_id):
+            node = next(n for n in self.fake.prompts[job_id].values() if "sampler_name" in n["inputs"])
+            return node["inputs"]["sampler_name"], node["inputs"]["scheduler"]
+
+        job = (await self.http.post("/v1/videos", json={"script": "A", "settings": {"unet_name": "PRISM2_PikaFlex"}})).json()
+        self.assertEqual((job["unet_name"], job["steps"]), (pika, 8), job)
+        self.assertNotIn(TURBO, [l["file"] for l in job["loras"]], "the turbo LoRA must not be stacked on a turbo merge")
+        self.assertEqual(sampling(job["id"]), ("euler", "beta"))
+        self.assertTrue(any("tuned for" in w for w in job.get("warnings") or []), job.get("warnings"))
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
+
+        asked = (await self.http.post("/v1/videos", json={"script": "A", "settings": {
+            "unet_name": dmad, "sampler_name": "res_multistep", "scheduler": "simple"}})).json()
+        self.assertEqual(sampling(asked["id"]), ("res_multistep", "simple"), "a sampler the request names still wins")
+        other = (await self.http.post("/v1/videos", json={"script": "A"})).json()
+        self.assertEqual(sampling(other["id"]), ("res_multistep", "simple"), "every other base keeps the default")
+
     async def test_a_default_encoder_moved_into_a_subfolder_loads_by_its_subfolder_path(self):
         # The configured default is a bare name; sorted into text_encoders/h3/ ComfyUI calls it "h3/...".
         default = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"

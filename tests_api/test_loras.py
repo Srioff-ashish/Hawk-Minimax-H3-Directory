@@ -135,6 +135,15 @@ class Steps(unittest.TestCase):
         self.assertEqual(loras.base_shift(eros, 12.0), (12.0, ""), "beta5 keeps the default shift")
         self.assertFalse(loras.turbo_base("10Eros_Max_h3_hybrid_beta5_int8.safetensors"),
                          "the non-turbo hybrid wants full steps and the turbo LoRA")
+        for merge in ("PRISM_DMAD_PDMD_int8.safetensors", "10Eros_Max_SingularityV2_PRISM2_PikaFlex_0.85_int8HQ.safetensors",
+                      "10Eros_Max_SingularityV2_PikaFlex_1.00_int8HQ.safetensors"):
+            with self.subTest(merge=merge):
+                self.assertTrue(loras.turbo_base(merge), "10Eros-Max's turbo is inside the merge")
+                self.assertEqual(loras.base_sampler(merge), ("euler", "beta"))
+        singularity = "Minimax-h3_Singularity_ref2va_Pruned_v1.3_int8.safetensors"
+        self.assertFalse(loras.turbo_base(singularity), "plain Singularity is not turbo: it keeps the turbo LoRA")
+        self.assertIsNone(loras.base_sampler(singularity))
+        self.assertIsNone(loras.base_sampler(beta6), "the 10Eros bases keep the render's sampler")
 
 
 class Applied(unittest.TestCase):
