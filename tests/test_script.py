@@ -325,6 +325,22 @@ class PlannerTolerance(unittest.TestCase):
         self.assertEqual(parse_script(text).segments[0].pictures, [1])
         self.assertEqual(json.loads(text)["references_to_make"], [{"kind": "picture", "prompt": "a room"}])
 
+    def test_a_still_it_only_asked_for_is_described_instead_of_failing_the_plan(self):
+        # DeepSeek with two pictures attached: "asks for picture [3, 4] but only 2 picture(s) are connected".
+        plan = json.dumps({"segments": [
+            {"title": "She Arrives", "pictures": [1, 3, 4],
+             "prompt": "<Picture 1> walks into <Picture 3>, in the coat from <Picture 4>."},
+            {"pictures": [1, 2, 5], "prompt": "<Picture 1> and <Picture 2> laugh."}],
+            "references_to_make": [{"number": 3, "kind": "picture", "label": "Cafe interior, evening"},
+                                   {"number": 4, "kind": "picture", "label": "Red wool coat"}]})
+        text, fixes = repair_planned_script(plan, {"Picture": 2})
+        script = parse_script(text)
+        self.assertEqual([s.pictures for s in script.segments], [[1], [1, 2]])
+        self.assertEqual(script.segments[0].prompt, "<Picture 1> walks into Cafe interior, evening, in the coat from Red wool coat.")
+        self.assertEqual(len(fixes), 2)
+        self.assertEqual(len(json.loads(text)["references_to_make"]), 2, "the shopping list is kept")
+        build_jobs(script, available={"Picture": 2}, video_has_audio=[], default_seconds=5, continuity="tail_22", base_seed=0)
+
     def test_warnings_round_trip_and_counts_line(self):
         script = parse_script('{"segments": [{"prompt": "x"}]}')
         text = script.to_json(warnings=["fixed something"])

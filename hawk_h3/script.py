@@ -490,10 +490,70 @@ def add_mentioned_references(script: Script, available: dict[str, int]) -> tuple
     return Script(segments, script.style), warnings
 
 
+def _without_unmade_references(text: str, available: dict[str, int]) -> tuple[str, list[str]]:
+    """Take the stills the planner only asked for (references_to_make) back out of its segments.
+
+    It is told never to write their numbers into a segment, yet it does: <Picture 3> in the prompt and [3, 4] in
+    `pictures` with two connected. The text mentions them, so drop_unavailable_references rightly kept them, and
+    the plan failed -- with Studio's plan-and-render, before any job existed. A still that doesn't exist can't be
+    sent, so its tag becomes the words it was asked for with (its label) and the number leaves the list."""
+    data = _load_json(text.strip())
+    if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
+        return text, []
+    unmade: dict[tuple[str, int], str] = {}
+    for item in data.get("references_to_make") or []:
+        if not isinstance(item, dict):
+            continue
+        kind = _KIND.get(str(item.get("kind") or "picture").lower())
+        try:
+            number = int(item.get("number"))
+        except (TypeError, ValueError):
+            continue
+        if kind and number > available.get(kind, 0):
+            unmade[(kind, number)] = str(item.get("label") or item.get("prompt") or "").strip()[:120]
+    # A number past the connected ones that it listed in a segment without asking for it is the same slip.
+    for segment in data["segments"]:
+        for name, kind in _LIST_FIELDS:
+            for n in (segment.get(name) or []) if isinstance(segment, dict) else []:
+                if isinstance(n, int) and n > available.get(kind, 0):
+                    unmade.setdefault((kind, n), "")
+    if not unmade:
+        return text, []
+
+    def words(match: re.Match) -> str:
+        word, number = [g for g in match.groups() if g is not None]
+        key = (_KIND[word.lower()], int(number))
+        if key not in unmade:
+            return match.group(0)
+        return unmade[key] or ("the place" if key[0] == "Picture" else "the movement")
+
+    fixes: list[str] = []
+    if isinstance(data.get("style"), str):
+        data["style"] = _TAG.sub(words, data["style"])
+    for index, segment in enumerate(data["segments"]):
+        if not isinstance(segment, dict):
+            continue
+        where = f"Segment {index + 1}" + (f" ({segment.get('title')})" if segment.get("title") else "")
+        for field in ("prompt", "text", "description"):
+            if isinstance(segment.get(field), str):
+                segment[field] = _TAG.sub(words, segment[field])
+        for name, kind in _LIST_FIELDS:
+            chosen = segment.get(name)
+            if not isinstance(chosen, list):
+                continue
+            gone = [n for n in chosen if isinstance(n, int) and (kind, n) in unmade]
+            if gone:
+                segment[name] = [n for n in chosen if n not in gone]
+                fixes.append(f"{where}: {kind.lower()} {gone} only exists as a still to make; described in words instead.")
+    return (json.dumps(data, ensure_ascii=False) if fixes else text), fixes
+
+
 def repair_planned_script(text: str, available: dict[str, int]) -> tuple[str, list[str]]:
     """A planner's reply with its reference lists made to agree with its text and the connected references. The
     reply comes back untouched when nothing needed fixing; otherwise as JSON, keeping its shopping list of stills."""
+    text, unmade = _without_unmade_references(text, available)
     script, fixes = drop_unavailable_references(parse_script(text), available)
+    fixes = unmade + fixes
     script, added = add_mentioned_references(script, available)
     fixes += added
     if not fixes:
