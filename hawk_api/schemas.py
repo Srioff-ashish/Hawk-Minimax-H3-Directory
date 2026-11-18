@@ -49,6 +49,8 @@ class PlannerOptions(BaseModel):
 
 class PlanRequest(PlannerOptions):
     references: list[ReferenceIn] = Field(default_factory=list)
+    render: RenderSettings | None = Field(
+        None, description="Render the plan with these settings as soon as it is written, without a second call.")
 
 
 class RenderSettings(BaseModel):

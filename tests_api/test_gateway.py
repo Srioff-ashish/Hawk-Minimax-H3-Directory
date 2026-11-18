@@ -470,6 +470,24 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(len(self.fake.chat_requests), 1,
                            "being cut off is worth asking again for, since nothing else can fix it")
 
+    async def test_plan_and_render_renders_by_itself_when_the_plan_is_written(self):
+        # Studio used to wait for the plan and then ask for the render; a tab asleep in the background left it there.
+        asset = await self.upload_picture()
+        references = [{"asset_id": asset, "role": "picture"}]
+        plan = (await self.http.post("/v1/plans", json={"story": "A walk", "references": references, "segment_count": 2,
+                                                         "render": {"megapixels": 0.4}})).json()
+        plan = await self.wait(plan["id"])
+        self.assertEqual(plan["status"], "done", plan)
+        for _ in range(100):
+            plan = (await self.http.get(f"/v1/jobs/{plan['id']}")).json()
+            if plan.get("render_job_id"):
+                break
+            await asyncio.sleep(0.05)
+        self.assertTrue(plan.get("render_job_id"), plan)
+        render = await self.wait(plan["render_job_id"])
+        self.assertEqual((render["kind"], render["status"]), ("render", "done"), render)
+        self.assertEqual(render["resolution"]["megapixels"], 0.4, "the settings sent with the plan are the render's")
+
     async def test_plan_then_render_with_loras_and_downloads(self):
         asset = await self.upload_picture()
         references = [{"asset_id": asset, "role": "picture", "label": "her face"}]

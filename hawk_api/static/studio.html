@@ -4210,26 +4210,14 @@
       let job;
       if (kind === "direct") job = await post("/v1/videos", { references, script: directScript(prompt, seconds), settings: settingsPayload() });
       else if (kind === "plan") job = await post("/v1/plans", { ...planner, references });
-      else {
-        // Plan as its own job, then render it. Planning inside the render call took 60-120 s with pictures, and the
-        // Cloudflare tunnel cuts any request at 100 s with a 524 while the server carries on.
-        const plan = await post("/v1/plans", { ...planner, references });
-        state.jobs.set(plan.id, plan);
-        renderAllJobs();
-        toast("Planning", "The render starts when the plan is written.", "ok");
-        let done = plan;
-        for (let waited = 0; !["done", "failed", "cancelled"].includes(done.status); waited += 3) {
-          if (waited > 900) throw new Error("The plan is still being written after 15 minutes; render it from the job list when it's done.");
-          await new Promise((r) => setTimeout(r, 3000));
-          try { done = await api(`/v1/jobs/${plan.id}`); } catch (error) { if (error.status === 404) throw error; }
-        }
-        state.jobs.set(done.id, done);
-        if (done.status !== "done") throw new Error(done.error || `The plan was ${done.status}.`);
-        job = await post("/v1/videos", { references, plan_job_id: done.id, settings: settingsPayload() });
-      }
+      // Plan & render: a plan job that the server renders itself when it is written. Planning inside the render call
+      // took 60-120 s with pictures (the tunnel cuts a request at 100 s: 524), and chaining it here stalled whenever
+      // the browser put the tab to sleep.
+      else job = await post("/v1/plans", { ...planner, references, render: settingsPayload() });
       state.jobs.set(job.id, job);
       renderAllJobs();
-      toast(kind === "plan" ? "Plan started" : "Render queued", job.queue_position ? `#${job.queue_position} in line` : "It appears in the Library.", "ok");
+      toast(kind === "plan" ? "Plan started" : kind === "oneshot" ? "Planning" : "Render queued",
+            kind === "oneshot" ? "The render starts by itself when the plan is written." : job.queue_position ? `#${job.queue_position} in line` : "It appears in the Library.", "ok");
       schedule(1500);
     } catch (error) {
       showError(error.message);

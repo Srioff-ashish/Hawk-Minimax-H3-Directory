@@ -2532,6 +2532,26 @@ class HawkService:
         job["status"] = "done"
         job["updated_at"] = time.time()
         self.store.save_job(job)
+        if getattr(request, "render", None) is not None:
+            await self._render_finished_plan(job_id, request)
+
+    async def _render_finished_plan(self, job_id: str, request: PlanRequest) -> None:
+        """Plan & render, chained here rather than by the browser: Studio used to wait for the plan and then ask for
+        the render, and a tab put to sleep in the background left the plan sitting done with nothing rendering."""
+        try:
+            render = await self.create_video(VideoRequest(references=request.references, plan_job_id=job_id,
+                                                          settings=request.render))
+        except Exception as exc:  # the plan is still good; say why it didn't render so it can be rendered by hand
+            log.warning("hawk_api: plan %s rendered nothing: %s", job_id, exc)
+            job = self.store.get_job(job_id)
+            if job:
+                job["warnings"] = [*(job.get("warnings") or []), f"The render didn't start: {exc}"]
+                self.store.save_job(job)
+            return
+        job = self.store.get_job(job_id)
+        if job:
+            job["render_job_id"] = render["id"]
+            self.store.save_job(job)
 
     async def create_video(self, request: VideoRequest) -> dict:
         settings = request.settings
@@ -3006,6 +3026,8 @@ class HawkService:
             "title": job_title(job),
             "by": job.get("by"),  # the character whose video this is, in a group chat
         }
+        if job["kind"] == "plan" and job.get("render_job_id"):
+            view["render_job_id"] = job["render_job_id"]  # Plan & render: the render the server started from it
         if job["kind"] == "render":
             view.update(
                 seed=job.get("seed"),
