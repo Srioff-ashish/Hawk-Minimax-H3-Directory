@@ -2212,19 +2212,22 @@ class HawkService:
         return (await self._planner_model_ids(requested, needs_vision=needs_vision) or [""])[0]
 
     async def _planner_model_ids(self, requested: str = "", *, needs_vision: bool = False) -> list[str]:
-        """Every planner id worth trying, best first. A model the caller named is tried alone; the configured
-        chain is tried in full, so one model rate-limited upstream no longer fails the plan while the next
+        """Every planner id worth trying, best first. A model the caller named goes first with the configured chain
+        behind it; the chain is tried in full, so one model rate-limited upstream no longer fails the plan while the next
         candidate is free."""
         catalogue = await self.model_catalogue()
         if "," in str(requested or ""):  # a chain the caller chose (the Story page's Gemma -> Kimi -> DeepSeek)
             return [m for m in models_llm.resolve_many("planner", requested, catalogue, vision=needs_vision) if m]
+        llm = self.llm()
+        configured = llm.planner_model_override or self.settings.planner_model
+        chain = [m for m in models_llm.resolve_many("planner", configured, catalogue, vision=needs_vision) if m]
         if str(requested or "").strip():
             one = (models_llm.resolve("planner", requested, catalogue, vision=needs_vision)
                    or ("" if needs_vision else str(requested).strip()))
-            return [one] if one else []
-        llm = self.llm()
-        configured = llm.planner_model_override or self.settings.planner_model
-        return [m for m in models_llm.resolve_many("planner", configured, catalogue, vision=needs_vision) if m]
+            # The chosen model goes first, and the configured chain backs it up: a model the caller picked used to
+            # be tried alone, so one upstream rate limit (Gemma on OpenRouter's shared pool) failed every plan.
+            return list(dict.fromkeys([m for m in [one, *chain] if m]))
+        return chain
 
     def planner_system_prompt(self) -> str:
         """The planner's instructions: the user's edited prompt with the platform rules, else the node's own.

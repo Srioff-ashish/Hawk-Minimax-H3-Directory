@@ -554,9 +554,11 @@ class AgentApi(AgentHarness):
                          "deepseek/deepseek-v4-pro, deepseek/deepseek-v4.1-flash, xai/grok-4.6, xai/grok-4.3",
                          "the configured chain is returned beside the resolved id, because that is what the field holds")
         await self.planner_system_message({"story": "A walk", "model": "xai/grok-4.6"})
-        planner_call = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])][-1]
-        self.assertEqual(planner_call["model"], "xai/grok-4.6",
-                         "the planner call goes to the provider the settings name, with the model asked for")
+        planner_calls = [r for r in self.atlas.requests if "BRIEF:" in json.dumps(r["messages"][-1]["content"])]
+        self.assertEqual(planner_calls[0]["model"], "xai/grok-4.6",
+                         "the planner call goes to the provider the settings name, with the model asked for first")
+        self.assertTrue(all(c["model"] in {"xai/grok-4.6", "xai/grok-4.3", "deepseek-ai/deepseek-v4.1-flash"}
+                            for c in planner_calls[1:]), "when it fails, the configured chain backs it up")
         listed = (await self.http.get("/v1/agent/models")).json()
         self.assertTrue(listed["configured"])
 
