@@ -525,6 +525,48 @@ def sage_installed() -> bool:
         return False
 
 
+#: Set in ComfyUI's environment when sageattention is installed but cannot run on this GPU; hawk_h3's
+#: loader then leaves sage out of its attention modes instead of taking ComfyUI down with it.
+SAGE_BROKEN_ENV = "HAWK_SAGE_BROKEN"
+
+_SAGE_SMOKE = (
+    "import torch\n"
+    "from sageattention import sageattn\n"
+    "q = torch.randn(1, 2, 128, 64, device='cuda', dtype=torch.float16)\n"
+    "sageattn(q, q, q, tensor_layout='HND')\n"
+    "torch.cuda.synchronize()\n"
+    "print('sage ok')\n"
+)
+_sage_runs: bool | None = None
+
+
+def sage_runs_here() -> bool:
+    """Whether sageattention actually runs on this GPU, tried once in a child process and remembered.
+
+    A pip wheel built for one GPU generation (the G4's Blackwell) has no kernels for another (an A100):
+    the first attention call then aborts the whole process with "no kernel image is available", which in
+    ComfyUI means every render dies the moment it reaches attention. A child process takes that abort
+    instead of ComfyUI.
+    """
+    global _sage_runs
+    if _sage_runs is None:
+        try:
+            done = subprocess.run([sys.executable, "-c", _SAGE_SMOKE], capture_output=True, text=True, timeout=300)
+            _sage_runs = done.returncode == 0 and "sage ok" in done.stdout
+            if not _sage_runs:
+                tail = (done.stderr or done.stdout).strip().splitlines()[-3:]
+                print("sageattention is installed but does not run on this GPU; ComfyUI starts without it.\n  "
+                      + "\n  ".join(tail), flush=True)
+        except Exception as exc:  # noqa: BLE001 - any failure means: do not hand it to ComfyUI
+            print(f"sageattention could not be tried on this GPU ({exc}); ComfyUI starts without it.", flush=True)
+            _sage_runs = False
+    return _sage_runs
+
+
+def sage_usable() -> bool:
+    return sage_installed() and sage_runs_here()
+
+
 # ComfyUI's attn_group: passing two of these together is an argparse error, not a preference.
 COMFY_ATTENTION_FLAGS = frozenset({
     "--use-split-cross-attention", "--use-quad-cross-attention", "--use-pytorch-cross-attention",
@@ -554,7 +596,15 @@ def comfy_command(session: Session, extra: list[str] | None = None) -> list[str]
     # caller's own choice is not a redundant flag but an argparse error, and ComfyUI then never starts.
     # Trying --use-ck-attention should cost one comparison, not a pod with no ComfyUI on it.
     caller = list(session.comfy_args) + list(extra or [])
-    if sage_installed() and not any(arg in COMFY_ATTENTION_FLAGS for arg in caller):
+    usable = sage_usable()
+    env = getattr(session, "env", None)
+    if isinstance(env, dict):
+        # Without this, hawk_h3's "sol scheduled + sage" mode would still call sage inside every H3 render.
+        if sage_installed() and not usable:
+            env[SAGE_BROKEN_ENV] = "1"
+        else:
+            env.pop(SAGE_BROKEN_ENV, None)
+    if usable and not any(arg in COMFY_ATTENTION_FLAGS for arg in caller):
         args.append("--use-sage-attention")
     # ComfyUI 0.34+ records each model's forward into an aimdo "malloc graph" that assumes every step
     # allocates the same way. A long H3 segment (15 s at full size) does not, and dies before its first step
@@ -1044,7 +1094,9 @@ def attention_report(session: Session) -> str:
                          "module (RESTART_COMFY) so it reads custom_nodes again.")
     # Reported whether or not the mode asks for it: --use-sage-attention is ComfyUI's own global backend,
     # so it applies to every render regardless of what HAWK_ATTENTION says, and its absence is felt the same.
-    lines.append(f"  sage  {'installed' if sage_installed() else 'MISSING -- pip install sageattention'}"
+    sage_state = ("installed" if sage_usable() else "installed but has no kernels for this GPU -- left off") \
+        if sage_installed() else "MISSING -- pip install sageattention"
+    lines.append(f"  sage  {sage_state}"
                  f"{'' if 'sage' in mode else ' (global ComfyUI flag, not part of this mode)'}")
     return f"attention: {mode or 'comfy default'}\n" + "\n".join(lines)
 

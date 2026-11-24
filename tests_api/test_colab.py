@@ -213,7 +213,7 @@ class Detection(unittest.TestCase):
         session = hawk_colab.Session(
             comfy_dir=".", pack_dir=".", token="t", env={}, log_dir=".",
             comfy_args=["--use-ck-attention"])
-        with unittest.mock.patch.object(hawk_colab, "sage_installed", lambda: True):
+        with unittest.mock.patch.object(hawk_colab, "sage_usable", lambda: True):
             chosen = hawk_colab.comfy_command(session)
             self.assertNotIn("--use-sage-attention", chosen,
                              "sage must stand down: both flags together stop ComfyUI starting at all")
@@ -344,11 +344,13 @@ class Runtime(unittest.TestCase):
         session.comfy_args = ["--preview-method", "auto"]
         saved = hawk_colab.sage_installed
         hawk_colab.sage_installed = lambda: True
+        hawk_colab._sage_runs = True
         try:
             started = hawk_colab.comfy_command(session)
             restarted = hawk_colab.comfy_command(session, ["--enable-triton-backend"])
         finally:
             hawk_colab.sage_installed = saved
+            hawk_colab._sage_runs = None
         for flag in ("--reserve-vram", "--use-sage-attention", "--preview-method", "--disable-auto-launch"):
             self.assertIn(flag, started, f"{flag} belongs on every ComfyUI this module starts")
             self.assertIn(flag, restarted, f"{flag} must survive a restart, not just the first start")
@@ -367,6 +369,29 @@ class Runtime(unittest.TestCase):
         finally:
             hawk_colab.sage_installed = saved
 
+    def test_sage_that_cannot_run_on_this_gpu_is_left_off_everywhere(self):
+        """A sageattention wheel built for Blackwell aborts ComfyUI on an A100 ("no kernel image is available").
+
+        The launcher tries it in a child process first; when that fails, ComfyUI gets no sage flag and
+        hawk_h3's loader is told (HAWK_SAGE_BROKEN) to leave sage out of the H3 attention modes too.
+        """
+        session = hawk_colab.Session(comfy_dir=".", pack_dir=".", token="t", env={}, log_dir=".")
+        with unittest.mock.patch.object(hawk_colab, "sage_installed", lambda: True), \
+                unittest.mock.patch.object(hawk_colab, "_sage_runs", False):
+            self.assertNotIn("--use-sage-attention", hawk_colab.comfy_command(session))
+            self.assertEqual(session.env.get(hawk_colab.SAGE_BROKEN_ENV), "1")
+        with unittest.mock.patch.object(hawk_colab, "sage_installed", lambda: True), \
+                unittest.mock.patch.object(hawk_colab, "_sage_runs", True):
+            self.assertIn("--use-sage-attention", hawk_colab.comfy_command(session))
+            self.assertNotIn(hawk_colab.SAGE_BROKEN_ENV, session.env, "a GPU it runs on clears the mark")
+
+    def test_the_sage_smoke_test_reports_a_crashing_child_as_not_runnable(self):
+        crashed = unittest.mock.Mock(returncode=-6, stdout="", stderr="CUDA error: no kernel image is available")
+        with unittest.mock.patch.object(hawk_colab, "_sage_runs", None), \
+                unittest.mock.patch.object(hawk_colab.subprocess, "run", return_value=crashed), \
+                unittest.mock.patch("builtins.print"):
+            self.assertFalse(hawk_colab.sage_runs_here())
+
     def _report(self, mode: str, *, sol: bool, sage: bool) -> str:
         """attention_report with both backends under the test's control, neither on this machine."""
         session = hawk_colab.Session.__new__(hawk_colab.Session)
@@ -374,10 +399,12 @@ class Runtime(unittest.TestCase):
         saved_json, saved_sage = hawk_colab._http_json, hawk_colab.sage_installed
         hawk_colab._http_json = lambda url, **k: ({"SolAttnPatch": {}} if sol and "SolAttn" in url else None)
         hawk_colab.sage_installed = lambda: sage
+        hawk_colab._sage_runs = True
         try:
             return hawk_colab.attention_report(session)
         finally:
             hawk_colab._http_json, hawk_colab.sage_installed = saved_json, saved_sage
+            hawk_colab._sage_runs = None
 
     def test_the_attention_report_names_a_backend_that_is_not_there(self):
         # hawk_h3 skips a missing backend with a log line and renders anyway, several times slower, and

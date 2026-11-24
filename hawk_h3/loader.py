@@ -8,6 +8,7 @@ outputs are there for anything else in the graph.
 
 from __future__ import annotations
 
+import os
 import hashlib
 import json
 import logging
@@ -61,7 +62,11 @@ def apply_attention(model, mode: str, tau_start: float, tau_end: float):
     if mode.endswith("sage"):
         from comfy.ldm.modules import attention as comfy_attention
 
-        if not getattr(comfy_attention, "SAGE_ATTENTION_IS_AVAILABLE", False):
+        if os.environ.get("HAWK_SAGE_BROKEN"):
+            # Set by the Colab launcher when sageattention has no kernels for this GPU: calling it would
+            # abort ComfyUI ("no kernel image is available"), not just this render.
+            logger.warning("HawkH3: sageattention does not run on this GPU; continuing without it.")
+        elif not getattr(comfy_attention, "SAGE_ATTENTION_IS_AVAILABLE", False):
             logger.warning("HawkH3: 'sage' needs the sageattention package; continuing without it.")
         else:
             sage = getattr(comfy_attention.attention_sage, "__wrapped__", comfy_attention.attention_sage)
