@@ -5199,6 +5199,23 @@
       paintLoraWarn();
     }
   });
+  // An image the server is still making after the tunnel gave up: it appears in the asset list with this prompt.
+  async function waitForGenerated(prompt, since, count) {
+    for (let waited = 0; waited < 600; waited += 5) {
+      await new Promise((r) => setTimeout(r, 5000));
+      let listed;
+      try { listed = await api("/v1/assets?limit=40"); } catch { continue; }
+      const found = (listed.assets || []).filter((a) => a.source?.type === "generated" && a.source?.prompt === prompt
+        && (a.created_at || 0) >= since);
+      if (found.length >= count || (found.length && waited >= 60)) {
+        const first = found[0].source || {};
+        return { assets: found.slice(0, count), engine: first.engine, model: first.generator || first.engine,
+                 note: "Shown from Generated: the tunnel stopped waiting at 100 s while the server finished it." };
+      }
+    }
+    return null;
+  }
+
   $("genForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     if (gen.busy) return;
@@ -5219,8 +5236,19 @@
     go.disabled = true; go.textContent = "Generating…";
     $("genHint").textContent = engine === "local" ? "Krea 2 is running on the GPU…" : "This usually takes 5–40 seconds.";
     const started = performance.now();
+    const startedAt = Date.now() / 1000;
     try {
-      const result = await post("/v1/images", body);
+      let result;
+      try {
+        result = await post("/v1/images", body);
+      } catch (error) {
+        // The tunnel cuts a request at 100 s (524) while the server keeps drawing: a first P-H3 run that loads its
+        // models takes ~130 s. The image still lands in Generated, so wait for it there instead of saying it failed.
+        if (![502, 504, 524].includes(error.status)) throw error;
+        $("genHint").textContent = "Still drawing on the server (the tunnel stopped waiting at 100 s); watching Generated for it…";
+        result = await waitForGenerated(prompt, startedAt - 60, Number($("genCount").value) || 1);
+        if (!result) throw new Error("The tunnel stopped waiting (HTTP 524) and no image reached Generated within 10 minutes. Check the Library later, or the ComfyUI log.");
+      }
       const seconds = ((performance.now() - started) / 1000).toFixed(0);
       const names = { "krea2-edit": "Krea 2 edit (local)", krea2: "Krea 2 (local)", "z-image": "Z-Image Turbo",
         seedream: result.model?.includes("lite") ? "Seedream Lite" : "Seedream" };
