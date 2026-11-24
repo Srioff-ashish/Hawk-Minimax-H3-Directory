@@ -71,6 +71,8 @@ CHARACTER_KEEP_MESSAGES = 12  # a character's memory keeps this many recent mess
 #: the thinking fills it, returns an empty message with finish_reason=length. Only tokens written are billed,
 #: so a higher cap costs nothing on an ordinary turn; at v4-pro's $3.38/M out, a full 15k step is about $0.05.
 DIRECTOR_MAX_TOKENS = 15_000
+#: A director reply cut off at the cap is kept and continued this many times before the next model is tried.
+CONTINUE_CUT = 2
 TURN_MAX_TOKENS = 8000  # a turn itself is short; the rest is room to think
 #: The director drives tools, where the JSON matters more than the wording, so it stays cool. A chat with a
 #: character is that character talking, and 0.4 is not a temperature to write 800 messages of one scene at:
@@ -2249,7 +2251,7 @@ class AgentService:
         for position, model in enumerate(models):
             try:
                 text, usage = await self.atlas.chat(model, messages, json_mode=True, max_tokens=DIRECTOR_MAX_TOKENS, purpose="director",
-                                                    temperature=temperature)
+                                                    temperature=temperature, continue_cut=CONTINUE_CUT)
             except AtlasError as exc:
                 if position + 1 >= len(models):
                     raise

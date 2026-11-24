@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import random
 import re
 import time
+import zlib
 
 import httpx
 
@@ -76,6 +78,9 @@ def routing_block(name: str) -> dict | None:
     return dict(block) if block else None
 
 
+log = logging.getLogger(__name__)
+
+
 class AtlasError(RuntimeError):
     """Any Atlas failure, worded for a chat or an API caller."""
 
@@ -87,7 +92,75 @@ class AtlasTruncated(AtlasError):
     parsed, and every caller on that path asked for JSON because it intends to parse it. It used to pass
     through as ordinary content, because the only check was that the reply was not empty -- a half-written
     film plan was stored as a finished one and was found out at render time, several minutes later.
+
+    ``partial`` keeps what the model did write, so ``chat(continue_cut=n)`` can ask it for the rest instead
+    of throwing a long, mostly finished answer away.
     """
+
+    def __init__(self, message: str, partial: str = "", usage: dict | None = None):
+        super().__init__(message)
+        self.partial = partial
+        self.usage = usage or {}
+
+
+#: Sent after a cut-off reply, with that reply as the assistant's turn, to get the rest of it.
+CONTINUE_PROMPT = (
+    "Your reply above was cut off by the length limit. Continue it from exactly the last character: write "
+    "only what comes next, so that your reply above followed by this one is the complete JSON object. Do not "
+    "repeat anything already written, do not start the object again, no code fences, no commentary."
+)
+
+
+def _repetitive(text: str) -> bool:
+    """A cut-off reply that is only worth throwing away: a loop of the same words, or mostly blank space.
+
+    Some models fall into repeating one fragment until the cap; continuing that pays for more of the loop.
+    Ordinary JSON prose compresses to about a third of its size; a loop compresses to almost nothing.
+    """
+    if len(text) > 2000 and len(text.strip()) < len(text) * 0.5:
+        return True
+    tail = text[-6000:].encode("utf-8", "ignore")
+    return len(tail) > 2000 and len(zlib.compress(tail)) / len(tail) < 0.06
+
+
+def _strip_fence(text: str) -> str:
+    text = re.sub(r"^\s*```(?:json)?\s*\n?", "", text)
+    return re.sub(r"\n?```\s*$", "", text)
+
+
+def _stitch(head: str, more: str) -> str:
+    """``head`` followed by ``more``, dropping a fence or a stretch ``more`` repeated from the end of ``head``."""
+    more = _strip_fence(more)
+    for size in range(min(400, len(head), len(more)), 15, -1):
+        if head.endswith(more[:size]):
+            return head + more[size:]
+    return head + more
+
+
+def _json_object(text: str) -> bool:
+    """Whether ``text`` holds one JSON object, allowing fences or words around it as the callers' parsers do."""
+    text = _strip_fence(text.strip())
+    for candidate in (text, text[text.find("{"):text.rfind("}") + 1] if "{" in text else ""):
+        try:
+            if isinstance(json.loads(candidate), dict):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _add_usage(total: dict, more: dict) -> dict:
+    out = dict(total or {})
+    for key, value in (more or {}).items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            out[key] = (out.get(key) or 0) + value if isinstance(out.get(key) or 0, (int, float)) else value
+        elif isinstance(value, dict):
+            out[key] = _add_usage(out.get(key) if isinstance(out.get(key), dict) else {}, value)
+        else:
+            out.setdefault(key, value)
+    return out
 
 
 def _price(value) -> float:
@@ -312,8 +385,63 @@ class AtlasClient:
         temperature: float = 0.4,
         max_retries: int = 3,
         purpose: str = "",
+        continue_cut: int = 0,
     ) -> tuple[str, dict]:
-        """One chat completion. Returns ``(text, usage)``. ``purpose`` labels the call in the call log."""
+        """One chat completion. Returns ``(text, usage)``. ``purpose`` labels the call in the call log.
+
+        ``continue_cut`` (JSON mode): when the reply runs into ``max_tokens``, keep what was written and ask
+        the same model for the rest, up to this many times, then join the pieces. A long plan the model had
+        mostly finished used to be thrown away whole, and the next model in the chain started from nothing
+        -- often to be cut off at the same place. A reply that is only repeating itself is not continued.
+        """
+        once = dict(max_tokens=max_tokens, temperature=temperature, max_retries=max_retries)
+        try:
+            return await self._chat_once(model, messages, json_mode=json_mode, purpose=purpose, **once)
+        except AtlasTruncated as exc:
+            if not (json_mode and continue_cut > 0):
+                raise
+            first = exc
+        text, usage = first.partial, dict(first.usage)
+        for _ in range(continue_cut):
+            if _repetitive(text):
+                raise AtlasTruncated(f"{first} It was repeating itself, so it was not continued.", partial=text,
+                                     usage=usage)
+            follow = [*messages, {"role": "assistant", "content": text}, {"role": "user", "content": CONTINUE_PROMPT}]
+            try:
+                more, more_usage = await self._chat_once(model, follow, json_mode=False, cut_check=True,
+                                                         purpose=f"{purpose} (continued)".strip(), **once)
+                finished = True
+            except AtlasTruncated as exc:
+                more, more_usage, finished = exc.partial, exc.usage, False
+            usage = _add_usage(usage, more_usage)
+            if finished and _json_object(more) and _strip_fence(more).lstrip().startswith("{") and not _json_object(text):
+                # It started the object again instead of continuing; a complete one is as good.
+                text = _strip_fence(more)
+            else:
+                text = _stitch(text, more)
+            if finished:
+                if not _json_object(text):
+                    raise AtlasError(f"The model's reply was cut off at the token cap and the part it wrote to finish "
+                                     f"it did not join into valid JSON ({len(text)} characters).")
+                log.info("%s: reply cut off at the token cap was continued to %d characters", model, len(text))
+                return text, usage
+        raise AtlasTruncated(f"The model's reply was still cut off at the token cap after {continue_cut} "
+                             f"continuations ({len(text)} characters), so it is not the complete JSON object "
+                             "that was asked for.", partial=text, usage=usage)
+
+    async def _chat_once(
+        self,
+        model: str,
+        messages: list[dict],
+        *,
+        json_mode: bool = True,
+        max_tokens: int = 8192,
+        temperature: float = 0.4,
+        max_retries: int = 3,
+        purpose: str = "",
+        cut_check: bool = False,
+    ) -> tuple[str, dict]:
+        """One chat completion, retried on transient errors. ``cut_check`` reports a cut-off reply outside JSON mode."""
         if not self.configured:
             raise AtlasError(f"No {self.label} API key on the server. Add one under Settings, or set "
                              f"{'OPENROUTER_API_KEY' if self.service == 'openrouter' else 'ATLAS_API_KEY'}.")
@@ -343,14 +471,14 @@ class AtlasClient:
                         except json.JSONDecodeError:
                             body = None
                         try:
-                            result = self._parse(response, json_mode=json_mode)
+                            result = self._parse(response, json_mode=json_mode, cut_check=cut_check)
                         except AtlasTruncated as exc:
                             self._record(model, purpose, started, "truncated", response=response, body=body,
                                          error=str(exc))
                             # Not retried: the same model at the same cap stops at the same place, and a reasoning
                             # model spends minutes getting there (Kimi K2.6 took 3-4 min per cut-off plan). The
                             # caller's chain moves on to the next model instead.
-                            raise AtlasError(str(exc)) from None
+                            raise AtlasTruncated(str(exc), partial=exc.partial, usage=exc.usage) from None
                         except AtlasError as exc:
                             outcome = "empty" if "empty message" in str(exc) else "error"
                             self._record(model, purpose, started, outcome, response=response, body=body, error=str(exc))
@@ -382,7 +510,7 @@ class AtlasClient:
                     raise AtlasError(f"{self.label} request failed: {last_error}")
 
     @staticmethod
-    def _parse(response: httpx.Response, json_mode: bool = True) -> tuple[str, dict]:
+    def _parse(response: httpx.Response, json_mode: bool = True, cut_check: bool = False) -> tuple[str, dict]:
         try:
             data = response.json()
         except json.JSONDecodeError:
@@ -400,7 +528,8 @@ class AtlasClient:
             content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
         if not content:
             raise AtlasError(f"The model returned an empty message (finish_reason={choices[0].get('finish_reason')}).")
-        if json_mode and choices[0].get("finish_reason") == "length":
+        if (json_mode or cut_check) and choices[0].get("finish_reason") == "length":
             raise AtlasTruncated(f"The model's reply was cut off at the token cap after {len(content)} characters, "
-                                 "so it is not the complete JSON object that was asked for.")
+                                 "so it is not the complete JSON object that was asked for.",
+                                 partial=content, usage=data.get("usage") or {})
         return content, data.get("usage") or {}

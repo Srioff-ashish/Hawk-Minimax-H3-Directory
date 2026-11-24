@@ -162,6 +162,8 @@ PLANNER_VIDEO_STAMPS = (0.0, 1.5, 3.0)
 # deepseek-v4-pro reasons before it writes, and its reasoning counts against this: at 8192 a full plan
 # (5-7k tokens of script) came back empty with finish_reason=length. Same cap as the director's.
 PLANNER_MAX_TOKENS = 15_000
+#: A plan cut off at the cap is kept and continued this many times before the next model is tried.
+CONTINUE_CUT = 2
 
 #:
 #: Each folder takes any one of several word sets. An H3 "hybrid" is fl2va with ref2va's reference pathway (the
@@ -2381,7 +2383,7 @@ class HawkService:
             try:
                 reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
                                                     max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature,
-                                                    purpose="story planner")
+                                                    purpose="story planner", continue_cut=CONTINUE_CUT)
                 if not (reply or "").strip():
                     raise Unavailable(f"{model} returned an empty plan.")
                 # "Not empty" was the only thing ever checked here, so a plan cut off mid-sentence was stored as
