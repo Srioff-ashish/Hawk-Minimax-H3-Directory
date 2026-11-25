@@ -394,6 +394,15 @@ class StructuredPrompts(unittest.TestCase):
         for needle in ("subject_definitions:", "overall_soundscape:", "non_diegetic_music:", "<d>[Hindi]", "Anti-filler checklist"):
             self.assertIn(needle, text)
 
+    def test_outfit_location_and_style_pictures_are_said_to_add_nobody(self):
+        # H3 puts whoever is in a reference image into the shot unless told the picture only lends an outfit, a place
+        # or a look -- the stray extra person in films made with wardrobe or location pictures.
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        planner = open(os.path.join(root, "hawk_h3", "prompts", "planner_system.md"), encoding="utf-8").read()
+        self.assertIn("does not define an additional person", planner)
+        self.assertIn("nobody in it appears in the shot", planner)
+        self.assertIn("it adds no subject", planner)
+
     def test_hinglish_dialogue_is_devanagari_and_tied_to_its_speaker(self):
         # Hindi in Roman letters has no fixed spelling and H3 reads it as English, so the characters
         # mispronounce it; and a bare (S1) leaves H3 to guess whose mouth moves.

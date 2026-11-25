@@ -27,6 +27,24 @@ class OnlyUnmatched(unittest.TestCase):
             with self.subTest(issues=issues):
                 self.assertFalse(only_unmatched_people(issues))
 
+    def test_ordinary_words_are_not_read_as_defects(self):
+        # Bare stems used to match inside words: "arm" in warm/charming, "leg" in elegant, "text" in context, and a
+        # hand being held -- each of these dropped a good panel.
+        for issues in ("unmatched man in a warm-lit room", "extra man holding her hand",
+                       "two men match none of the identity references; elegant pose",
+                       "unknown woman in the background, context fine", "additional person with charming smile",
+                       "extra tall man beside her"):
+            with self.subTest(issues=issues):
+                self.assertTrue(only_unmatched_people(issues))
+
+    def test_a_defect_beside_an_unpictured_person_still_drops_the_panel(self):
+        for issues in ("unmatched man; extra fingers on left hand", "unmatched man, his left arm is twisted",
+                       "unknown man, six fingers", "unmatched woman, broken anatomy", "extra man; watermark bottom right",
+                       "unmatched man; duplicated person on the right", "extra man with an extra arm",
+                       "unmatched man; her face looks different from the reference"):
+            with self.subTest(issues=issues):
+                self.assertFalse(only_unmatched_people(issues))
+
     def test_the_prompt_says_people_without_a_picture_never_fail_a_panel(self):
         self.assertIn("NEVER fail a panel because someone in it matches no", CHECK_PROMPT)
         self.assertNotIn("matches NONE of the identity references", CHECK_PROMPT)

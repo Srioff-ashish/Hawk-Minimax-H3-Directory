@@ -663,17 +663,34 @@ _ONLY_UNMATCHED = re.compile(
     r"\b(unmatched|unrecogni[sz]ed|unidentified|unknown|extra|additional)\b.*\b(man|men|woman|women|person|people|"
     r"figure|male|female)s?\b|match(es|ing)? (none|no) (of )?(the )?identity|no (matching )?identity ref",
     re.IGNORECASE)
+#: Whole words only, and a body part counts only beside a word that says it is wrong. Bare stems used to match
+#: inside ordinary words -- "arm" in "warm", "leg" in "elegant", "text" in "context" -- and "hand" in "holding her
+#: hand", so "unmatched man in a warm-lit room" still dropped a good panel.
+_DEFECT_WORD = (r"extra|missing|broken|deformed|malformed|mangled|fused|merged|twisted|distorted|melted|melting|"
+                r"doubled|duplicated?|wrong|bad|too many|six|seven|three|floating|disconnected|bent backwards")
+_BODY_PART = r"anatomy|fingers?|hands?|limbs?|arms?|legs?|feet|foot|toes?|nipples?|joints?|heads?|faces?|eyes?|teeth"
 _REAL_DEFECT = re.compile(
-    r"anatom|finger|hand|limb|arm|leg|nipple|joint|twist|melt|doubl|duplicat|fused|extra (head|face)|artifact|"
-    r"garbled|text|watermark|logo|cut.?off|crop|blur|platform|face (is|looks) (wrong|different)|does not (look|match) "
-    r"(like )?(her|his|the)|wrong face|different (face|person)|build does not|size",
+    rf"\b(?:{_DEFECT_WORD})\b(?:\W+\w+){{0,3}}?\W+\b(?:{_BODY_PART})\b"
+    rf"|\b(?:{_BODY_PART})\b(?:\W+\w+){{0,2}}?\W+\b(?:is|are|looks?|appears?)\W+(?:{_DEFECT_WORD})\b"
+    r"|\b(?:broken|bad|wrong) anatomy\b|\banatomy (?:is|looks) (?:broken|wrong|off)\b"
+    r"|\b(?:artifacts?|artefacts?|garbled|watermarks?|logos?|cut.?off|cropped|blurry|blurred|platform)\b"
+    r"|\bduplicat\w* (?:person|people|man|woman|figure|body)\b"
+    r"|\bface (?:is|looks) (?:wrong|different)\b|\bdoes not (?:look|match) (?:like )?(?:her|his|the)\b"
+    r"|\bwrong face\b|\bdifferent (?:face|person)\b|\bbuild does not\b|\bvisible text\b|\btext overlay\b",
     re.IGNORECASE)
+
+
+_PERSON_PHRASE = re.compile(
+    r"\b(?:unmatched|unrecogni[sz]ed|unidentified|unknown|extra|additional|another|second|third)\s+"
+    r"(?:\w+\s+)?(?:man|men|woman|women|person|people|figure|male|female|guy|girl|boy)s?\b", re.IGNORECASE)
 
 
 def only_unmatched_people(issues: str) -> bool:
     """True when a rejection's only complaint is that someone matched no identity reference."""
     text = str(issues or "")
-    return bool(_ONLY_UNMATCHED.search(text)) and not _REAL_DEFECT.search(text)
+    # "extra man" names a person with no picture, not an extra limb: take those phrases out before looking for defects.
+    rest = _PERSON_PHRASE.sub(" ", text)
+    return bool(_ONLY_UNMATCHED.search(text)) and not _REAL_DEFECT.search(rest)
 
 
 async def check_panels(service, board: dict, shots: list[int]) -> dict[int, str]:
