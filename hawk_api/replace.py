@@ -303,12 +303,6 @@ class ReplaceManager:
                 raise RequestError(f"Unknown picture {asset_id!r}.")
             if asset.get("kind") != "image":
                 raise RequestError(f"{asset.get('filename') or asset_id} is not a picture.")
-            problem = origin_problem(self.service.store, asset_id)
-            if problem:
-                raise RequestError(
-                    f"Only a character whose face was generated here can be put into a video, and {problem}. "
-                    "Use pictures made with this server's image engines (Studio's image tab, a chat, Story or a "
-                    "storyboard), not an uploaded photo or anything edited from one.")
         return ids, name, description
 
     async def _render_as_asset(self, job_id: str) -> str:
