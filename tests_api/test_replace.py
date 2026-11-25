@@ -96,6 +96,13 @@ class Prompt(unittest.TestCase):
         self.assertIn("<Picture 1> and <Picture 2>", text)
         self.assertIn("black jacket", text)
         self.assertNotIn("<Picture 3>", text)
+        self.assertIn("<Video 1>: partially_preserved", text)
+        self.assertIn("are replaced by <Subject 1>", text)
+
+    def test_a_prompt_that_keeps_the_whole_video_is_not_used(self):
+        # Measured on the pod: with <Video 1> fully_preserved H3 returned the original person untouched.
+        good = template_prompt("the woman", "Meu", "", 1, "")
+        self.assertFalse(usable_prompt(good.replace("<Video 1>: partially_preserved", "<Video 1>: fully_preserved")))
 
 
 @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
@@ -158,6 +165,7 @@ class ReplaceJob(unittest.IsolatedAsyncioTestCase):
         pieces = [(await self.http.get(f"/v1/jobs/{p['job_id']}")).json() for p in job["pieces"]]
         self.assertTrue(all(p["kind"] == "render" and p["parent_job_id"] == job["id"] for p in pieces))
         self.assertIn("[video editing] The target video is an edited version of <Video 1>.", pieces[0]["script"])
+        self.assertEqual(pieces[0]["resolution"]["aspect_ratio"], "16:9")
 
         out = self._service().store.get_asset(job["output_asset_id"])
         path = self._service().local_asset_path(out)

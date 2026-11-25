@@ -18,6 +18,7 @@ import base64
 import json
 import logging
 import math
+import re
 import os
 import shutil
 import subprocess
@@ -57,19 +58,22 @@ subject_definitions:
 video that needs tracking (<Subject 2> ...), described as they appear in <Video 1>.
 
 summary:
-Starts with "[video editing] The target video is an edited version of <Video 1>." then one short paragraph: which person
-is replaced by <Subject 1>, and that everything else in <Video 1> is kept.
+Starts with "[video editing] The target video is an edited version of <Video 1>." then one short paragraph: name the
+replaced person by how they look in the stills (age, hair, build), say they are replaced by <Subject 1>, who performs
+their movements, and that the camera, framing, timing, place and other people stay as in <Video 1>.
 
 retention_analysis:
 One line per label defined above, same order, each starting with that label: "<Subject 1>: fully_preserved - identity
-from <Picture 1>: face, hair, skin tone, build." and for the video's other content "fully_preserved". Add
-"<Video 1>: fully_preserved - motion, timing, camera, framing, background and every other person; only the replaced
-person's identity is not kept." Markers allowed: fully_preserved, partially_preserved, attribute_transfer,
-weak_reference.
+from <Picture 1>: face, hair, skin tone, build." naming those traits, and "fully_preserved" for the other people.
+Then exactly: "<Video 1>: partially_preserved - camera, framing, motion path, gestures, timing, place and lighting; the
+replaced person's face, hair and body are replaced by <Subject 1>." Never mark <Video 1> fully_preserved: H3 then
+keeps the original person. Markers allowed: fully_preserved, partially_preserved, attribute_transfer, weak_reference.
 
 detailed_description:
-One line of style matching the video (photoreal, its grade and grain), then [Shot 1]. The longest section. <Subject 1>
-takes the replaced person's exact place, body, pose, gestures, expressions, lip movement and timing frame for frame,
+One line of style matching the video (photoreal, its grade and grain), then [Shot 1]. The longest section. Name
+<Subject 1> with their visible traits in words (age, hair, skin tone, build) and say they come from <Picture 1>; repeat
+the traits once more near the end. <Subject 1> takes the replaced person's place, pose, gestures, expressions, lip
+movement and timing frame for frame, describing what happens in the stills,
 wearing the replaced person's clothing unless the direction says otherwise. Hands, contact, shadows and occlusion
 match the new body. Camera, framing, depth of field, motion blur and lighting stay exactly as in <Video 1>. The face
 from <Picture 1> holds steady with no drift. Keep [Shot 1] as the only shot unless the stills show a cut.
@@ -170,14 +174,17 @@ def template_prompt(who: str, name: str, description: str, pictures: int, direct
         f"from {cited}.\n\n"
         "summary:\n"
         "[video editing] The target video is an edited version of <Video 1>. "
-        f"{who} in <Video 1> is replaced by <Subject 1>; everything else in <Video 1> is kept as it is.\n\n"
+        f"{who[:1].upper() + who[1:]} in <Video 1> is replaced by <Subject 1>, who performs their movements; the camera, "
+        "framing, timing, "
+        "place and other people stay as in <Video 1>.\n\n"
         "retention_analysis:\n"
         f"<Subject 1>: fully_preserved - identity from {cited}: face, hair, skin tone and build.\n"
-        "<Video 1>: fully_preserved - motion, timing, camera, framing, background, lighting and every other person; "
-        "only the replaced person's identity is not kept.\n\n"
+        "<Video 1>: partially_preserved - camera, framing, motion path, gestures, timing, place, lighting and every "
+        f"other person; the face, hair and body of {who} are replaced by <Subject 1>.\n\n"
         "detailed_description:\n"
         "Photoreal, matching the grade, grain and lighting of <Video 1>.\n"
-        f"[Shot 1] <Subject 1> takes the exact place of {who} in <Video 1>: the same body position, pose, gestures, "
+        f"[Shot 1] <Subject 1>{', ' + person.rstrip(', ') if person else ''}{', ' + description.strip() if description.strip() else ''}, "
+        f"from <Picture 1>, takes the place of {who} in <Video 1>: the same body position, pose, gestures, "
         "expressions, lip movement and timing, frame for frame, wearing the same clothing. Hands, contact shadows and "
         "occlusion match the new body. The camera, framing, depth of field, motion blur and light stay exactly as in "
         f"<Video 1>. The face from <Picture 1> holds steady with no drift.{extra}\n\n"
@@ -188,6 +195,8 @@ def template_prompt(who: str, name: str, description: str, pictures: int, direct
 
 def usable_prompt(text: str) -> bool:
     text = text or ""
+    if re.search(r"<Video 1>\s*(\([^)]*\))?\s*:\s*fully_preserved", text):
+        return False  # H3 then keeps the original person: the one thing a replacement must not do
     return all(part in text for part in ("subject_definitions:", "summary:", "retention_analysis:",
                                          "detailed_description:", "<Video 1>", "<Picture 1>", "[video editing]"))
 
@@ -353,7 +362,8 @@ class ReplaceManager:
                      "settings": (settings or RenderSettings()).model_dump(),
                      # Whether the caller chose a shape. The saved settings carry every field, so this can't be told
                      # from them later -- and without it a portrait clip rendered at the 16:9 default.
-                     "aspect_chosen": bool(settings and "aspect_ratio" in settings.model_fields_set)},
+                     "aspect_chosen": bool(settings and "aspect_ratio" in settings.model_fields_set),
+                     "ref_size_chosen": bool(settings and "ref_image_size" in settings.model_fields_set)},
             character_name=name, character_description=description[:1200], pieces=[], output_asset_id=None,
             by=by,
         )
@@ -424,6 +434,8 @@ class ReplaceManager:
             settings = RenderSettings(**request["settings"])
             if not request.get("aspect_chosen") and info["width"] and info["height"]:
                 settings = settings.model_copy(update={"aspect_ratio": nearest_aspect(info["width"], info["height"])})
+            if not request.get("ref_size_chosen"):
+                settings = settings.model_copy(update={"ref_image_size": "max"})  # the face is what has to carry over
             settings = settings.model_copy(update={"continuity": "off", "music_asset_id": None,
                                                    "use_default_loras": settings.use_default_loras})
 
