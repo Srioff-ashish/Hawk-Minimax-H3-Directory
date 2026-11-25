@@ -66,7 +66,7 @@ def _error(exc: Exception) -> ToolError:
 
 
 def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stories=None, boards=None,
-              characters=None) -> MCPServer:
+              characters=None, replacer=None) -> MCPServer:
     mcp = MCPServer(
         name="hawk-h3-director",
         title="Hawk MiniMax H3 Director",
@@ -439,6 +439,25 @@ def build_mcp(service: HawkService, drive=None, imports=None, manhwa=None, stori
         if not film.modes and not film.panel_asset_ids and not film.sheet_asset_id:
             fields["modes"] = ["look"] * (len(film.shots) if film.shots else film.shot_count)
         return await boarded(storyboards.make_film(boards, settings=settings, **fields))
+
+    @mcp.tool(description="Replace one person in a video with a character: the person's movement, timing, camera and "
+              "everyone else stay; only who it is changes, and the video keeps its original sound exactly. video_asset_id "
+              "is a video in the Library (up to 90 s), or source_job_id a finished render; who says which person ('the woman in the red dress'), character is "
+              "a library character or picture_asset_ids are identity pictures (face first, up to 4) -- in a chat, pass the "
+              "character's own avatar / identity pictures. Only faces generated on this server can go in: an uploaded "
+              "photo, or anything made from one, is refused. Returns a job; call wait_for_job, then show its video_url.")
+    async def replace_person(who: str, video_asset_id: str | None = None, source_job_id: str | None = None,
+                             character: str | None = None, picture_asset_ids: list[str] | None = None,
+                             direction: str = "", settings: RenderSettings | None = None) -> dict:
+        if replacer is None:
+            raise ToolError("Person replacement isn't available on this server.")
+        try:
+            job = await replacer.start(video_asset_id=video_asset_id, source_job_id=source_job_id, who=who, character=character,
+                                       picture_asset_ids=picture_asset_ids or [], direction=direction,
+                                       settings=settings)
+        except (RequestError, NotFound, Unavailable) as exc:
+            raise ToolError(str(exc)) from None
+        return service.job_view(job)
 
     @mcp.tool(description="Approve a film stopped at status review (after showing the user its panels): it renders now. Poll get_storyboard.")
     async def approve_film(board_id: str, segment_seconds: float | None = None, mood: str | None = None) -> dict:

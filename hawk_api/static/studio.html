@@ -783,6 +783,7 @@
         <div class="stack">
           <section class="card" aria-labelledby="h-refs">
             <div class="card-head"><span class="step">1</span><h2 id="h-refs">References</h2><span class="hint">Who, what and where — optional</span><div class="spacer"></div>
+              <button class="btn btn-ghost btn-sm" type="button" id="openReplace" title="Swap one person in a video for a character">Replace a person…</button>
               <button class="btn btn-ghost btn-sm" type="button" id="refsFromLibrary">From media</button></div>
             <div class="card-body">
               <label class="dropzone" id="drop">
@@ -1785,6 +1786,28 @@
     <div class="modal-body"><h3 id="confirmTitle">Are you sure?</h3><p class="hint" id="confirmText" style="margin:0"></p></div>
     <div class="modal-foot"><button class="btn" value="cancel">Keep</button><button class="btn btn-primary" value="ok" id="confirmOk">Confirm</button></div>
   </form>
+</dialog>
+
+<dialog class="modal wide" id="replaceDialog" aria-labelledby="replaceTitle">
+  <form class="modal-body" id="replaceForm" style="gap:12px">
+    <div class="row"><h3 id="replaceTitle">Replace a person in a video</h3><div class="spacer"></div><button class="icon-btn" type="button" id="replaceClose" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+    <div class="modal-scroll" style="display:grid;gap:12px;padding-right:2px">
+      <div class="field"><span class="label">Video</span>
+        <div class="row"><span id="replaceVideo" class="hint" style="flex:1">No video chosen</span><button class="btn btn-sm" type="button" id="replacePickVideo">Choose video…</button></div>
+        <span class="hint">Up to 90 s. Longer clips are cut into pieces of about 12 s, each edited, then joined.</span></div>
+      <div class="field"><label class="label" for="replaceWho">Who is replaced</label>
+        <input class="input" id="replaceWho" required maxlength="300" placeholder="e.g. the woman in the red dress, the man on the left"></div>
+      <div class="field"><label class="label" for="replaceCharacter">Who goes in</label>
+        <div class="row"><select class="select" id="replaceCharacter" style="flex:1"><option value="">Pick pictures instead…</option></select>
+          <button class="btn btn-sm" type="button" id="replacePickPictures">Pictures…</button></div>
+        <span class="hint" id="replacePictures">Only faces generated here can go in: pictures made with this server's image engines, not uploaded photos or edits of them.</span></div>
+      <div class="field"><label class="label" for="replaceDirection">Anything else (optional)</label>
+        <textarea class="textarea" id="replaceDirection" rows="2" maxlength="2000" placeholder="e.g. she wears a black leather jacket instead"></textarea></div>
+      <div class="field"><label class="label" for="replaceQuality">Quality</label>
+        <select class="select" id="replaceQuality"><option value="0.4">Preview (0.4 MP, fast)</option><option value="0.98" selected>Standard (about 1 MP)</option></select></div>
+    </div>
+  </form>
+  <div class="modal-foot"><span class="hint" style="margin-right:auto">The original sound is kept exactly.</span><button class="btn" type="button" id="replaceCancel">Cancel</button><button class="btn btn-primary" type="submit" form="replaceForm" id="replaceGo">Replace</button></div>
 </dialog>
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
@@ -4291,6 +4314,8 @@
     if (job.status === "planning") return `<div class="progress thin indeterminate"><i></i></div><div class="plabel"><span>The planner is writing segments…</span></div>`;
     if (job.status !== "rendering") return "";
     const total = p.segments_total || 0, done = p.segments_done || 0;
+    if (job.kind === "replace") return `<div class="plabel"><span>${total ? `Piece ${Math.min(done + 1, total)} of ${total}` : "Preparing"}</span><span>${done}/${total || "?"} done</span></div>
+      <div class="progress"><i style="width:${total ? (done / total) * 100 : 3}%"></i></div><div class="plabel"><span>${esc(job.note || "")}</span></div>`;
     const steps = p.steps_total ? `<div class="progress thin"><i style="width:${(p.steps_done / p.steps_total) * 100}%"></i></div><div class="plabel"><span>Step ${p.steps_done}/${p.steps_total}</span><span>${esc(p.current_segment || "")}</span></div>`
       : `<div class="plabel"><span>Loading models and encoding…</span></div>`;
     return `<div class="plabel"><span>${total ? `Segment ${Math.min(done + 1, total)} of ${total}` : "Rendering"}</span><span>${done}/${total || "?"} done</span></div>
@@ -4319,6 +4344,7 @@
     if (ACTIVE.includes(job.status)) parts.push(`<button class="btn btn-sm btn-danger" type="button" data-act="cancel">Cancel</button>`);
     if (["failed", "cancelled"].includes(job.status) && job.resumable) parts.push(`<button class="btn btn-sm" type="button" data-act="retry">Retry</button>`);
     if (job.kind === "plan" && job.status === "done") parts.push(`<button class="btn btn-sm btn-primary" type="button" data-act="open">Review plan</button>`);
+    if (job.kind === "render" && job.status === "done" && job.video_url) parts.push(`<button class="btn btn-sm" type="button" data-act="replace" title="Swap one person in this video for a character">Replace person</button>`);
     return parts.join("");
   }
 
@@ -4372,7 +4398,8 @@
   function matchesFilter(job) {
     const f = state.filter;
     if (f === "active" && !ACTIVE.includes(job.status)) return false;
-    if (f === "done" && !(job.status === "done" && job.kind === "render")) return false;
+    if (job.parent_job_id) return false;  // a piece of a person replacement: shown inside that job
+    if (f === "done" && !(job.status === "done" && (job.kind === "render" || job.kind === "replace"))) return false;
     if (f === "failed" && !["failed", "cancelled"].includes(job.status)) return false;
     if (f === "plan" && job.kind !== "plan") return false;
     const q = state.query.trim().toLowerCase();
@@ -4474,6 +4501,7 @@
     if (act === "copy-link" && job.video_url) return copy(job.video_url, "Download link copied");
     if (act === "copy-id") return copy(job.id, "Job id copied");
     if (act === "copy-page") return copy(`${location.origin}${location.pathname}#job/${job.id}`, "Page link copied");
+    if (act === "replace") return openReplace({ jobId: id, label: jobTitle(job) });
     if (act === "cancel" && !(await confirmAction("Cancel this job?", "Finished segments stay saved, so you can retry it later.", "Cancel job"))) return;
     if (button) button.disabled = true;
     try {
@@ -4807,6 +4835,7 @@
     $("viewerMeta").innerHTML = meta.map(([key, value]) => `<div><dt>${esc(key)}</dt><dd>${esc(String(value))}</dd></div>`).join("");
     if (asset.kind === "image") paintProvenance(asset);
     $("viewerActions").innerHTML = (asset.kind === "image" ? `<button class="btn btn-sm" type="button" data-view="remix">✨ Edit / remix</button>` : "")
+      + (asset.kind === "video" ? `<button class="btn btn-sm" type="button" data-view="replace">Replace person</button>` : "")
       + `<button class="btn btn-sm" type="button" data-view="create">Use in Create</button><button class="btn btn-sm" type="button" data-view="agent">Attach to agent</button>`
       + `<button class="btn btn-sm" type="button" data-view="select">${media.selected.has(asset.id) ? "Unselect" : "Select"}</button>`
       + `<button class="btn btn-sm" type="button" data-view="delete" style="color:#f87171">Delete</button>`;
@@ -4910,6 +4939,7 @@
     if (!button || !asset) return;
     const action = button.dataset.view;
     if (action === "remix") { $("viewer").close(); openGenerate([asset]); }
+    else if (action === "replace") { $("viewer").close(); openReplace({ asset }); }
     else if (action === "create") { $("viewer").close(); useAssetsInCreate([asset]); location.hash = "#create"; }
     else if (action === "agent") { $("viewer").close(); attachToAgent([asset]); location.hash = "#agent"; }
     else if (action === "select") {
@@ -5584,6 +5614,54 @@
   $("pickerOk").onclick = () => closePicker([...picker.selected.values()]);
   $("pickerCancel").onclick = $("pickerClose").onclick = () => closePicker([]);
   $("pickerDialog").addEventListener("close", () => closePicker([]));
+
+  // ---------------------------------------------------------------- replace a person in a video
+  const replacing = { asset: null, jobId: null, pictures: [] };
+  async function openReplace({ asset = null, jobId = null, label = "" } = {}) {
+    Object.assign(replacing, { asset, jobId, pictures: [] });
+    $("replaceVideo").textContent = asset ? asset.filename : jobId ? `Render: ${label || jobId.slice(0, 8)}` : "No video chosen";
+    $("replacePictures").textContent = "Only faces generated here can go in: pictures made with this server's image engines, not uploaded photos or edits of them.";
+    $("replaceDialog").showModal();
+    try {
+      const { characters = [] } = await api("/v1/characters");
+      $("replaceCharacter").innerHTML = `<option value="">Pick pictures instead…</option>` + characters
+        .filter((c) => (c.identity_asset_ids || []).length)
+        .map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+    } catch { /* the pictures route still works */ }
+  }
+  $("openReplace").onclick = () => openReplace();
+  $("replacePickVideo").onclick = async () => {
+    const [asset] = await pickAssets({ kinds: ["video"], multiple: false, title: "Choose the video to change" });
+    if (asset) { Object.assign(replacing, { asset, jobId: null }); $("replaceVideo").textContent = asset.filename; }
+  };
+  $("replacePickPictures").onclick = async () => {
+    const chosen = await pickAssets({ kinds: ["image"], title: "Pictures of who goes in (face first, up to 4)" });
+    if (!chosen.length) return;
+    replacing.pictures = chosen.slice(0, 4);
+    $("replaceCharacter").value = "";
+    $("replacePictures").textContent = `${replacing.pictures.length} picture${replacing.pictures.length > 1 ? "s" : ""}: ${replacing.pictures.map((a) => a.filename).join(", ")}`;
+  };
+  $("replaceCancel").onclick = $("replaceClose").onclick = () => $("replaceDialog").close();
+  $("replaceForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!replacing.asset && !replacing.jobId) return toast("Choose the video first", "", "warn");
+    const character = $("replaceCharacter").value;
+    if (!character && !replacing.pictures.length) return toast("Choose who goes in", "A library character, or pictures.", "warn");
+    $("replaceGo").disabled = true;
+    try {
+      const job = await post("/v1/videos/replace", {
+        video_asset_id: replacing.asset?.id || null, source_job_id: replacing.jobId || null,
+        who: $("replaceWho").value.trim(), character: character || null,
+        picture_asset_ids: replacing.pictures.map((a) => a.id), direction: $("replaceDirection").value.trim(),
+        settings: { megapixels: Number($("replaceQuality").value) },
+      });
+      state.jobs.set(job.id, job);
+      $("replaceDialog").close();
+      toast("Replacing", "Each piece renders in turn; the finished video keeps the original sound.");
+      location.hash = "#library";
+    } catch (error) { toast("Could not start the replacement", error.message, "bad"); }
+    finally { $("replaceGo").disabled = false; }
+  });
 
   $("refsFromLibrary").onclick = async () => {
     const chosen = await pickAssets({ kinds: ["image", "video", "audio"], title: "Add references from media" });

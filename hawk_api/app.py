@@ -24,6 +24,7 @@ from .manhwa import ManhwaManager
 from .story import StoryManager
 from . import story_source
 from .characters import CharacterManager
+from .replace import ReplaceManager
 from .storyboard import StoryboardManager, compose_sheet, identity_pack, make_film, suggest_shots
 from .snapshot import DbSnapshotter
 from .auth import bearer, signature_valid, split_path_token, token_matches
@@ -40,7 +41,7 @@ from .schemas import (
     ImageRequest, ManhwaCastIn, ManhwaCatalogIn, ManhwaCharacterIn, ManhwaMergeCharactersIn, ManhwaNewCharacterIn, ManhwaContextIn, ManhwaConvertIn, ManhwaMergeIn, ManhwaPipelineIn, ManhwaPlanIn, ManhwaPortraitIn, ManhwaRenderIn, ManhwaSettingsIn, PlanRequest, StoryAutopilotIn, StoryChapterImageIn, StoryChapterPatch, StoryCharacterIn, StoryCharacterPatch, StoryChatIn, StoryImageIn, StoryIn, StoryPatch, PromptIn, RenderModelSettings, VideoLoraDefaults,
     UrlAssetRequest, VideoRequest, LLMSettingsUpdate, StoryboardIn, StoryboardPatch, StoryboardShotIn, StoryboardPanelIn, StoryboardRenderIn,
     IdentityPackIn, StoryPackIn, ComposeSheetIn, StoryboardSuggestIn, StoryboardApproveIn, CharacterIn, CharacterPatch,
-    CharacterPackIn, FilmIn, HiddenMessageIn, HiddenShotIn, ManhwaFilmIn
+    CharacterPackIn, FilmIn, HiddenMessageIn, HiddenShotIn, ManhwaFilmIn, ReplaceRequest
 )
 
 #: No token needed: health, the API schema/docs page and the Studio page itself
@@ -111,13 +112,14 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     boards = StoryboardManager(service)
     characters = CharacterManager(service)
     boards.characters = characters
+    replacer = ReplaceManager(service, characters)
     manhwa.boards = boards  # a chapter's live-action film goes through the engine
     stories.boards = boards  # a chapter's storyboard is a board
     exporter = DriveExporter(service, drive)
     service.drive_exporter = exporter  # generated images are copied into Drive like finished renders
     service.render_done_hooks.append(exporter.schedule)
     mcp = build_mcp(service, drive=drive, imports=imports, manhwa=manhwa, stories=stories, boards=boards,
-                    characters=characters)
+                    characters=characters, replacer=replacer)
     mcp_app = mcp.streamable_http_app(
         streamable_http_path="/mcp",
         stateless_http=True,
@@ -139,6 +141,7 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
         resume = asyncio.create_task(manhwa.resume_pipelines())
         resume_stories = asyncio.create_task(stories.resume())
         resume_boards = asyncio.create_task(boards.resume())
+        resume_replace = asyncio.create_task(replacer.resume())
         try:
             async with mcp.session_manager.run():
                 yield
@@ -148,6 +151,8 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
             resume.cancel()
             resume_stories.cancel()
             resume_boards.cancel()
+            resume_replace.cancel()
+            await replacer.stop()
             await imports.stop()
             await manhwa.stop()
             await stories.stop()
@@ -926,6 +931,15 @@ def create_app(settings: Settings | None = None, service: HawkService | None = N
     @app.post("/v1/videos", tags=["jobs"], status_code=202)
     async def create_video(body: VideoRequest):
         return service.job_view(await service.create_video(body))
+
+    @app.post("/v1/videos/replace", tags=["jobs"], status_code=202)
+    async def replace_person(body: ReplaceRequest):
+        """Replace one person in a video with a character whose face this server generated. The video is cut into
+        pieces, each re-rendered as an H3 video edit, joined, and given its original soundtrack back. Poll the job;
+        when done, video_url is the finished video (also in the Library, collection Replaced)."""
+        return service.job_view(await replacer.start(
+            video_asset_id=body.video_asset_id, source_job_id=body.source_job_id, who=body.who, character=body.character,
+            picture_asset_ids=body.picture_asset_ids, direction=body.direction, settings=body.settings))
 
     @app.get("/v1/jobs", tags=["jobs"])
     async def list_jobs(limit: int = 50, view: str = "full", since: float | None = None):

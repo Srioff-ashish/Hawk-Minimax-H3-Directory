@@ -236,6 +236,9 @@ def job_resolution(job: dict) -> dict | None:
 
 def job_title(job: dict) -> str:
     """A short human title: the plan's title, the first segment title(s), or the first prompt line."""
+    if job.get("kind") == "replace":
+        request = job.get("request") or {}
+        return f"Replace {request.get('who') or 'a person'} with {job.get('character_name') or 'a character'}"[:80]
     script = job.get("script") or ""
     try:
         data = json.loads(script)
@@ -2741,6 +2744,21 @@ class HawkService:
         job = self.get_job(job_id)
         if job["status"] not in ACTIVE:
             raise Conflict(f"Job {job_id} is already {job['status']}.")
+        if job["kind"] == "replace":
+            # A person replacement is a task here that drives one render per piece: stop it and every piece still going.
+            job.update(status="cancelled", resumable=True, note="", updated_at=time.time())
+            self.store.save_job(job)
+            manager = getattr(self, "replace_manager", None)
+            if manager is not None:
+                manager.cancel(job_id)
+            for piece in job.get("pieces") or []:
+                child = self.store.get_job(piece.get("job_id") or "")
+                if child is not None and child["status"] in ACTIVE:
+                    try:
+                        await self.cancel(child["id"])
+                    except Exception as exc:  # noqa: BLE001 - the parent is cancelled either way
+                        log.warning("hawk_api: could not cancel replace piece %s: %s", child["id"], exc)
+            return self.store.get_job(job_id) or job
         if job["kind"] == "plan":
             # A plan is an LLM call running here, not a ComfyUI prompt: stop the task, and mark the job first so
             # the task's CancelledError handler sees a finished job and leaves it alone.
@@ -2768,6 +2786,21 @@ class HawkService:
             raise Conflict(f"Job {job_id} is still {job['status']}.")
         if job["status"] == "done":
             raise Conflict(f"Job {job_id} already finished.")
+        if job["kind"] == "replace":
+            # Pieces already rendered are kept; a piece whose render failed is retried (its finished segments reused),
+            # then the task carries on from where it stopped.
+            manager = getattr(self, "replace_manager", None)
+            if manager is None:
+                raise Unavailable("Person replacement isn't running on this server.")
+            for piece in job.get("pieces") or []:
+                child = self.store.get_job(piece.get("job_id") or "")
+                if child is not None and child["status"] in ("failed", "cancelled"):
+                    await self.retry(child["id"])
+            job = self.get_job(job_id)
+            job.update(status="rendering", error=None, resumable=False, updated_at=time.time())
+            self.store.save_job(job)
+            manager._launch(job_id)
+            return self.store.get_job(job_id) or job
         if job["kind"] == "plan":
             # A plan has no graph to resubmit: it is an LLM call made here, so retrying means running it again.
             request = PlanRequest(**job["request"])
@@ -3027,7 +3060,11 @@ class HawkService:
             "warnings": job.get("warnings", []),
             "title": job_title(job),
             "by": job.get("by"),  # the character whose video this is, in a group chat
+            "parent_job_id": job.get("parent_job_id"),  # a piece of a person replacement
         }
+        if job["kind"] == "replace":
+            from .replace import job_view_fields
+            view.update(job_view_fields(self, job))
         if job["kind"] == "plan" and job.get("render_job_id"):
             view["render_job_id"] = job["render_job_id"]  # Plan & render: the render the server started from it
         if job["kind"] == "render":
