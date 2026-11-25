@@ -356,11 +356,14 @@ class PlanReferences(unittest.IsolatedAsyncioTestCase):
         async def planner_message(options, refs):
             return "plan", []
 
+        async def planner_parts(options, refs):  # (text, images, heard_text, sounds): no audio references here
+            return "plan", [], None, []
+
         async def model_ids(requested, needs_vision=False):
             return models
 
         service = types.SimpleNamespace(atlas=types.SimpleNamespace(chat=chat), _planner_message=planner_message,
-                                        _planner_model_ids=model_ids, planner_system_prompt=lambda: "system")
+                                        _planner_parts=planner_parts, _planner_model_ids=model_ids, planner_system_prompt=lambda: "system")
         return service, calls
 
     async def plan(self, service, refs=None, render_now=True):

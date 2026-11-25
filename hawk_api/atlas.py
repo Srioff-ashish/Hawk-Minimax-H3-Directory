@@ -279,6 +279,7 @@ class AtlasClient:
                 "id": model_id,
                 "name": item.get("name") or model_id,
                 "vision": "image" in inputs_,
+                "audio": "audio" in inputs_,  # can hear an input_audio part (the planner sends voice / music refs)
                 "context": item.get("context_length"),
                 "price_in": _price(pricing.get("prompt")),
                 "price_out": _price(pricing.get("completion")),

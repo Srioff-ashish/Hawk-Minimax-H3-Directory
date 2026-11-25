@@ -159,6 +159,11 @@ THUMB_WIDTHS = (160, 320, 640, 1280, 2048)  # 1280 / 2048: the full-screen viewe
 PLANNER_IMAGE_SIDE = 1024
 #: Seconds into a video clip to sample, so the planner sees how a reference clip starts, sits and ends.
 PLANNER_VIDEO_STAMPS = (0.0, 1.5, 3.0)
+#: Voice and music references a planner model that can hear gets: at most this many clips, each cut to this long.
+PLANNER_AUDIO_CLIPS = 3
+PLANNER_AUDIO_SECONDS = 60
+#: Tried first as the listener when the planner chain has no model that can hear, in this order of preference.
+PLANNER_LISTENERS = ("google/gemini-3-flash", "google/gemini-3.1-flash", "google/gemini-2.5-flash", "gemini")
 # deepseek-v4-pro reasons before it writes, and its reasoning counts against this: at 8192 a full plan
 # (5-7k tokens of script) came back empty with finish_reason=length. Same cap as the director's.
 PLANNER_MAX_TOKENS = 15_000
@@ -2234,6 +2239,20 @@ class HawkService:
             return list(dict.fromkeys([m for m in [one, *chain] if m]))
         return chain
 
+    async def _planner_listeners(self, models: list[str], *, needs_vision: bool) -> set[str]:
+        """The planner models that can hear the audio references: those in the chain the catalogue says take audio,
+        else one listener added from the catalogue (Gemini Flash first). Empty when the provider lists none."""
+        catalogue = await self.model_catalogue()
+        hears = {str(m["id"]): m for m in catalogue or [] if m.get("audio") and (m.get("vision") or not needs_vision)}
+        found = {m for m in models if m in hears}
+        if found or not hears:
+            return found
+        for want in PLANNER_LISTENERS:
+            for model_id in hears:
+                if want in model_id.lower():
+                    return {model_id}
+        return {next(iter(hears))}
+
     def planner_system_prompt(self) -> str:
         """The planner's instructions: the user's edited prompt with the platform rules, else the node's own.
 
@@ -2251,8 +2270,41 @@ class HawkService:
         except OSError as exc:
             raise Unavailable(f"The planner's instructions are missing ({path}): {exc}") from None
 
+    async def _audio_clip(self, asset: dict) -> bytes | None:
+        """The first PLANNER_AUDIO_SECONDS of an audio file or a video's soundtrack as a small mono mp3, for a planner
+        model that can hear; None without ffmpeg or when the file has no sound."""
+        if not shutil.which("ffmpeg") or not asset:
+            return None
+        work = tempfile.mkdtemp(prefix="hawk_plan_audio_")
+        try:
+            source = os.path.join(work, "in" + (os.path.splitext(asset.get("filename") or "")[1] or ".bin"))
+            with open(source, "wb") as handle:
+                handle.write(await self.asset_bytes(asset))
+            out = os.path.join(work, "clip.mp3")
+            process = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", source, "-vn", "-t", str(PLANNER_AUDIO_SECONDS),
+                "-ac", "1", "-ar", "16000", "-b:a", "48k", out,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await process.wait()
+            if process.returncode != 0 or not os.path.isfile(out) or os.path.getsize(out) < 200:
+                return None
+            return await asyncio.to_thread(_read_bytes, out)
+        except Exception as exc:  # noqa: BLE001 - hearing the clip is an improvement, never a reason the plan fails
+            log.warning("hawk_api: could not prepare %s for the planner to hear: %s", asset.get("filename"), exc)
+            return None
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
     async def _planner_message(self, options: PlannerOptions, refs: list) -> tuple[str, list[str]]:
-        """The planner's user message and the images attached to it, in the order the text refers to them.
+        """The planner's user message and the images attached to it (the message every model can take)."""
+        text, images, _heard, _sounds = await self._planner_parts(options, refs)
+        return text, images
+
+    async def _planner_parts(self, options: PlannerOptions, refs: list) -> tuple[str, list[str], str | None, list[bytes]]:
+        """(text, images, heard_text, sounds): the planner's user message and the images attached to it, in the order
+        the text refers to them, plus the voice / music references as sound. A model that can hear gets the sounds
+        and ``heard_text``, which says what each one is; every other model gets ``text``, where they stay
+        "not attached" (and a video's soundtrack is not mentioned at all, as before).
 
         This mirrors hawk_h3.planner.build_request, which cannot be reused directly because it works on
         decoded tensors inside ComfyUI while the gateway has assets on disk.
@@ -2265,7 +2317,17 @@ class HawkService:
             data, mime = await self.asset_file(asset["id"], PLANNER_IMAGE_SIDE)
             images.append(f"data:{mime};base64," + base64.b64encode(data).decode("ascii"))
 
+        sounds: list[bytes] = []
+        heard: list[tuple[int, str]] = []  # (line index, the line a model that can hear gets instead)
         for ref in refs:
+            if ref.role == "video_soundtrack":
+                asset = self.store.get_asset(ref.asset_id) or {}
+                clip = await self._audio_clip(asset) if len(sounds) < PLANNER_AUDIO_CLIPS else None
+                if clip:
+                    sounds.append(clip)
+                    heard.append((len(lines), f"Soundtrack of <Video {ref.for_video}> = attached as sound {len(sounds)}"))
+                    lines.append("")  # only a model that hears it is told about it
+                continue
             if ref.role not in counts:
                 continue
             counts[ref.role] += 1
@@ -2293,6 +2355,11 @@ class HawkService:
                     # can still write around a reference it was told about but cannot see.
                     lines.append(f"<Video {number}> = clip (frames not attached){label}")
             else:
+                clip = await self._audio_clip(asset) if len(sounds) < PLANNER_AUDIO_CLIPS else None
+                if clip:
+                    sounds.append(clip)
+                    heard.append((len(lines), f"<Audio {number}> = audio clip, attached as sound {len(sounds)} "
+                                              f"(listen to it: voice, language, words, rhythm, mood){label}"))
                 lines.append(f"<Audio {number}> = audio clip (not attached){label}")
 
         cap = max_segment_seconds()
@@ -2300,23 +2367,34 @@ class HawkService:
                  else "as many segments as the story needs (usually 2-8)")
         available = {"Picture": counts["picture"], "Pose": counts["pose"],
                      "Video": counts["video"], "Audio": counts["audio"]}
-        text = "\n".join([
-            "BRIEF:", options.story.strip(), "",
-            "REFERENCES (global numbering):", *(lines or ["(none -- this is a text-only film)"]), "",
-            "CONSTRAINTS:",
-            f"- Write {count}.",
-            f"- Target about {min(options.segment_seconds, cap):g} seconds per segment (each 5-{cap:g}s; never longer "
-            f"than {cap:g}s, even where your instructions allow 15: split a longer beat into two segments).",
-            f"- Frame: {options.aspect_ratio}.",
-            f"- {reference_counts_line(available)}",
-            "- Return only the JSON object described in your instructions.",
-        ])
         # A sexual brief gets the position guide: the planner otherwise writes "they have sex in the full nelson"
         # and H3, which knows no position names, draws whatever it guesses.
         note = pose_guide.planner_note(options.story)
-        if note:
-            text = f"{text}\n\n{note}"
-        return text, images
+
+        def compose(rows: list[str], hearing: bool) -> str:
+            rows = [row for row in rows if row]
+            body = "\n".join([
+                "BRIEF:", options.story.strip(), "",
+                "REFERENCES (global numbering):", *(rows or ["(none -- this is a text-only film)"]), "",
+                "CONSTRAINTS:",
+                f"- Write {count}.",
+                f"- Target about {min(options.segment_seconds, cap):g} seconds per segment (each 5-{cap:g}s; never longer "
+                f"than {cap:g}s, even where your instructions allow 15: split a longer beat into two segments).",
+                f"- Frame: {options.aspect_ratio}.",
+                f"- {reference_counts_line(available)}",
+                *(["- The attached sounds are the audio references: time the cuts, the action and any speech to what "
+                   "you hear, and describe a voice from how it actually sounds."] if hearing else []),
+                "- Return only the JSON object described in your instructions.",
+            ])
+            return f"{body}\n\n{note}" if note else body
+
+        heard_text = None
+        if sounds:
+            heard_lines = list(lines)
+            for index, line in heard:
+                heard_lines[index] = line
+            heard_text = compose(heard_lines, hearing=True)
+        return compose(lines, hearing=False), images, heard_text, sounds
 
     async def _video_frame(self, asset: dict, seconds: float, width: int) -> bytes | None:
         """One JPEG frame from a video, or None when it cannot be taken. Never raises: a reference the planner
@@ -2367,8 +2445,13 @@ class HawkService:
             wiring = graphs.reference_wiring(refs)
         except graphs.GraphError as exc:
             raise RequestError(str(exc)) from None
-        text, images = await self._planner_message(options, refs)
+        text, images, heard_text, sounds = await self._planner_parts(options, refs)
         models = await self._planner_model_ids(options.model, needs_vision=bool(images))
+        listeners = await self._planner_listeners(models, needs_vision=bool(images)) if sounds else set()
+        if listeners:
+            # Whoever can hear goes first: a voice or a song is what the cuts and the dialogue should be timed to.
+            models = [m for m in models if m in listeners] + [m for m in listeners if m not in models] + \
+                     [m for m in models if m not in listeners]
         if not models:
             raise Unavailable(
                 "No planner model that can read reference photos: the provider in force lists none of the "
@@ -2379,12 +2462,20 @@ class HawkService:
         content: list[dict] = [{"type": "text", "text": text}]
         for uri in images:
             content.append({"type": "image_url", "image_url": {"url": uri}})
-        messages = [{"role": "system", "content": self.planner_system_prompt()},
+        system = self.planner_system_prompt()
+        messages = [{"role": "system", "content": system},
                     {"role": "user", "content": content if images else text}]
+        heard_messages = None
+        if listeners and heard_text:
+            parts: list[dict] = [{"type": "text", "text": heard_text}, *content[1:]]
+            parts += [{"type": "input_audio", "input_audio": {"data": base64.b64encode(clip).decode("ascii"), "format": "mp3"}}
+                      for clip in sounds]
+            heard_messages = [{"role": "system", "content": system}, {"role": "user", "content": parts}]
         failures: list[str] = []
         for model in models:
             try:
-                reply, usage = await self.atlas.chat(model, messages, json_mode=True, max_retries=2,
+                reply, usage = await self.atlas.chat(model, heard_messages if model in listeners and heard_messages
+                                                    else messages, json_mode=True, max_retries=2,
                                                     max_tokens=PLANNER_MAX_TOKENS, temperature=options.temperature,
                                                     purpose="story planner", continue_cut=CONTINUE_CUT)
                 if not (reply or "").strip():
