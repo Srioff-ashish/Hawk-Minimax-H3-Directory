@@ -151,6 +151,8 @@ class ReplaceJob(unittest.IsolatedAsyncioTestCase):
         job = await self.wait(response.json()["id"], timeout=60)
         self.assertEqual((job["kind"], job["status"]), ("replace", "done"), job)
         self.assertEqual([(p["frames"], p["skip"]) for p in job["pieces"]], [(277, 0), (39, 4)])
+        render = (await self.http.get(f"/v1/jobs/{job['pieces'][0]['job_id']}")).json()
+        self.assertEqual(render["resolution"]["aspect_ratio"], "16:9", "a 640x360 clip renders 16:9")
         self.assertTrue(job["video_url"])
 
         pieces = [(await self.http.get(f"/v1/jobs/{p['job_id']}")).json() for p in job["pieces"]]
@@ -181,6 +183,20 @@ class ReplaceJob(unittest.IsolatedAsyncioTestCase):
                                                                     "picture_asset_ids": [face]})
         self.assertEqual(response.status_code, 422, response.text)
         self.assertIn("Re-upload", response.text)
+
+    async def test_a_portrait_clip_renders_portrait(self):
+        self.fake.final_bytes = self._clip(3, "180x320", audio=False)
+        source = (await self.http.post("/v1/assets", files={"files": ("tall.mp4", self._clip(3, "360x640", True),
+                                                                       "video/mp4")})).json()["assets"][0]["id"]
+        face = await self.upload_picture()
+        self._generated_picture(face)
+        job = (await self.http.post("/v1/videos/replace", json={"video_asset_id": source, "who": "the woman",
+                                                                "picture_asset_ids": [face],
+                                                                "settings": {"megapixels": 0.4}})).json()
+        job = await self.wait(job["id"], timeout=60)
+        self.assertEqual(job["status"], "done", job)
+        render = (await self.http.get(f"/v1/jobs/{job['pieces'][0]['job_id']}")).json()
+        self.assertEqual(render["resolution"]["aspect_ratio"], "9:16", "the shape follows the video unless chosen")
 
     async def test_cancel_stops_the_job_and_its_pieces(self):
         source = (await self.http.post("/v1/assets", files={"files": ("clip.mp4", self._clip(3, "320x180", False),

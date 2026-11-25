@@ -350,7 +350,10 @@ class ReplaceManager:
             "replace",
             request={"video_asset_id": video_asset_id, "who": who[:300], "character": character or "",
                      "picture_asset_ids": pictures, "direction": (direction or "")[:2000],
-                     "settings": (settings or RenderSettings()).model_dump()},
+                     "settings": (settings or RenderSettings()).model_dump(),
+                     # Whether the caller chose a shape. The saved settings carry every field, so this can't be told
+                     # from them later -- and without it a portrait clip rendered at the 16:9 default.
+                     "aspect_chosen": bool(settings and "aspect_ratio" in settings.model_fields_set)},
             character_name=name, character_description=description[:1200], pieces=[], output_asset_id=None,
             by=by,
         )
@@ -419,7 +422,7 @@ class ReplaceManager:
                 job = self._save(job_id, pieces=cuts, total_frames=total, source_info=info, segments_total=len(cuts),
                                  segments_done=0)
             settings = RenderSettings(**request["settings"])
-            if "aspect_ratio" not in settings.model_fields_set and info["width"] and info["height"]:
+            if not request.get("aspect_chosen") and info["width"] and info["height"]:
                 settings = settings.model_copy(update={"aspect_ratio": nearest_aspect(info["width"], info["height"])})
             settings = settings.model_copy(update={"continuity": "off", "music_asset_id": None,
                                                    "use_default_loras": settings.use_default_loras})
