@@ -340,6 +340,12 @@ class ReplaceManager:
             raise RequestError(f"Unknown video {video_asset_id!r}. Upload it to the Library first.")
         if video.get("kind") != "video":
             raise RequestError(f"{video.get('filename') or video_asset_id} is not a video.")
+        # Uploads live in ComfyUI's input folder, which a Colab restart empties while the library still lists them:
+        # say so here, not as a job that fails a moment later.
+        lost = [a.get("filename") or a["id"] for a in [video, *[self.service.store.get_asset(p) for p in pictures]]
+                if a is not None and not await self.service.ensure_asset_on_disk(a)]
+        if lost:
+            raise RequestError(self.service._lost_files_message(lost))
         job = self.service._new_job(
             "replace",
             request={"video_asset_id": video_asset_id, "who": who[:300], "character": character or "",

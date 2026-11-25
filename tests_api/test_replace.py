@@ -167,6 +167,21 @@ class ReplaceJob(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(info["seconds"], 13.0, delta=0.15, msg="the same length as the source")
         self.assertTrue(info["has_audio"], "the original soundtrack is laid back on")
 
+    async def test_a_video_whose_file_was_lost_is_refused_up_front(self):
+        source = (await self.http.post("/v1/assets", files={"files": ("clip.mp4", self._clip(3, "320x180", False),
+                                                                       "video/mp4")})).json()["assets"][0]["id"]
+        face = await self.upload_picture()
+        self._generated_picture(face)
+        # ComfyUI's input folder on this machine, emptied by a Colab restart (the library still lists the files).
+        settings = self._service().settings
+        saved = settings.comfy_input_dir
+        object.__setattr__(settings, "comfy_input_dir", tempfile.mkdtemp())
+        self.addCleanup(object.__setattr__, settings, "comfy_input_dir", saved)
+        response = await self.http.post("/v1/videos/replace", json={"video_asset_id": source, "who": "the man",
+                                                                    "picture_asset_ids": [face]})
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("Re-upload", response.text)
+
     async def test_cancel_stops_the_job_and_its_pieces(self):
         source = (await self.http.post("/v1/assets", files={"files": ("clip.mp4", self._clip(3, "320x180", False),
                                                                        "video/mp4")})).json()["assets"][0]["id"]
