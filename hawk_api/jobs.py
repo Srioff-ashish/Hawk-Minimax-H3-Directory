@@ -177,8 +177,10 @@ CONTINUE_CUT = 2
 #: from the name as well ("..._h3_8stepTURBO_beta6..."): it is a mostly-reference hybrid with a turbo built in.
 #: OliviaRossi's merges of Singularity with 10Eros-Max carry neither: "PRISM_DMAD_PDMD_int8",
 #: "10Eros_Max_SingularityV2_PRISM2_PikaFlex_0.85_int8HQ". Both are H3 ref2va merges, so they count too.
+#: 10Eros-Max v1.0 drops "h3" as well ("10Eros_Max_8stepTurbo_v1.0_hybrid"), so 10Eros with either word counts.
 MODEL_FAMILIES = {"diffusion_models": ((("ref2va",), ("h3", "hybrid"), ("h3", "turbo"), ("prism",),
-                                       ("10eros", "singularity")), "Base model"),
+                                       ("10eros", "singularity"), ("10eros", "hybrid"), ("10eros", "turbo")),
+                                      "Base model"),
                   "text_encoders": ((("qwen3vl", "minimax"),), "Text encoder")}
 
 

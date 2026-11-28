@@ -170,7 +170,10 @@ def pick_models(files: dict[str, list[str]]) -> dict[str, str | None]:
         # with neither word in its name (10Eros-Max beta6, "..._h3_8stepTURBO_beta6...") comes last
         "unet_name": (pick_model(files.get("diffusion_models", []), ("ref2va",), UNET_PREFERENCE)
                       or pick_model(files.get("diffusion_models", []), ("h3", "hybrid"), UNET_PREFERENCE)
-                      or pick_model(files.get("diffusion_models", []), ("h3", "turbo"), UNET_PREFERENCE)),
+                      or pick_model(files.get("diffusion_models", []), ("h3", "turbo"), UNET_PREFERENCE)
+                      # 10Eros-Max v1.0 has no "h3" in its name: "10Eros_Max_8stepTurbo_v1.0_hybrid"
+                      or pick_model(files.get("diffusion_models", []), ("10eros", "hybrid"), UNET_PREFERENCE)
+                      or pick_model(files.get("diffusion_models", []), ("10eros", "turbo"), UNET_PREFERENCE)),
         "clip_name": pick_model(files.get("text_encoders", []), ("qwen3vl", "minimax"), CLIP_PREFERENCE),
         "video_vae": pick_model(files.get("vae", []), ("minimax_h3_video",), []),
         "audio_vae": pick_model(files.get("vae", []), ("minimax_h3_audio",), []),

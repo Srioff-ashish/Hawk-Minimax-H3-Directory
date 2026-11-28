@@ -120,6 +120,12 @@ class Detection(unittest.TestCase):
                          "added next to beta5, beta6 is a choice in Studio, not the new default")
         self.assertEqual(hawk_colab.pick_models({"diffusion_models": [beta6]})["unet_name"], beta6)
 
+    def test_eros_v1_without_h3_in_its_name_is_still_a_base(self):
+        beta5 = "10Eros_Max_h3_TURBO-hybrid_beta5.safetensors"
+        v1 = "10Eros_Max_8stepTurbo_v1.0_hybrid.safetensors"
+        self.assertEqual(hawk_colab.pick_models({"diffusion_models": [v1, beta5]})["unet_name"], beta5)
+        self.assertEqual(hawk_colab.pick_models({"diffusion_models": [v1]})["unet_name"], v1)
+
     def test_fl2va_only_is_not_picked(self):
         chosen = hawk_colab.pick_models({"diffusion_models": self.FILES["diffusion_models"][:1], "loras": self.FILES["loras"][:1]})
         self.assertIsNone(chosen["unet_name"])

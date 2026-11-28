@@ -638,6 +638,18 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader["inputs"]["shift_video"], 12.0, "every other base keeps the default shift")
         self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
+    async def test_eros_v1_is_offered_and_can_be_chosen(self):
+        # 10Eros-Max v1.0: "hybrid" and "Turbo" in its name but no "h3".
+        v1 = "10Eros_Max_8stepTurbo_v1.0_hybrid.safetensors"
+        self.fake.model_files["diffusion_models"].append(v1)
+        options = (await self.http.get("/v1/options")).json()
+        self.assertIn(v1, options["diffusion_models"])
+        response = await self.http.put("/v1/models/defaults", json={"unet_name": v1})
+        self.assertEqual(response.status_code, 200, response.text)
+        job = (await self.http.post("/v1/videos", json={"script": "A"})).json()
+        self.assertEqual(job["unet_name"], v1, job)
+        self.assertNotIn(TURBO, [l["file"] for l in job["loras"]], "its turbo is built in")
+
     async def test_a_prism_merge_is_offered_and_renders_with_its_own_sampler(self):
         # OliviaRossi's Singularity x 10Eros-Max merges: no "h3", "ref2va", "hybrid" or "turbo" in the name, 10Eros-Max's
         # 8-step turbo inside, and sampled with Euler / Beta57 (ComfyUI's own "beta" here).
