@@ -2496,7 +2496,10 @@ class HawkService:
                         build_jobs(parse_script(reply), available=wiring.available, video_has_audio=wiring.video_has_audio,
                                    default_seconds=options.segment_seconds, continuity="tail_22", base_seed=0)
                 except ScriptError as exc:
-                    raise Unavailable(f"{model} returned a plan that can't be used: {exc}") from None
+                    # The reply's opening says what went wrong -- a refusal, an empty list, the plan nested
+                    # under another key -- where the parser's complaint alone does not.
+                    said = " ".join(reply.split())[:160]
+                    raise Unavailable(f"{model} returned a plan that can't be used: {exc} It began: {said!r}") from None
                 for fix in fixes:
                     log.warning("Planner %s: %s", model, fix)
                 return reply, model, usage or {}
