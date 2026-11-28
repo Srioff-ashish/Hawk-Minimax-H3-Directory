@@ -649,6 +649,10 @@ class Gateway(unittest.IsolatedAsyncioTestCase):
         job = (await self.http.post("/v1/videos", json={"script": "A"})).json()
         self.assertEqual(job["unet_name"], v1, job)
         self.assertNotIn(TURBO, [l["file"] for l in job["loras"]], "its turbo is built in")
+        self.assertEqual(job["steps"], 8, job)
+        node = next(n for n in self.fake.prompts[job["id"]].values() if "sampler_name" in n["inputs"])
+        self.assertEqual((node["inputs"]["sampler_name"], node["inputs"]["scheduler"]), ("lcm", "simple"))
+        self.assertEqual((await self.wait(job["id"]))["status"], "done")
 
     async def test_a_prism_merge_is_offered_and_renders_with_its_own_sampler(self):
         # OliviaRossi's Singularity x 10Eros-Max merges: no "h3", "ref2va", "hybrid" or "turbo" in the name, 10Eros-Max's

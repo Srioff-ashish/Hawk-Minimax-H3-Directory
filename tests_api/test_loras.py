@@ -144,6 +144,8 @@ class Steps(unittest.TestCase):
         self.assertFalse(loras.turbo_base(singularity), "plain Singularity is not turbo: it keeps the turbo LoRA")
         self.assertIsNone(loras.base_sampler(singularity))
         self.assertIsNone(loras.base_sampler(beta6), "the 10Eros bases keep the render's sampler")
+        self.assertEqual(loras.base_sampler("10Eros_Max_8stepTurbo_v1.0_hybrid.safetensors"), ("lcm", "simple"))
+        self.assertTrue(loras.turbo_base("10Eros_Max_8stepTurbo_v1.0_hybrid.safetensors"))
 
 
 class Applied(unittest.TestCase):

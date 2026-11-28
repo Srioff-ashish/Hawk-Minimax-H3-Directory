@@ -276,8 +276,9 @@ def base_shift(unet_name: str, current: float) -> tuple[float, str]:
 #: Sampler and schedule a base model was tuned for, when they are not the render defaults (res_multistep /
 #: simple). Matched on words in the file name's stem. The PRISM merges' author samples them with Euler and the
 #: Beta57 schedule; Beta57 comes from a custom-node pack the pod does not install, and ComfyUI's own "beta" is
-#: the nearest built-in schedule.
-BASE_SAMPLERS = ((("prism",), "euler", "beta"), (("10eros", "singularity"), "euler", "beta"))
+#: the nearest built-in schedule. 10Eros-Max v1.0's author samples it with LCM / simple at 8-12 steps.
+BASE_SAMPLERS = ((("prism",), "euler", "beta"), (("10eros", "singularity"), "euler", "beta"),
+                 (("10eros", "_v1."), "lcm", "simple"))
 
 
 def base_sampler(unet_name: str) -> tuple[str, str] | None:

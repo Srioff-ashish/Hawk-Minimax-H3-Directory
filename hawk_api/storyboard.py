@@ -614,11 +614,14 @@ def platform_style(style: str, platform: str) -> str:
 
 def pick_models(files: list[str]) -> dict:
     """Which base model renders which kind of shot. Faces held to a first frame go to a reference-faithful hybrid
-    (10Eros beta5), physical action and positions to the newer one (beta7); either falls back to the server's
-    default ("") when it isn't installed."""
+    (10Eros beta5), physical action and positions to the newer one (beta7, or 10Eros v1.0 -- beta5, beta7 and
+    Sulphur3 combined, "10Eros_Max_8stepTurbo_v1.0_hybrid" -- when beta7 isn't installed); either falls back to
+    the other, and both to the server's default ("") when none is installed."""
     names = [f for f in files or []]
-    frame = next((f for f in names if "beta5" in f.lower()), "")
-    action = next((f for f in names if "beta7" in f.lower()), "")
+    lower = [os.path.basename(f).lower() for f in names]
+    frame = next((f for f, low in zip(names, lower) if "beta5" in low), "")
+    action = (next((f for f, low in zip(names, lower) if "beta7" in low), "")
+              or next((f for f, low in zip(names, lower) if "10eros" in low and "_v1." in low), ""))
     return {"frame": frame or action, "action": action or frame}
 
 

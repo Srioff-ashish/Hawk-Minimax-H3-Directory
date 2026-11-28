@@ -81,6 +81,10 @@ class Rules(unittest.TestCase):
         self.assertEqual(sb.pick_models([B7, B5, "other.safetensors"]), {"frame": B5, "action": B7})
         self.assertEqual(sb.pick_models([B7]), {"frame": B7, "action": B7}, "one installed: it does both")
         self.assertEqual(sb.pick_models([]), {"frame": "", "action": ""}, "none: the server default")
+        v1 = "10Eros_Max_8stepTurbo_v1.0_hybrid.safetensors"
+        self.assertEqual(sb.pick_models([v1, B5]), {"frame": B5, "action": v1}, "no beta7: v1.0 takes the action")
+        self.assertEqual(sb.pick_models([v1, B7, B5]), {"frame": B5, "action": B7}, "beta7 still wins when installed")
+        self.assertEqual(sb.pick_models([v1]), {"frame": v1, "action": v1})
 
     def test_parts_follow_the_model_and_the_picture_limit(self):
         modes = ["frame", "frame", "look", "look", "none", "frame"]
